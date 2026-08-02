@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
 import { EMPTY_SPEC, ON_FAIL_TEXT, type OnFail, type Output, type Spec, type Status } from '@/lib/model'
+import VlessPanel from './VlessPanel'
 
 // Outputs are named, and channels point at the NAME. That indirection is what lets
 // several tunnels coexist: failover re-points an output's device without touching a
@@ -23,14 +24,24 @@ export default function OutputsPage() {
     const [devices, setDevices] = useState<{ name: string; up: boolean; kind: string }[]>([])
     const [dirty, setDirty] = useState(false)
     const [busy, setBusy] = useState(false)
+    /** Умеет ли установленный движок VLESS. Спрашиваем, а не предполагаем: предлагать
+     *  выход, который движок отвергнет при сохранении, — это заставить человека спорить
+     *  с интерфейсом вместо того, чтобы поставить нужный пакет. */
+    const [hasVless, setHasVless] = useState<boolean | null>(null)
+    /** Имена выходов, про которые движок уже знает. Панель vless спрашивает у него узлы,
+     *  а для несохранённого выхода спрашивать нечего. */
+    const [saved, setSaved] = useState<Set<string>>(new Set())
     /** Names being typed. Held separately so a half-typed name never lands in the spec
      *  and orphans the channels pointing at the old one. */
     const [draft, setDraft] = useState<Record<string, string>>({})
 
     useEffect(() => {
-        rpc.specGet().then(setSpec).catch(() => setSpec(EMPTY_SPEC))
+        rpc.specGet()
+            .then((s) => { setSpec(s); setSaved(new Set(Object.keys(s.outputs || {}))) })
+            .catch(() => setSpec(EMPTY_SPEC))
         rpc.status().then(setStatus).catch(() => setStatus(null))
         rpc.devices().then((d) => setDevices(d.devices || [])).catch(() => setDevices([]))
+        rpc.engine().then((e) => setHasVless(!!e.vless)).catch(() => setHasVless(null))
     }, [])
 
     function edit(next: Spec) {
@@ -50,6 +61,26 @@ export default function OutputsPage() {
             outputs: {
                 ...spec.outputs,
                 [name]: { name, kind: 'interface', devices: free ? [free.name] : [], on_fail: 'drop' },
+            },
+        })
+    }
+
+    function addVless() {
+        if (!spec) return
+        let name = 'vless'
+        let n = 2
+        while (spec.outputs[name]) name = `vless${n++}`
+        // sub_file ставится сразу: движок отвергает выход vless без него, и предлагать
+        // человеку сохранить заведомо неприменимую спеку значило бы упереться в ошибку
+        // там, где путь известен заранее. Файл появится, когда подписку загрузят.
+        edit({
+            ...spec,
+            outputs: {
+                ...spec.outputs,
+                [name]: {
+                    name, kind: 'vless', sub_file: '/etc/steer/sub.txt',
+                    node: -1, on_fail: 'drop',
+                },
             },
         })
     }
@@ -129,6 +160,9 @@ export default function OutputsPage() {
             if (!res.ok) throw new Error(res.error || 'не удалось сохранить')
             const ap = await rpc.apply()
             setDirty(false)
+            /* Теперь движок знает про эти выходы — панель VLESS может спрашивать у него
+             * узлы. До сохранения он о выходе не слышал, и вопрос был бы бессмысленным. */
+            setSaved(new Set(Object.keys(spec.outputs)))
             notify(ap.output?.trim() || 'Применено', ap.ok ? 'info' : 'error')
             rpc.status().then(setStatus).catch(() => {})
         } catch (e) {
@@ -158,15 +192,38 @@ export default function OutputsPage() {
                         <Button onClick={addInterface} variant="secondary">
                             <Plus className="mr-1 h-4 w-4" aria-hidden="true" /> Туннель
                         </Button>
+                        {/* Кнопка есть всегда, но выключена без нужного пакета — и говорит,
+                            какого именно. Спрятать её значило бы оставить человека без
+                            объяснения, почему у него нет того, что описано в документации. */}
+                        <Button
+                            onClick={addVless}
+                            variant="secondary"
+                            disabled={hasVless === false}
+                            title={hasVless === false
+                                ? 'Нужен пакет steer-extended: в базовой сборке клиента VLESS нет'
+                                : undefined}
+                        >
+                            <Plus className="mr-1 h-4 w-4" aria-hidden="true" /> VLESS
+                        </Button>
                         <Button onClick={addDirect} variant="secondary">
                             <Plus className="mr-1 h-4 w-4" aria-hidden="true" /> Напрямую
                         </Button>
                     </div>
 
+                    {hasVless === false && (
+                        <p className="text-xs text-sp-muted-foreground">
+                            Установленный движок без VLESS. Чтобы выходы VLESS стали доступны, нужен
+                            пакет <code>steer-extended</code> — он заменяет <code>steer</code> и весит
+                            примерно втрое больше.
+                        </p>
+                    )}
+
                     {names.length === 0 && (
                         <p className="py-6 text-center text-sm text-sp-muted-foreground">
-                            Выходов нет. «Туннель» — трафик уходит в указанное устройство. «Напрямую» —
-                            канал забирает адреса себе и оставляет их на обычном пути; так исключают список.
+                            Выходов нет. «Туннель» — трафик уходит в уже существующее устройство
+                            (wireguard, amneziawg). «VLESS» — движок поднимает своё, по подписке.
+                            «Напрямую» — канал забирает адреса себе и оставляет их на обычном пути;
+                            так исключают список.
                         </p>
                     )}
 
@@ -198,7 +255,11 @@ export default function OutputsPage() {
                                         </div>
                                     </label>
 
-                                    {o.kind === 'interface' ? (
+                                    {/* on_fail есть у всякого выхода С УСТРОЙСТВОМ, а не
+                                        только у interface: у vless последствие поломки ровно
+                                        то же, и прятать настройку значило бы оставить его на
+                                        умолчании, о котором человек не знает. */}
+                                    {o.kind !== 'direct' ? (
                                         <label className="flex flex-col gap-1 text-xs">
                                             Если всё упало
                                             <select
@@ -214,6 +275,7 @@ export default function OutputsPage() {
                                     ) : (
                                         <Badge variant="secondary">напрямую, без устройства</Badge>
                                     )}
+                                    {o.kind === 'vless' && <Badge variant="secondary">VLESS/Reality</Badge>}
 
                                     <div className="ml-auto">
                                         <Button variant="ghost" size="icon" aria-label={`Удалить выход ${name}`}
@@ -223,6 +285,15 @@ export default function OutputsPage() {
                                     </div>
                                 </div>
 
+
+                                {o.kind === 'vless' && (
+                                    <VlessPanel
+                                        name={name}
+                                        output={o}
+                                        onChange={(next) => patch(name, next)}
+                                        saved={saved.has(name)}
+                                    />
+                                )}
 
                                 {o.kind === 'interface' && (() => {
                                     const list = devList(o)

@@ -11,6 +11,10 @@
 STEER=/usr/sbin/steer
 SPEC=/etc/steer/spec.json
 LISTS=/etc/steer/lists
+# Подписка VLESS. Один файл на роутер, а не по файлу на выход: узлы в подписке уже
+# перечислены списком, и выход выбирает из них номером. Два выхода на одну подписку — это
+# два узла одного провайдера, и держать для этого две копии файла было бы странно.
+SUB=/etc/steer/sub.txt
 MANIFEST=/etc/splify2/manifest.json
 # Тот же источник, что и у файлов списков: base_url внутри манифеста указывает на
 # raw в main, и брать сам манифест из релиза значило бы, что он описывает одни файлы,
@@ -43,6 +47,88 @@ download() {  # URL DEST
     mv "$tmp" "$2"
 }
 
+# Зона фаервола для устройств, которые движок создаёт сам (выходы kind=vless).
+#
+# Зачем это здесь. fw4 отвергает форвардинг на устройство, не входящее ни в одну зону:
+# политика цепочки forward — drop, и клиент получает «Operation not permitted» ещё до
+# того, как пакет доберётся до туннеля. Проверено с настоящего клиента, а не выведено.
+#
+# Почему этого не делает движок. В nftables вердикт accept в своей базовой цепочке
+# завершает только ЕЁ: пакет всё равно доходит до цепочки fw4 и там отбрасывается. То
+# есть «разрешить заранее» из отдельной таблицы невозможно в принципе, и единственный
+# способ — попасть в зону. А зоны — это uci, то есть управляющий слой. Движок про это
+# честно предупреждает («not mentioned by the firewall at all»), но починить не может.
+#
+# masquerade НЕ включается, и это не забывчивость: клиент VLESS завершает TCP у себя и
+# соединяется с сервером обычным сокетом, поэтому адрес клиента наружу не уезжает вовсе.
+# Включить NAT здесь значило бы добавить трансляцию, которой нечего транслировать.
+ZONE=steer_vless
+# Признак «настройку vless надо перечитать». Ставится там, где изменилось то, что клиент
+# читает ОДИН РАЗ при старте — выбранный узел или файл подписки, — и снимается после
+# перезапуска экземпляров.
+#
+# Через файл, а не переменную: spec_set и apply — два отдельных вызова rpcd, то есть два
+# процесса, и между ними ничего не переживает, кроме диска.
+VLESS_DIRTY=/var/run/splify2-vless-dirty
+
+# Отпечаток того, от чего зависит выбор узла. Меняется он — надо перезапустить клиента,
+# не меняется — трогать туннель нельзя: перезапуск роняет все соединения через него, а
+# заново выбранный «первый рабочий» может оказаться другим узлом. Правка списка домены
+# не должна менять выходной адрес.
+vless_fingerprint() {  # ФАЙЛ_СПЕКИ
+    f="$1"
+    [ -s "$f" ] || { echo none; return; }
+    for o in $("$STEER" outputs --kind vless --spec "$f" 2>/dev/null); do
+        printf '%s:%s:%s\n' "$o" \
+            "$(jsonfilter -i "$f" -e "@.outputs.$o.sub_file" 2>/dev/null)" \
+            "$(jsonfilter -i "$f" -e "@.outputs.$o.node" 2>/dev/null)"
+    done | md5sum | awk '{print $1}'
+}
+
+zone_index() {
+    uci show firewall 2>/dev/null | sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.name='$ZONE'$/\1/p" | head -1
+}
+
+ensure_vless_zone() {  # список устройств
+    devs="$1"
+    [ -n "$devs" ] || return 0
+    changed=0
+    idx="$(zone_index)"
+    if [ -z "$idx" ]; then
+        uci -q add firewall zone >/dev/null
+        uci -q set firewall.@zone[-1].name="$ZONE"
+        # input REJECT: зона нужна для транзита, а не для доступа к самому роутеру со
+        # стороны туннеля. forward ACCEPT — иначе смысла в ней нет.
+        uci -q set firewall.@zone[-1].input='REJECT'
+        uci -q set firewall.@zone[-1].output='ACCEPT'
+        uci -q set firewall.@zone[-1].forward='ACCEPT'
+        uci -q set firewall.@zone[-1].masq='0'
+        uci -q set firewall.@zone[-1].mtu_fix='1'
+        idx="$(zone_index)"
+        changed=1
+    fi
+    [ -n "$idx" ] || return 1
+    for d in $devs; do
+        uci -q get "firewall.@zone[$idx].device" 2>/dev/null | grep -qw "$d" || {
+            uci -q add_list "firewall.@zone[$idx].device"="$d"
+            changed=1
+        }
+    done
+    # Разрешение lan -> зона. Без него зона есть, а трафик всё равно не идёт: политика
+    # forward у fw4 применяется к паре зон, а не к одной.
+    uci show firewall 2>/dev/null | grep -q "\.dest='$ZONE'" || {
+        uci -q add firewall forwarding >/dev/null
+        uci -q set firewall.@forwarding[-1].src='lan'
+        uci -q set firewall.@forwarding[-1].dest="$ZONE"
+        changed=1
+    }
+    if [ "$changed" = 1 ]; then
+        uci -q commit firewall
+        fw4 reload >/dev/null 2>&1 || /etc/init.d/firewall reload >/dev/null 2>&1
+        echo "splify2: устройства $devs добавлены в зону $ZONE (иначе fw4 не пропускает транзит)"
+    fi
+}
+
 case "$1" in
 list)
     json_init
@@ -56,6 +142,13 @@ list)
     json_add_object devices; json_close_object
     json_add_object local_lists; json_close_object
     json_add_object list_remove; json_add_string id; json_close_object
+    json_add_object engine; json_close_object
+    json_add_object sub_set; json_add_string url; json_close_object
+    json_add_object sub_info; json_close_object
+    json_add_object vless_nodes; json_add_string output; json_close_object
+    json_add_object vless_probe
+        json_add_string output; json_add_int node
+    json_close_object
     json_dump
     ;;
 call)
@@ -85,13 +178,41 @@ call)
             rm -f "$tmp"
             fail "${err:-движок отверг спецификацию}"
         fi
+        # Сравниваем ДО подмены: после неё старого отпечатка уже не узнать.
+        before="$(vless_fingerprint "$SPEC")"
+        after="$(vless_fingerprint "$tmp")"
         mkdir -p "$(dirname "$SPEC")"
         mv "$tmp" "$SPEC"
+        [ "$before" = "$after" ] || : > "$VLESS_DIRTY"
         json_init; json_add_boolean ok 1; json_dump
         ;;
 
     apply)
+        # Зона для устройств vless — ДО apply: иначе первый же прогон объявит, что
+        # устройство никому не известно, и будет прав.
+        zone_msg="$(ensure_vless_zone "$("$STEER" outputs --kind vless --spec "$SPEC" 2>/dev/null | tr '\n' ' ')" 2>&1)"
         out="$("$STEER" apply --spec "$SPEC" 2>&1)"; rc=$?
+        [ -n "$zone_msg" ] && out="$zone_msg
+$out"
+
+        # Клиент VLESS читает спеку и подписку ОДИН РАЗ при старте, поэтому смена узла или
+        # подписки без перезапуска не значит ничего: в интерфейсе выбрано новое, в туннеле
+        # работает старое, и понять это невозможно. Перезапускаем — но только когда
+        # изменилось именно это, иначе правка любого списка роняла бы соединения через
+        # туннель и меняла выходной адрес.
+        if [ -f "$VLESS_DIRTY" ]; then
+            for o in $("$STEER" outputs --kind vless --spec "$SPEC" 2>/dev/null); do
+                # Через ubus, а не procd_send_signal: тот живёт в /lib/functions/procd.sh,
+                # которого в rpcd-скрипте нет. Сигнал именно ЭТОМУ экземпляру — резолвер и
+                # сторож перезапускать незачем, а '*' однажды уже убивал туннель при каждом
+                # сохранении.
+                ubus call service signal \
+                    "{\"name\":\"steer\",\"instance\":\"vless_$o\",\"signal\":15}" 2>/dev/null
+                out="$out
+splify2: туннель $o перезапущен — сменился узел или подписка"
+            done
+            rm -f "$VLESS_DIRTY"
+        fi
         # Резолвер обязан перечитать спеку: список файлов у доменного канала он берёт
         # при старте, поэтому после apply он ещё матчит прежние домены. Без этого
         # выбранный в интерфейсе список молча не работает — правила новые, а резолвер
@@ -208,6 +329,107 @@ call)
         done
         json_close_array
         json_dump
+        ;;
+
+    engine)
+        # Что за движок стоит и умеет ли он VLESS.
+        #
+        # Спрашивается у самого движка, а не по имени пакета: пакет мог быть поставлен
+        # руками, переименован или собран из исходников. Признак — отвечает ли `vless`
+        # отказом «нужен steer-extended». Без этой проверки интерфейс предлагал бы выход
+        # kind=vless на базовой сборке, и человек получал бы отказ уже при сохранении,
+        # не понимая, чего от него хотят.
+        # Сначала — есть ли движок вообще. Без этой проверки отсутствие steer выглядело бы
+        # как «VLESS поддержан»: сообщение «команда не найдена» тоже не содержит слова
+        # steer-extended, и признак по отсутствию сработал бы наоборот.
+        if [ ! -x "$STEER" ]; then
+            json_init
+            json_add_boolean present 0
+            json_add_boolean vless 0
+            json_dump
+            exit 0
+        fi
+        vless=1
+        out="$("$STEER" vless '' 2>&1)"
+        case "$out" in *steer-extended*) vless=0 ;; esac
+        json_init
+        json_add_boolean present 1
+        json_add_boolean vless "$vless"
+        json_dump
+        ;;
+
+    sub_set)
+        # Скачать подписку. Это дело управляющего слоя: движок читает файл, который ему
+        # положили, и про URL не знает — см. правило про списки в контракте.
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var url url
+        [ -n "$url" ] || fail "не указана ссылка"
+        case "$url" in
+            https://*|http://*) ;;
+            *) fail "ссылка должна начинаться с http:// или https://" ;;
+        esac
+        mkdir -p "$(dirname "$SUB")"
+        download "$url" "$SUB" || fail "подписка не скачалась"
+        # Новая подписка — новые узлы, значит клиента надо перечитать. Иначе туннель
+        # продолжает работать по узлу, которого в подписке может уже не быть.
+        : > "$VLESS_DIRTY"
+        # Ссылка сохраняется, чтобы её можно было обновить одной кнопкой и показать
+        # человеку, откуда взялись узлы. В uci, а не в спеке: спека — вход движка, и
+        # URL ему не нужен ни для чего.
+        #
+        # Файл конфигурации создаётся здесь: пакет его не кладёт, а `uci set` в
+        # несуществующий файл молча ничего не делает — ссылка «сохранялась» и пропадала,
+        # причём sub_set отвечал ok. Тихая потеря настройки хуже отказа.
+        [ -f /etc/config/splify2 ] || : > /etc/config/splify2
+        uci -q get splify2.main >/dev/null 2>&1 || uci -q set splify2.main=splify2
+        uci -q set splify2.main.sub_url="$url"
+        uci -q commit splify2
+        json_init
+        json_add_boolean ok 1
+        json_add_string path "$SUB"
+        json_add_int bytes "$(wc -c < "$SUB" 2>/dev/null || echo 0)"
+        json_dump
+        ;;
+
+    sub_info)
+        json_init
+        json_add_string url "$(uci -q get splify2.main.sub_url)"
+        json_add_string path "$SUB"
+        if [ -s "$SUB" ]; then
+            json_add_boolean present 1
+            json_add_int bytes "$(wc -c < "$SUB")"
+            json_add_int mtime "$(date -r "$SUB" +%s 2>/dev/null || echo 0)"
+        else
+            json_add_boolean present 0
+        fi
+        json_dump
+        ;;
+
+    vless_nodes)
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var output output
+        [ -n "$output" ] || fail "не указан выход"
+        # Движок печатает JSON сам — отдаём дословно. Разбирать его здесь значило бы
+        # держать вторую модель узла в shell, а имена узлов приходят из подписки и
+        # содержат что угодно, включая кавычки.
+        out="$("$STEER" vless-nodes "$output" --spec "$SPEC" 2>&1)"
+        case "$out" in '{'*) printf '%s\n' "$out" ;; *) fail "${out:-движок не ответил}" ;; esac
+        ;;
+
+    vless_probe)
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var output output
+        json_get_var node node
+        [ -n "$output" ] || fail "не указан выход"
+        # По одному узлу за вызов: проверка упирается в таймаут, и «проверить все» на
+        # подписке из двадцати шести узлов заняло бы дольше, чем живёт вызов ubus.
+        # Интерфейс спрашивает по одному и заполняет таблицу постепенно.
+        [ -n "$node" ] || node=-1
+        out="$("$STEER" vless-probe "$output" --node "$node" --timeout 6 --spec "$SPEC" 2>&1)"
+        case "$out" in '{'*) printf '%s\n' "$out" ;; *) fail "${out:-движок не ответил}" ;; esac
         ;;
 
     *) fail "неизвестный метод" ;;

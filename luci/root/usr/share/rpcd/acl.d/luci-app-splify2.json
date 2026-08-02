@@ -1,6 +1,6 @@
 {
   "luci-app-splify2": {
-    "description": "Управление движком steer: каналы, выходы, списки",
+    "description": "Управление движком steer: каналы, выходы, списки, подписка VLESS",
     "read": {
       "uci": [
         "splify2",
@@ -13,20 +13,26 @@
           "explain",
           "lists",
           "devices",
-          "local_lists"
+          "local_lists",
+          "engine",
+          "sub_info",
+          "vless_nodes",
+          "vless_probe"
         ]
       }
     },
     "write": {
       "uci": [
-        "splify2"
+        "splify2",
+        "firewall"
       ],
       "ubus": {
         "splify2": [
           "spec_set",
           "apply",
           "list_fetch",
-          "list_remove"
+          "list_remove",
+          "sub_set"
         ]
       }
     }

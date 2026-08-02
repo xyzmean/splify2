@@ -3,9 +3,14 @@
 // every extra layer of its own vocabulary would be one more place for the two to
 // drift apart. See steer/docs/contract-v1.md.
 
-/** Where a channel's traffic goes. `interface` is a device; `direct` claims the
- *  packet and leaves it on the normal path. */
-export type OutputKind = 'interface' | 'direct'
+/** Where a channel's traffic goes.
+ *
+ *  `interface` is an existing device; `direct` claims the packet and leaves it on the
+ *  normal path; `vless` is a VLESS/Reality client inside the engine that raises its own
+ *  TUN — so as far as marks, tables and failover go it IS a device, and the only reason
+ *  it is a separate kind is that the device has to be created and kept alive by a
+ *  process. Needs the steer-extended package. */
+export type OutputKind = 'interface' | 'direct' | 'vless'
 
 /** Что делать с трафиком выхода, когда ни одно устройство не отвечает.
  *
@@ -24,6 +29,40 @@ export interface Output {
      *  наверх происходит сам, как только основной туннель оживает. */
     devices?: string[]
     on_fail?: OnFail
+    /** kind=vless: файл подписки. Путь, а не ссылка — скачивание делает бэкенд, движок
+     *  читает то, что ему положили. */
+    sub_file?: string
+    /** kind=vless: какой узел подписки использовать. −1 (или поле опущено) означает
+     *  «первый рабочий», и тогда выбор делает проверка при подъёме, а не человек,
+     *  угадывающий номер. Зашитый номер молча ломается при обновлении подписки. */
+    node?: number
+}
+
+/** Узел подписки, как его видит движок. Индекс — среди ПРИГОДНЫХ узлов, и это же
+ *  значение понимает поле `node` спеки: одно значение слова «номер узла» на весь
+ *  проект, иначе человек выбрал бы пятый, а поднялся бы другой. */
+export interface VlessNode {
+    index: number
+    name: string
+    host: string
+    port: number
+    type: string
+    security: string
+    vision: boolean
+    mode?: string
+}
+
+/** Результат проверки узла. Два времени, потому что они про разное: рукопожатие — цена
+ *  подключения, платится один раз; ttfb — задержка, которая чувствуется на каждом
+ *  запросе. Это время ответа через туннель, а не пинг: ICMP через TUN не ходит вовсе. */
+export interface VlessProbe {
+    index: number
+    name: string
+    type: string
+    ok: boolean
+    handshake_ms: number
+    ttfb_ms: number
+    why: string
 }
 
 /** Observed facts the engine reports per output. `nat`/`in_firewall` matter because

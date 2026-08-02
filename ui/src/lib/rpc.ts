@@ -5,7 +5,14 @@
 // deliberately does not model channels itself — a second model would be a second
 // thing to keep in sync with the engine's contract.
 
-import { toLists, type RawManifest, type Spec, type Status } from './model'
+import {
+    toLists,
+    type RawManifest,
+    type Spec,
+    type Status,
+    type VlessNode,
+    type VlessProbe,
+} from './model'
 
 export { toLists }
 
@@ -75,6 +82,35 @@ export const rpc = {
 
     /** Devices that could serve as an interface output — tunnels first. */
     devices: declare<{ devices: { name: string; up: boolean; kind: string }[] }>('devices'),
+
+    /** Умеет ли установленный движок VLESS. Спрашивается у движка, а не выводится из
+     *  имени пакета: пакет мог быть собран из исходников или переименован. Без этого
+     *  интерфейс предлагал бы выход, который отвергается при сохранении. */
+    engine: declare<{ present: boolean; vless: boolean }>('engine'),
+
+    /** Подписка: где лежит, откуда взята, когда обновлялась. */
+    subInfo: declare<{ url?: string; path: string; present: boolean; bytes?: number; mtime?: number }>('sub_info'),
+    /** Скачать подписку по ссылке. Загрузка — дело управляющего слоя, движок читает файл. */
+    subSet: declare<{ ok: boolean; error?: string; bytes?: number }>('sub_set', ['url']),
+
+    /** Узлы подписки глазами движка, с причинами непригодности. */
+    vlessNodes: declare<{
+        output: string
+        sub_file: string
+        node: number
+        usable: number
+        skipped: number
+        foreign: number
+        nodes: VlessNode[]
+    }>('vless_nodes', ['output']),
+
+    /** Проверить узел и замерить время ответа. По одному за вызов: проверка упирается в
+     *  таймаут, и «проверить все» не уложилось бы в срок жизни вызова ubus. node = -1
+     *  означает «до первого рабочего» — то же решение, что примет движок при подъёме. */
+    vlessProbe: declare<{ output?: string; results?: VlessProbe[]; working?: number; error?: string }>(
+        'vless_probe',
+        ['output', 'node'],
+    ),
 }
 
 export type Rpc = typeof rpc
