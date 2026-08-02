@@ -1,8 +1,0 @@
-{
-	"admin/services/splify2": {
-		"title": "splify2",
-		"order": 59,
-		"action": { "type": "view", "path": "splify2/home" },
-		"depends": { "acl": [ "luci-app-splify2" ] }
-	}
-}
