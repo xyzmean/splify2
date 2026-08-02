@@ -55,6 +55,7 @@ list)
     json_add_object list_fetch; json_add_string id; json_close_object
     json_add_object devices; json_close_object
     json_add_object local_lists; json_close_object
+    json_add_object list_remove; json_add_string id; json_close_object
     json_dump
     ;;
 call)
@@ -150,6 +151,26 @@ call)
         json_add_int count "$(grep -c . "$dest")"
         json_add_string path "$dest"
         json_dump
+        ;;
+
+    list_remove)
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var id id
+        [ -n "$id" ] || fail "не указан список"
+        file="$(jsonfilter -i "$MANIFEST" -e "@.domain_lists[@.id='$id'].file" 2>/dev/null)"
+        [ -n "$file" ] || file="$(jsonfilter -i "$MANIFEST" -e "@.categories[@.id='$id'].file" 2>/dev/null)"
+        [ -n "$file" ] || fail "списка $id нет в манифесте"
+        dest="$LISTS/$(basename "$file")"
+        # Канал, указывающий на файл, после удаления не скомпилируется: движок читает
+        # список при сборке правил и падает на отсутствующем. Поэтому удаление
+        # ОТКАЗЫВАЕТСЯ, пока список кем-то используется, вместо того чтобы оставить
+        # спеку, которая перестанет применяться при следующей перезагрузке.
+        if [ -s "$SPEC" ] && grep -q "$(basename "$file")" "$SPEC"; then
+            fail "список используется каналом — сначала снимите галочку"
+        fi
+        rm -f "$dest"
+        json_init; json_add_boolean ok 1; json_dump
         ;;
 
     local_lists)

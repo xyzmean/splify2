@@ -25,9 +25,12 @@ return view.extend({
 		window.luci_rpc = rpc;
 		window.ui = ui;
 
-		if (!document.getElementById('splify2-app-css')) {
+		var cssId = 'splify2-app-css-' + (buildId || 'dev');
+		if (!document.getElementById(cssId)) {
+			var old = document.querySelector('link[id^="splify2-app-css"]');
+			if (old) old.remove();
 			var link = document.createElement('link');
-			link.id = 'splify2-app-css';
+			link.id = cssId;
 			link.rel = 'stylesheet';
 			link.href = L.resource('splify2/splify-index.css') + v;
 			document.head.appendChild(link);
@@ -35,17 +38,29 @@ return view.extend({
 
 		var container = E('div', { id: 'splify-root', 'class': 'splify-react-root' });
 
-		// Модуль загружается ОДИН раз на документ: каждый уникальный URL — это
+		// Модуль переиспользуется в пределах документа: каждый уникальный URL — это
 		// отдельный ES-модуль, который браузер держит до конца жизни документа, так
-		// что повторная загрузка с ?v= утекала бы целым бандлом на каждый визит.
-		if (window.__splifyMount) {
+		// что загрузка с новым ?v= на каждый визит утекала бы целым бандлом.
+		//
+		// Но переиспользовать его при СМЕНЕ версии нельзя: LuCI ходит между страницами
+		// без перезагрузки документа, поэтому после обновления пакета интерфейс
+		// продолжал показывать прежний бандл — выглядело это как "на роутере всё так
+		// же". Утечка одного старого модуля при смене версии — цена, которую платят
+		// раз на обновление, а не на визит.
+		if (window.__splifyMount && window.__splifyBuildId === buildId) {
 			window.__splifyMount(container);
-		} else if (!document.getElementById('splify2-app-js')) {
-			var script = document.createElement('script');
-			script.id = 'splify2-app-js';
-			script.src = L.resource('splify2/splify-index.js') + v;
-			script.type = 'module';
-			document.head.appendChild(script);
+		} else {
+			window.__splifyBuildId = buildId;
+			var id = 'splify2-app-js-' + (buildId || 'dev');
+			if (!document.getElementById(id)) {
+				var script = document.createElement('script');
+				script.id = id;
+				script.src = L.resource('splify2/splify-index.js') + v;
+				script.type = 'module';
+				document.head.appendChild(script);
+			} else if (window.__splifyMount) {
+				window.__splifyMount(container);
+			}
 		}
 
 		return container;

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Download, Globe, Network } from 'lucide-react'
+import { Download, Globe, Network, RefreshCw, Trash2 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -50,6 +50,20 @@ export default function ListsPage() {
             const r = await rpc.listFetch(l.id)
             if (!r.ok) throw new Error(r.error || 'не удалось загрузить')
             notify(`${l.name}: загружено ${r.count ?? '—'} записей`)
+            setLocal((await rpc.localLists()).files || {})
+        } catch (e) {
+            notify(String(e instanceof Error ? e.message : e), 'error')
+        } finally {
+            setBusy(null)
+        }
+    }
+
+    async function removeList(l: ListEntry) {
+        setBusy(l.id)
+        try {
+            const r = await rpc.listRemove(l.id)
+            if (!r.ok) throw new Error(r.error || 'не удалось удалить')
+            notify(`${l.name}: удалён с роутера`)
             setLocal((await rpc.localLists()).files || {})
         } catch (e) {
             notify(String(e instanceof Error ? e.message : e), 'error')
@@ -148,15 +162,32 @@ export default function ListsPage() {
                                             </p>
                                         )}
                                     </div>
-                                    <Button
-                                        variant="secondary"
-                                        size="sm"
-                                        disabled={busy === l.id}
-                                        onClick={() => fetchList(l)}
-                                    >
-                                        <Download className="mr-1 h-4 w-4" aria-hidden="true" />
-                                        {busy === l.id ? 'Загрузка…' : have ? 'Обновить' : 'Загрузить'}
-                                    </Button>
+                                    <div className="flex shrink-0 items-center gap-1">
+                                        <Button
+                                            variant="secondary"
+                                            size="sm"
+                                            disabled={busy === l.id}
+                                            onClick={() => fetchList(l)}
+                                        >
+                                            {have ? (
+                                                <RefreshCw className="mr-1 h-4 w-4" aria-hidden="true" />
+                                            ) : (
+                                                <Download className="mr-1 h-4 w-4" aria-hidden="true" />
+                                            )}
+                                            {busy === l.id ? 'Загрузка…' : have ? 'Обновить' : 'Загрузить'}
+                                        </Button>
+                                        {have && (
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                aria-label={`Удалить ${l.name} с роутера`}
+                                                disabled={busy === l.id}
+                                                onClick={() => removeList(l)}
+                                            >
+                                                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                                            </Button>
+                                        )}
+                                    </div>
                                 </li>
                             )
                         })}

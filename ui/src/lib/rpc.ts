@@ -68,6 +68,11 @@ export const rpc = {
      *  without that difference, "Download" sits over a list that is already there. */
     localLists: declare<{ files: Record<string, { count: number; mtime: number }> }>('local_lists'),
 
+    /** Delete a downloaded list. Refuses while a channel still points at it: the
+     *  engine reads the file when it compiles, so removing it under a live channel
+     *  turns the next apply into a failure. */
+    listRemove: declare<{ ok: boolean; error?: string }>('list_remove', ['id']),
+
     /** Devices that could serve as an interface output — tunnels first. */
     devices: declare<{ devices: { name: string; up: boolean; kind: string }[] }>('devices'),
 }

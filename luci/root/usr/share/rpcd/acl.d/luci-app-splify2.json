@@ -25,7 +25,8 @@
         "splify2": [
           "spec_set",
           "apply",
-          "list_fetch"
+          "list_fetch",
+          "list_remove"
         ]
       }
     }
