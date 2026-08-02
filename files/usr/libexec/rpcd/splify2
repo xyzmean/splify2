@@ -54,6 +54,7 @@ list)
     json_add_object lists; json_close_object
     json_add_object list_fetch; json_add_string id; json_close_object
     json_add_object devices; json_close_object
+    json_add_object local_lists; json_close_object
     json_dump
     ;;
 call)
@@ -148,6 +149,23 @@ call)
         json_add_boolean ok 1
         json_add_int count "$(grep -c . "$dest")"
         json_add_string path "$dest"
+        json_dump
+        ;;
+
+    local_lists)
+        # Что уже лежит на диске. Без этого интерфейс не может отличить скачанный
+        # список от невыбранного: кнопка "Загрузить" висела и над готовым, а выбрать
+        # можно было то, чего на роутере нет.
+        json_init
+        json_add_object files
+        for f in "$LISTS"/*.lst; do
+            [ -f "$f" ] || continue
+            json_add_object "$(basename "$f")"
+            json_add_int count "$(grep -c . "$f")"
+            json_add_int mtime "$(date -r "$f" +%s 2>/dev/null || echo 0)"
+            json_close_object
+        done
+        json_close_object
         json_dump
         ;;
 

@@ -24,11 +24,13 @@ export default function ListsPage() {
     const [manifest, setManifest] = useState<Manifest | null>(null)
     const [spec, setSpec] = useState<Spec | null>(null)
     const [busy, setBusy] = useState<string | null>(null)
+    const [local, setLocal] = useState<Record<string, { count: number; mtime: number }>>({})
     const [filter, setFilter] = useState<'all' | 'domains' | 'prefixes'>('all')
 
     useEffect(() => {
         rpc.manifest().then((m) => setManifest(toLists(m))).catch(() => setManifest(null))
         rpc.specGet().then(setSpec).catch(() => setSpec(null))
+        rpc.localLists().then((d) => setLocal(d.files || {})).catch(() => setLocal({}))
     }, [])
 
     const used = useMemo(() => {
@@ -48,7 +50,7 @@ export default function ListsPage() {
             const r = await rpc.listFetch(l.id)
             if (!r.ok) throw new Error(r.error || 'не удалось загрузить')
             notify(`${l.name}: загружено ${r.count ?? '—'} записей`)
-            setManifest(toLists(await rpc.manifest()))
+            setLocal((await rpc.localLists()).files || {})
         } catch (e) {
             notify(String(e instanceof Error ? e.message : e), 'error')
         } finally {
@@ -102,7 +104,9 @@ export default function ListsPage() {
 
                     <ul className="space-y-2">
                         {shown.map((l) => {
-                            const byChannels = used.get(l.file.split('/').pop() || l.file)
+                            const base = l.file.split('/').pop() || l.file
+                            const byChannels = used.get(base)
+                            const have = local[base]
                             return (
                                 <li
                                     key={l.id}
@@ -121,6 +125,13 @@ export default function ListsPage() {
                                                 <span className="text-xs text-sp-muted-foreground">
                                                     {l.count.toLocaleString('ru-RU')} записей
                                                 </span>
+                                            )}
+                                            {have ? (
+                                                <Badge variant="default">
+                                                    на роутере: {have.count.toLocaleString('ru-RU')}
+                                                </Badge>
+                                            ) : (
+                                                <Badge variant="secondary">не загружен</Badge>
                                             )}
                                             {l.source && (
                                                 <span className="text-xs text-sp-muted-foreground">
@@ -144,7 +155,7 @@ export default function ListsPage() {
                                         onClick={() => fetchList(l)}
                                     >
                                         <Download className="mr-1 h-4 w-4" aria-hidden="true" />
-                                        {busy === l.id ? 'Загрузка…' : 'Загрузить'}
+                                        {busy === l.id ? 'Загрузка…' : have ? 'Обновить' : 'Загрузить'}
                                     </Button>
                                 </li>
                             )

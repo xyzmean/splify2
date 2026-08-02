@@ -40,10 +40,15 @@ export default function ChannelsPage() {
     /** Which kind a row is being edited as. Kept outside the channel because an empty
      *  channel has no files yet and so nothing to infer the kind from. */
     const [kinds, setKinds] = useState<Record<number, 'prefixes' | 'domains'>>({})
+    /** What is already on the router. A list that is only offered can still be picked —
+     *  it gets downloaded on save — but saying so beats letting someone wonder why the
+     *  choice looks identical to a list that is actually there. */
+    const [local, setLocal] = useState<Record<string, { count: number; mtime: number }>>({})
 
     useEffect(() => {
         rpc.specGet().then(setSpec).catch(() => setSpec(EMPTY_SPEC))
         rpc.manifest().then((m) => setManifest(toLists(m))).catch(() => setManifest(null))
+        rpc.localLists().then((d) => setLocal(d.files || {})).catch(() => setLocal({}))
     }, [])
 
     const lists = manifest?.lists ?? []
@@ -128,6 +133,7 @@ export default function ChannelsPage() {
 
             const res = await rpc.specSet(JSON.stringify(spec))
             if (!res.ok) throw new Error(res.error || 'не удалось сохранить')
+            setLocal((await rpc.localLists()).files || {})
             setDirty(false)
             if (andApply) {
                 const ap = await rpc.apply()
@@ -339,6 +345,11 @@ export default function ChannelsPage() {
                                                                     {typeof l.count === 'number' && (
                                                                         <span className="text-xs text-sp-muted-foreground">
                                                                             {l.count.toLocaleString('ru-RU')}
+                                                                        </span>
+                                                                    )}
+                                                                    {!local[l.file.split('/').pop() || l.file] && (
+                                                                        <span className="text-xs text-sp-muted-foreground">
+                                                                            (скачается при применении)
                                                                         </span>
                                                                     )}
                                                                     {/* The same target in the other form: enabling both is

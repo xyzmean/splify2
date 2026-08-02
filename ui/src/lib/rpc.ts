@@ -63,6 +63,11 @@ export const rpc = {
      *  layer's job, not the engine's. */
     listFetch: declare<{ ok: boolean; count?: number; error?: string }>('list_fetch', ['id']),
 
+    /** Which list files are already on the router, with their local line count. The
+     *  UI cannot tell a downloaded list from a merely offered one without this — and
+     *  without that difference, "Download" sits over a list that is already there. */
+    localLists: declare<{ files: Record<string, { count: number; mtime: number }> }>('local_lists'),
+
     /** Devices that could serve as an interface output — tunnels first. */
     devices: declare<{ devices: { name: string; up: boolean; kind: string }[] }>('devices'),
 }
