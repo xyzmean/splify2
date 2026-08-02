@@ -370,6 +370,26 @@ export default function ChannelsPage() {
                                                             пересечения свернутся сами.
                                                         </p>
                                                     )}
+                                                    {/* Пересечение между РАЗНЫМИ каналами — другой случай: там
+                                                        адрес достаётся тому, кто выше, и это надо не прятать,
+                                                        а называть, потому что решение принимает порядок. */}
+                                                    {(() => {
+                                                        const mine = new Set(chosen)
+                                                        const clash = spec.channels
+                                                            .map((o, k) => ({ o, k }))
+                                                            .filter(({ o, k }) => k !== i && selectedIds(o, lists).some((id) => mine.has(id)))
+                                                        if (!clash.length) return null
+                                                        const above = clash.filter(({ k }) => k < i)
+                                                        return (
+                                                            <p className="mt-1 text-xs text-sp-warning">
+                                                                Общие списки с:{' '}
+                                                                {clash.map(({ o }) => o.name).join(', ')}.{' '}
+                                                                {above.length
+                                                                    ? `Совпавшие адреса заберёт «${above[above.length - 1].o.name}» — он выше.`
+                                                                    : 'Совпавшие адреса заберёт этот канал — он выше.'}
+                                                            </p>
+                                                        )
+                                                    })()}
                                                 </div>
                                             </div>
                                         )}

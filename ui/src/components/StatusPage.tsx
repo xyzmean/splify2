@@ -102,6 +102,46 @@ export default function StatusPage() {
                 </CardContent>
             </Card>
 
+            {/* Один ответ на вопрос "работает ли" вместо россыпи фактов, из которых
+                его надо собирать самому. Считается по тем же полям, но вывод делает
+                интерфейс, а не человек. */}
+            <Card>
+                <CardHeader>
+                    <CardTitle>Что происходит</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                    {(() => {
+                        const bad: string[] = []
+                        for (const [name, o] of outputs) {
+                            if (o.kind !== 'interface') continue
+                            if (!o.up) bad.push(`${name}: устройство ${o.device} выключено — трафик этого выхода никуда не идёт`)
+                            else if (!o.nat) bad.push(`${name}: нет NAT на ${o.device} — пакеты уходят и не возвращаются, сайты будут молчать`)
+                        }
+                        const dead = (status.channels || []).filter((c) => !c.live)
+                        for (const c of dead) bad.push(`${c.name}: правила нет в ядре — примените настройки`)
+                        const silent = (status.channels || []).filter((c) => c.live && !(c.packets ?? 0))
+                        if (!bad.length) {
+                            return (
+                                <>
+                                    <p className="text-sm text-sp-success">
+                                        Всё на месте: выходы подняты, NAT есть, правила в ядре.
+                                    </p>
+                                    {silent.length > 0 && (
+                                        <p className="text-xs text-sp-muted-foreground">
+                                            Пока не совпадал ни разу: {silent.map((c) => c.name).join(', ')}. Это
+                                            нормально, если по этим спискам ещё никто не ходил.
+                                        </p>
+                                    )}
+                                </>
+                            )
+                        }
+                        return bad.map((t, i) => (
+                            <p key={i} className="text-sm text-sp-destructive">{t}</p>
+                        ))
+                    })()}
+                </CardContent>
+            </Card>
+
             <Card>
                 <CardHeader>
                     <CardTitle>Выходы</CardTitle>

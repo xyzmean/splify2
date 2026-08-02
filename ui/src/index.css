@@ -141,6 +141,13 @@
     cursor: pointer;
     position: relative;
     flex-shrink: 0;
+    /* The row is a flex line, so the box centres on it — but Argon sets a
+       line-height that leaves the default `vertical-align: baseline` sitting a
+       couple of pixels low, which is the skew that was visible. Pinning both
+       removes the dependence on inherited line-height entirely. */
+    vertical-align: middle;
+    align-self: center;
+    margin: 0;
     transition: background 0.1s, border-color 0.1s;
   }
   .splify-react-root input[type="checkbox"]:checked {
@@ -169,6 +176,32 @@
   .splify-react-root button.bg-destructive { border-color: var(--sp-destructive) !important; }
   .splify-react-root button.bg-success { border-color: var(--sp-success) !important; }
   .splify-react-root button.bg-secondary { border-color: var(--sp-secondary) !important; }
+  /* ...and it forces the FILL too: Argon's `.btn { background:#fff }` (0-1-0 with
+     its own !important in dark.css) beat every bg-* utility, so every button —
+     tabs, icons, the primary action — rendered as a white box on the dark page.
+     The utilities are the intent; restate them at a specificity Argon cannot
+     outrank. Without this the accent colour never reaches a single button. */
+  .splify-react-root button.bg-primary {
+    background-color: var(--sp-primary) !important;
+    color: var(--sp-primary-foreground) !important;
+  }
+  .splify-react-root button.bg-destructive {
+    background-color: var(--sp-destructive) !important;
+    color: var(--sp-destructive-foreground) !important;
+  }
+  .splify-react-root button.bg-secondary {
+    background-color: var(--sp-secondary) !important;
+    color: var(--sp-secondary-foreground) !important;
+  }
+  /* Ghost/icon buttons are transparent by design — a white box behind a trash
+     icon reads as a disabled control. */
+  .splify-react-root button:not([class*="bg-"]) {
+    background-color: transparent !important;
+    border-color: transparent !important;
+  }
+  .splify-react-root button:not([class*="bg-"]):hover {
+    background-color: var(--sp-accent) !important;
+  }
   .splify-react-root :disabled {
     cursor: default;
   }
