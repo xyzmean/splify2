@@ -7,11 +7,23 @@
  *  packet and leaves it on the normal path. */
 export type OutputKind = 'interface' | 'direct'
 
+/** Что делать с трафиком выхода, когда ни одно устройство не отвечает.
+ *
+ *  drop по умолчанию: канал заводят ровно для того, чтобы трафик НЕ шёл напрямую, и
+ *  молча вернуть его на открытый путь в момент поломки — это нарушить обещание
+ *  выхода тогда, когда это опаснее всего, причём незаметно. */
+export type OnFail = 'drop' | 'direct' | 'zapret'
+
 export interface Output {
     name: string
     kind: OutputKind
-    /** Only for kind 'interface'. Failover may re-point this without touching channels. */
+    /** Активное устройство: то, через которое трафик идёт сейчас. Failover меняет
+     *  его, не трогая ни настройку, ни каналы. */
     device?: string
+    /** Кандидаты в порядке предпочтения — первое здоровое побеждает. Поэтому возврат
+     *  наверх происходит сам, как только основной туннель оживает. */
+    devices?: string[]
+    on_fail?: OnFail
 }
 
 /** Observed facts the engine reports per output. `nat`/`in_firewall` matter because
@@ -23,6 +35,12 @@ export interface OutputStatus extends Output {
     table?: number
     in_firewall?: boolean
     nat?: boolean
+}
+
+export const ON_FAIL_TEXT: Record<OnFail, string> = {
+    drop: 'остановить трафик',
+    direct: 'пустить напрямую',
+    zapret: 'напрямую через zapret',
 }
 
 /** fake-IP is precise per domain; real-IP keeps traceroute hops legible and loses

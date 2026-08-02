@@ -112,10 +112,27 @@ export default function StatusPage() {
                 <CardContent className="space-y-2">
                     {(() => {
                         const bad: string[] = []
+                        const note: string[] = []
                         for (const [name, o] of outputs) {
                             if (o.kind !== 'interface') continue
-                            if (!o.up) bad.push(`${name}: устройство ${o.device} выключено — трафик этого выхода никуда не идёт`)
-                            else if (!o.nat) bad.push(`${name}: нет NAT на ${o.device} — пакеты уходят и не возвращаются, сайты будут молчать`)
+                            const list = o.devices || []
+                            if (!o.device) {
+                                // Сторож не нашёл ни одного живого: что дальше — решает on_fail,
+                                // и это ровно тот момент, когда человеку надо сказать прямо.
+                                bad.push(
+                                    o.on_fail === 'drop'
+                                        ? `${name}: ни одно устройство не отвечает — трафик остановлен, чтобы не уйти мимо туннеля`
+                                        : `${name}: ни одно устройство не отвечает — трафик идёт НАПРЯМУЮ, без туннеля`
+                                )
+                            } else if (!o.up) {
+                                bad.push(`${name}: устройство ${o.device} выключено — трафик этого выхода никуда не идёт`)
+                            } else if (!o.nat) {
+                                bad.push(`${name}: нет NAT на ${o.device} — пакеты уходят и не возвращаются, сайты будут молчать`)
+                            } else if (list.length > 1 && list[0] !== o.device) {
+                                // Работает, но не через основное устройство. Не поломка, но
+                                // молчать нельзя: иначе «почему медленно» останется загадкой.
+                                note.push(`${name}: работает через запасное ${o.device}, основное ${list[0]} не отвечает`)
+                            }
                         }
                         const dead = (status.channels || []).filter((c) => !c.live)
                         for (const c of dead) bad.push(`${c.name}: правила нет в ядре — примените настройки`)
@@ -126,6 +143,9 @@ export default function StatusPage() {
                                     <p className="text-sm text-sp-success">
                                         Всё на месте: выходы подняты, NAT есть, правила в ядре.
                                     </p>
+                                    {note.map((t, i) => (
+                                        <p key={i} className="text-sm text-sp-warning">{t}</p>
+                                    ))}
                                     {silent.length > 0 && (
                                         <p className="text-xs text-sp-muted-foreground">
                                             Пока не совпадал ни разу: {silent.map((c) => c.name).join(', ')}. Это
@@ -135,9 +155,16 @@ export default function StatusPage() {
                                 </>
                             )
                         }
-                        return bad.map((t, i) => (
-                            <p key={i} className="text-sm text-sp-destructive">{t}</p>
-                        ))
+                        return (
+                            <>
+                                {bad.map((t, i) => (
+                                    <p key={i} className="text-sm text-sp-destructive">{t}</p>
+                                ))}
+                                {note.map((t, i) => (
+                                    <p key={i} className="text-sm text-sp-warning">{t}</p>
+                                ))}
+                            </>
+                        )
                     })()}
                 </CardContent>
             </Card>
@@ -151,7 +178,7 @@ export default function StatusPage() {
                         <div key={name} className="flex flex-wrap items-center gap-2 text-sm">
                             <span className="font-medium">{name}</span>
                             <span className="text-sp-muted-foreground">
-                                {o.kind === 'direct' ? 'напрямую' : o.device}
+                                {o.kind === 'direct' ? 'напрямую' : o.device || 'нет живого устройства'}
                             </span>
                             {o.kind === 'interface' && (
                                 <>
@@ -161,6 +188,11 @@ export default function StatusPage() {
                                     <Badge variant={o.nat ? 'secondary' : 'destructive'}>
                                         {o.nat ? 'NAT есть' : 'NAT не найден'}
                                     </Badge>
+                                    {(o.devices?.length ?? 0) > 1 && (
+                                        <span className="text-xs text-sp-muted-foreground">
+                                            резерв: {o.devices!.filter((d) => d !== o.device).join(', ')}
+                                        </span>
+                                    )}
                                 </>
                             )}
                         </div>

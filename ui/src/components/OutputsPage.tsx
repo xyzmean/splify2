@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
-import { EMPTY_SPEC, type Output, type Spec, type Status } from '@/lib/model'
+import { EMPTY_SPEC, ON_FAIL_TEXT, type OnFail, type Output, type Spec, type Status } from '@/lib/model'
 
 // Outputs are named, and channels point at the NAME. That indirection is what lets
 // several tunnels coexist: failover re-points an output's device without touching a
@@ -47,7 +47,10 @@ export default function OutputsPage() {
         while (spec.outputs[name]) name = `${free?.name || 'tunnel'}${n++}`
         edit({
             ...spec,
-            outputs: { ...spec.outputs, [name]: { name, kind: 'interface', device: free?.name || '' } },
+            outputs: {
+                ...spec.outputs,
+                [name]: { name, kind: 'interface', devices: free ? [free.name] : [], on_fail: 'drop' },
+            },
         })
     }
 
@@ -62,6 +65,26 @@ export default function OutputsPage() {
     function patch(name: string, o: Output) {
         if (!spec) return
         edit({ ...spec, outputs: { ...spec.outputs, [name]: o } })
+    }
+
+    /** Устройства выхода. Порядок — приоритет, поэтому редактируется стрелками, а не
+     *  списком-множеством: какой туннель основной, а какой запасной, решает именно он. */
+    function devList(o: Output): string[] {
+        return o.devices?.length ? o.devices : o.device ? [o.device] : []
+    }
+
+    function setDevs(name: string, o: Output, next: string[]) {
+        // device остаётся первым кандидатом: движок выведет одно из другого, но спека
+        // должна быть однозначной и без него до первого прохода failover.
+        patch(name, { ...o, devices: next, device: next[0] || '' })
+    }
+
+    function moveDev(name: string, o: Output, i: number, d: number) {
+        const list = devList(o).slice()
+        const j = i + d
+        if (j < 0 || j >= list.length) return
+        ;[list[i], list[j]] = [list[j], list[i]]
+        setDevs(name, o, list)
     }
 
     function rename(from: string) {
@@ -177,21 +200,15 @@ export default function OutputsPage() {
 
                                     {o.kind === 'interface' ? (
                                         <label className="flex flex-col gap-1 text-xs">
-                                            Устройство
+                                            Если всё упало
                                             <select
-                                                value={o.device || ''}
-                                                onChange={(e) => patch(name, { ...o, device: e.currentTarget.value })}
+                                                value={o.on_fail || 'drop'}
+                                                onChange={(e) => patch(name, { ...o, on_fail: e.currentTarget.value as OnFail })}
                                                 className="rounded-md border border-sp-border bg-sp-background px-2 py-1 text-sm"
                                             >
-                                                <option value="">— выберите —</option>
-                                                {devices.map((d) => (
-                                                    <option key={d.name} value={d.name}>
-                                                        {d.name}{d.up ? '' : ' (выключен)'}
-                                                    </option>
+                                                {(Object.keys(ON_FAIL_TEXT) as OnFail[]).map((k) => (
+                                                    <option key={k} value={k}>{ON_FAIL_TEXT[k]}</option>
                                                 ))}
-                                                {o.device && !devices.some((d) => d.name === o.device) && (
-                                                    <option value={o.device}>{o.device} (нет в системе)</option>
-                                                )}
                                             </select>
                                         </label>
                                     ) : (
@@ -205,6 +222,80 @@ export default function OutputsPage() {
                                         </Button>
                                     </div>
                                 </div>
+
+
+                                {o.kind === 'interface' && (() => {
+                                    const list = devList(o)
+                                    const free = devices.filter((d) => !list.includes(d.name))
+                                    return (
+                                        <div className="rounded-md border border-sp-border p-2">
+                                            <div className="mb-1 text-xs text-sp-muted-foreground">
+                                                Устройства по приоритету — трафик пойдёт через первое
+                                                работающее, и сам вернётся наверх, когда основное оживёт.
+                                            </div>
+                                            {list.length === 0 && (
+                                                <p className="py-1 text-xs text-sp-warning">
+                                                    Устройств нет — выход никуда не ведёт.
+                                                </p>
+                                            )}
+                                            {list.map((dev, di) => {
+                                                const live = devices.find((x) => x.name === dev)
+                                                const active = s?.device === dev
+                                                return (
+                                                    <div key={dev} className="flex items-center gap-2 py-0.5 text-sm">
+                                                        <span className="w-4 text-center text-xs text-sp-muted-foreground">
+                                                            {di + 1}
+                                                        </span>
+                                                        <span className={active ? 'font-medium text-sp-primary' : ''}>
+                                                            {dev}
+                                                        </span>
+                                                        {active && <Badge variant="default">активно</Badge>}
+                                                        {!live && (
+                                                            <Badge variant="destructive">нет в системе</Badge>
+                                                        )}
+                                                        {live && !live.up && (
+                                                            <Badge variant="secondary">выключено</Badge>
+                                                        )}
+                                                        <div className="ml-auto flex items-center gap-1">
+                                                            <Button variant="ghost" size="icon" aria-label="Выше"
+                                                                    disabled={di === 0}
+                                                                    onClick={() => moveDev(name, o, di, -1)}>
+                                                                <ArrowUp className="h-4 w-4" aria-hidden="true" />
+                                                            </Button>
+                                                            <Button variant="ghost" size="icon" aria-label="Ниже"
+                                                                    disabled={di === list.length - 1}
+                                                                    onClick={() => moveDev(name, o, di, 1)}>
+                                                                <ArrowDown className="h-4 w-4" aria-hidden="true" />
+                                                            </Button>
+                                                            <Button variant="ghost" size="icon" aria-label={`Убрать ${dev}`}
+                                                                    onClick={() => setDevs(name, o, list.filter((x) => x !== dev))}>
+                                                                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                                                            </Button>
+                                                        </div>
+                                                    </div>
+                                                )
+                                            })}
+                                            {free.length > 0 && (
+                                                <select
+                                                    value=""
+                                                    onChange={(e) => {
+                                                        const v = e.currentTarget.value
+                                                        if (v) setDevs(name, o, [...list, v])
+                                                    }}
+                                                    className="mt-1 rounded-md border border-sp-border bg-sp-background px-2 py-1 text-sm"
+                                                    aria-label={`Добавить устройство в ${name}`}
+                                                >
+                                                    <option value="">+ добавить устройство</option>
+                                                    {free.map((d) => (
+                                                        <option key={d.name} value={d.name}>
+                                                            {d.name}{d.up ? '' : ' (выключено)'}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            )}
+                                        </div>
+                                    )
+                                })()}
 
                                 <div className="flex flex-wrap items-center gap-2 text-xs">
                                     {s && o.kind === 'interface' && (
