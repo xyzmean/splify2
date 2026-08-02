@@ -125,6 +125,43 @@
     background: none;
     cursor: pointer;
   }
+  /* Checkboxes: Argon doesn't style these, but the browser default is inconsistent
+     across families and the box sits on the text baseline, not the center — hence
+     the visible "перекос" (skew). Pin the size, center it, and use the theme's
+     accent colour so a checked box matches the rest of the UI. */
+  .splify-react-root input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    min-width: 16px;
+    border: 1.5px solid var(--sp-input, #ccc);
+    border-radius: 3px;
+    background: var(--sp-card);
+    cursor: pointer;
+    position: relative;
+    flex-shrink: 0;
+    transition: background 0.1s, border-color 0.1s;
+  }
+  .splify-react-root input[type="checkbox"]:checked {
+    background: var(--sp-primary, #5e72e4);
+    border-color: var(--sp-primary, #5e72e4);
+  }
+  .splify-react-root input[type="checkbox"]:checked::after {
+    content: "";
+    position: absolute;
+    left: 4px;
+    top: 1px;
+    width: 5px;
+    height: 9px;
+    border: solid #fff;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+  }
+  .splify-react-root input[type="checkbox"]:focus-visible {
+    outline: 2px solid var(--sp-primary, #5e72e4);
+    outline-offset: 1px;
+  }
   /* Argon's dark.css forces `border:1px solid #3c3c3c !important` on every
      button. Argon itself repaints the border on its filled (apply/primary)
      buttons to match the fill — mirror that for ours. */

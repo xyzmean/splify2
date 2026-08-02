@@ -335,13 +335,14 @@ export default function ChannelsPage() {
                                                                 </p>
                                                             )}
                                                             {lists.filter((l) => l.kind === kind).map((l) => (
-                                                                <label key={l.id} className="flex items-center gap-2 py-0.5 text-sm">
+                                                                <label key={l.id} className="flex items-center gap-2 py-1 text-sm">
                                                                     <input
                                                                         type="checkbox"
                                                                         checked={chosen.includes(l.id)}
                                                                         onChange={() => toggleList(i, l)}
+                                                                        className="shrink-0"
                                                                     />
-                                                                    <span className="truncate">{l.name}</span>
+                                                                    <span className="truncate leading-5">{l.name}</span>
                                                                     {typeof l.count === 'number' && (
                                                                         <span className="text-xs text-sp-muted-foreground">
                                                                             {l.count.toLocaleString('ru-RU')}
