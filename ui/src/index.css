@@ -17,7 +17,13 @@
     --sp-card-foreground: var(--gray-dark, #32325d);
     --sp-popover: #ffffff;
     --sp-popover-foreground: var(--gray-dark, #32325d);
-    --sp-primary: var(--primary, #5e72e4);
+    /* Акцент берём у темы, какая бы стояла, и только потом свой.
+     *
+     * --primary есть у Argon; у bootstrap-* его нет вовсе, зато есть
+     * --primary-color-medium. Раньше цепочки не было, и на bootstrap кнопки
+     * получали жёстко зашитый цвет мимо темы. Свой хекс — последним, чтобы
+     * «акцент» никогда не оказался пустым. */
+    --sp-primary: var(--primary, var(--primary-color-medium, #5e72e4));
     --sp-primary-foreground: #ffffff;
     --sp-secondary: #f0f0f0;
     --sp-secondary-foreground: var(--gray-dark, #32325d);
@@ -44,7 +50,11 @@
     --sp-card-foreground: #cccccc;
     --sp-popover: #252526;
     --sp-popover-foreground: #cccccc;
-    --sp-primary: var(--dark-primary, #483d8b);
+    /* В тёмной теме прежний запасной цвет (#483d8b) на тёмной странице читался
+     * как «не акцент, а просто тёмное пятно» — именно это и было видно на
+     * bootstrap-dark, где --dark-primary не существует. Берём акцент темы, а
+     * свой запасной делаем светлее фона, а не темнее. */
+    --sp-primary: var(--dark-primary, var(--primary-color-high, #6b82f0));
     --sp-primary-foreground: #ffffff;
     --sp-secondary: #2d2d2d;
     --sp-secondary-foreground: #cccccc;
@@ -59,7 +69,7 @@
     --sp-info: var(--info, #11cdef);
     --sp-border: #3c3c3c;
     --sp-input: #3c3c3c;
-    --sp-ring: var(--dark-primary, #483d8b);
+    --sp-ring: var(--dark-primary, var(--primary-color-high, #6b82f0));
     --sp-card-shadow: 0 0 0.5rem 0 rgba(0, 0, 0, 0.35);
   }
 }
@@ -67,8 +77,17 @@
 /* Scoped preflight: global preflight is disabled (tailwind.config corePlugins),
    so these resets — the ones Tailwind utilities rely on (border defaults,
    box-sizing) plus the element normalisations — apply ONLY inside the React
-   root and never leak into the surrounding LuCI page. */
-@layer base {
+   root and never leak into the surrounding LuCI page.
+   
+   БЕЗ @layer, и это не стилистика. Tailwind 3 вычищает из слоёв все правила, в
+   селекторе которых нет класса, встреченного в исходниках. Сбросы здесь написаны
+   на элементах и атрибутах (`input[type=checkbox]`, `table`, `:where(button)`) —
+   классов в них нет, и из сборки уезжало ШЕСТЬ правил из сорока: только те, где
+   в селекторе стоял `bg-primary` и его родня.
+   
+   Проявлялось это как «стили не применились»: галочки оставались в оформлении
+   темы LuCI и съезжали вниз, кнопки не получали акцентного цвета. Причём в
+   исходнике всё было на месте — поэтому и не находилось глазами. */
   .splify-react-root {
     color: var(--sp-foreground);
     /* Argon renders the whole admin at .875rem over a 16px root — inherit the
@@ -150,6 +169,19 @@
     margin: 0;
     transition: background 0.1s, border-color 0.1s;
   }
+  /* Тема LuCI рисует галочку СВОИМИ псевдоэлементами: bootstrap ставит
+     `input[type=checkbox]::before` с градиентной коробкой и `::after` с маской-галкой.
+     Пока они живы, поверх нашего оформления лежит чужое — коробка выходит двойной и
+     съезжает относительно текста. Гасим их, дальше рисуем сами. */
+  .splify-react-root input[type="checkbox"]::before {
+    content: none;
+    display: none;
+  }
+  .splify-react-root input[type="checkbox"]::after {
+    content: none;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
   .splify-react-root input[type="checkbox"]:checked {
     background: var(--sp-primary, #5e72e4);
     border-color: var(--sp-primary, #5e72e4);
@@ -212,4 +244,3 @@
     display: block;
     vertical-align: middle;
   }
-}

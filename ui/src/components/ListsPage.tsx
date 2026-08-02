@@ -37,7 +37,9 @@ export default function ListsPage() {
         const m = new Map<string, string[]>()
         for (const ch of spec?.channels || []) {
             for (const f of [...(ch.match.prefixes_files || []), ...(ch.match.domains_files || [])]) {
-                const key = f.split('/').pop() || f
+                /* Ключ — путь относительно каталога списков, а не имя файла: иначе
+                 * адресный и доменный список с одним именем считались бы одним. */
+                const key = f.replace(/^.*\/etc\/steer\/lists\//, '')
                 m.set(key, [...(m.get(key) || []), ch.name])
             }
         }
@@ -47,7 +49,7 @@ export default function ListsPage() {
     async function fetchList(l: ListEntry) {
         setBusy(l.id)
         try {
-            const r = await rpc.listFetch(l.id)
+            const r = await rpc.listFetch(l.id, l.kind)
             if (!r.ok) throw new Error(r.error || 'не удалось загрузить')
             notify(`${l.name}: загружено ${r.count ?? '—'} записей`)
             setLocal((await rpc.localLists()).files || {})
@@ -61,7 +63,7 @@ export default function ListsPage() {
     async function removeList(l: ListEntry) {
         setBusy(l.id)
         try {
-            const r = await rpc.listRemove(l.id)
+            const r = await rpc.listRemove(l.id, l.kind)
             if (!r.ok) throw new Error(r.error || 'не удалось удалить')
             notify(`${l.name}: удалён с роутера`)
             setLocal((await rpc.localLists()).files || {})
@@ -118,9 +120,12 @@ export default function ListsPage() {
 
                     <ul className="space-y-2">
                         {shown.map((l) => {
-                            const base = l.file.split('/').pop() || l.file
-                            const byChannels = used.get(base)
-                            const have = local[base]
+                            /* Ключ — путь относительно каталога списков, как у издателя.
+                             * По имени файла нельзя: `hodca.lst` есть и адресный, и
+                             * доменный (`domains/hodca.lst`), и они бы слились в один. */
+                            const rel = l.file.replace(/^\/+/, '')
+                            const byChannels = used.get(rel)
+                            const have = local[rel]
                             return (
                                 <li
                                     key={l.id}

@@ -68,7 +68,7 @@ export const rpc = {
 
     /** Fetch a list's file so a channel can use it. Downloading is the management
      *  layer's job, not the engine's. */
-    listFetch: declare<{ ok: boolean; count?: number; error?: string }>('list_fetch', ['id']),
+    listFetch: declare<{ ok: boolean; count?: number; error?: string }>('list_fetch', ['id', 'kind']),
 
     /** Which list files are already on the router, with their local line count. The
      *  UI cannot tell a downloaded list from a merely offered one without this — and
@@ -78,7 +78,7 @@ export const rpc = {
     /** Delete a downloaded list. Refuses while a channel still points at it: the
      *  engine reads the file when it compiles, so removing it under a live channel
      *  turns the next apply into a failure. */
-    listRemove: declare<{ ok: boolean; error?: string }>('list_remove', ['id']),
+    listRemove: declare<{ ok: boolean; error?: string }>('list_remove', ['id', 'kind']),
 
     /** Devices that could serve as an interface output — tunnels first. */
     devices: declare<{ devices: { name: string; up: boolean; kind: string }[] }>('devices'),

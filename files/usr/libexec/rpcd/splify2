@@ -28,6 +28,39 @@ MANIFEST_URL_DEFAULT="https://raw.githubusercontent.com/xyzmean/ru-bypass-ipsets
 
 fail() { json_init; json_add_boolean ok 0; json_add_string error "$1"; json_dump; exit 0; }
 
+# Найти файл списка в манифесте по id И ВИДУ.
+#
+# Вид обязателен, и это не перестраховка: `categories` и `domain_lists` — разные
+# пространства имён, и один id законно есть в обоих. У издателя так с `hodca` и `news`:
+# адресный `hodca.lst` (5444 подсети) и доменный `domains/hodca.lst` (250 имён).
+#
+# Прежняя версия искала сначала в доменных, поэтому на запрос АДРЕСНОЙ категории скачивала
+# доменный файл. Дальше канал читал домены как подсети, nft отвергал набор целиком — и
+# вставала вся маршрутизация. Симптом «включил Хостинги и CDN, всё умерло» — отсюда.
+manifest_file() {  # ID ВИД
+    case "$2" in
+        domains)  jsonfilter -i "$MANIFEST" -e "@.domain_lists[@.id='$1'].file" 2>/dev/null ;;
+        prefixes) jsonfilter -i "$MANIFEST" -e "@.categories[@.id='$1'].file" 2>/dev/null ;;
+        *)
+            # Вид не указан — старый вызов. Тогда порядок обратный прежнему: адресные
+            # первыми, потому что доменные лежат в своём подкаталоге и путь у них
+            # различим, а вот адресная категория при промахе давала именно ту поломку.
+            f="$(jsonfilter -i "$MANIFEST" -e "@.categories[@.id='$1'].file" 2>/dev/null)"
+            [ -n "$f" ] || f="$(jsonfilter -i "$MANIFEST" -e "@.domain_lists[@.id='$1'].file" 2>/dev/null)"
+            printf '%s' "$f"
+            ;;
+    esac
+}
+
+# Локальный путь списка: ПОВТОРЯЕТ путь у издателя, а не берёт от него имя файла.
+#
+# `basename` схлопывал `hodca.lst` и `domains/hodca.lst` в один локальный файл, и они
+# затирали друг друга. То же правило продублировано в интерфейсе (pathFor) — разойдясь,
+# они дадут «список скачан, а канал его не находит».
+local_path() {  # ПУТЬ_У_ИЗДАТЕЛЯ
+    printf '%s/%s' "$LISTS" "$(echo "$1" | sed 's|^/*||')"
+}
+
 manifest_url() {
     u="$(uci -q get splify2.main.manifest_url)"
     [ -n "$u" ] && printf '%s' "$u" || printf '%s' "$MANIFEST_URL_DEFAULT"
@@ -253,19 +286,13 @@ splify2: туннель $o перезапущен — сменился узел 
         json_get_var id id
         [ -n "$id" ] || fail "не указан список"
         [ -s "$MANIFEST" ] || fail "манифест не загружен"
-        # base_url и file берутся из манифеста через jsonfilter, а не скребутся текстом.
-        # Первая версия искала поле grep -A2 после строки с id — и работала для адресных
-        # категорий, где file третьим полем, но молча промахивалась на доменных, где оно
-        # четвёртое: список выбирался в интерфейсе и не скачивался. Имя файла к тому же
-        # не выводится из id (домены лежат в domains/<id>.lst), так что догадка тут
-        # исключена: спрашиваем ровно то, что написано.
+        json_get_var kind kind
         base="$(jsonfilter -i "$MANIFEST" -e '@.base_url')"
-        file="$(jsonfilter -i "$MANIFEST" -e "@.domain_lists[@.id='$id'].file")"
-        [ -n "$file" ] || file="$(jsonfilter -i "$MANIFEST" -e "@.categories[@.id='$id'].file")"
+        file="$(manifest_file "$id" "$kind")"
         [ -n "$file" ] || fail "списка $id нет в манифесте"
         [ -n "$base" ] || fail "в манифесте нет base_url"
-        mkdir -p "$LISTS"
-        dest="$LISTS/$(basename "$file")"
+        dest="$(local_path "$file")"
+        mkdir -p "$(dirname "$dest")"
         download "$base/$file" "$dest" || fail "список не скачался"
         json_init
         json_add_boolean ok 1
@@ -278,16 +305,20 @@ splify2: туннель $o перезапущен — сменился узел 
         read -r input
         json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
         json_get_var id id
+        json_get_var kind kind
         [ -n "$id" ] || fail "не указан список"
-        file="$(jsonfilter -i "$MANIFEST" -e "@.domain_lists[@.id='$id'].file" 2>/dev/null)"
-        [ -n "$file" ] || file="$(jsonfilter -i "$MANIFEST" -e "@.categories[@.id='$id'].file" 2>/dev/null)"
+        file="$(manifest_file "$id" "$kind")"
         [ -n "$file" ] || fail "списка $id нет в манифесте"
-        dest="$LISTS/$(basename "$file")"
+        dest="$(local_path "$file")"
         # Канал, указывающий на файл, после удаления не скомпилируется: движок читает
         # список при сборке правил и падает на отсутствующем. Поэтому удаление
         # ОТКАЗЫВАЕТСЯ, пока список кем-то используется, вместо того чтобы оставить
         # спеку, которая перестанет применяться при следующей перезагрузке.
-        if [ -s "$SPEC" ] && grep -q "$(basename "$file")" "$SPEC"; then
+        #
+        # Ищем ПОЛНЫЙ путь, а не имя файла: `hodca.lst` встречается и в адресном канале, и
+        # внутри `domains/hodca.lst`, и поиск по имени запрещал бы удаление одного из-за
+        # другого.
+        if [ -s "$SPEC" ] && grep -q "$dest" "$SPEC"; then
             fail "список используется каналом — сначала снимите галочку"
         fi
         rm -f "$dest"
@@ -300,9 +331,12 @@ splify2: туннель $o перезапущен — сменился узел 
         # можно было то, чего на роутере нет.
         json_init
         json_add_object files
-        for f in "$LISTS"/*.lst; do
+        # Ключ — путь ОТНОСИТЕЛЬНО каталога списков, а не имя файла: доменные лежат в
+        # подкаталоге, и по имени `hodca.lst` невозможно отличить адресный от доменного.
+        # Тот же ключ строит интерфейс из поля `file` манифеста.
+        for f in $(find "$LISTS" -name '*.lst' -type f 2>/dev/null); do
             [ -f "$f" ] || continue
-            json_add_object "$(basename "$f")"
+            json_add_object "$(echo "${f#$LISTS/}")"
             json_add_int count "$(grep -c . "$f")"
             json_add_int mtime "$(date -r "$f" +%s 2>/dev/null || echo 0)"
             json_close_object

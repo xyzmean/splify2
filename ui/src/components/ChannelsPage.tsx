@@ -17,9 +17,18 @@ import { toLists, EMPTY_SPEC, type Channel, type ListEntry, type Manifest, type 
 
 const LISTS_DIR = '/etc/steer/lists'
 
-/** Where the engine will look for a list this UI asked the backend to download. */
+/** Где движок будет искать список, который интерфейс попросил скачать.
+ *
+ *  Путь ПОВТОРЯЕТ путь у издателя, а не берёт от него только имя файла. Иначе адресный
+ *  `hodca.lst` и доменный `domains/hodca.lst` становятся одним локальным файлом и затирают
+ *  друг друга. Ровно это и случилось: включение «Хостинги и CDN» положило 250 доменов в
+ *  файл, который канал читал как список подсетей; nft отверг набор ЦЕЛИКОМ, и встала вся
+ *  маршрутизация, а не один канал.
+ *
+ *  Правило продублировано в бэкенде (`local_path`), и это единственное место, где такое
+ *  дублирование терпимо: разойдясь, они дадут «список скачан, а канал его не находит». */
 function pathFor(l: ListEntry) {
-    return `${LISTS_DIR}/${l.file.split('/').pop()}`
+    return `${LISTS_DIR}/${l.file.replace(/^\/+/, '')}`
 }
 
 function selectedIds(ch: Channel, lists: ListEntry[]): string[] {
@@ -127,7 +136,7 @@ export default function ChannelsPage() {
                     needed.add(f)
             for (const l of lists)
                 if (needed.has(pathFor(l))) {
-                    const r = await rpc.listFetch(l.id).catch(() => ({ ok: false }) as { ok: boolean })
+                    const r = await rpc.listFetch(l.id, l.kind).catch(() => ({ ok: false }) as { ok: boolean })
                     if (!r.ok) notify(`${l.name}: список не скачался — канал будет без него`, 'warning')
                 }
 
@@ -348,7 +357,7 @@ export default function ChannelsPage() {
                                                                             {l.count.toLocaleString('ru-RU')}
                                                                         </span>
                                                                     )}
-                                                                    {!local[l.file.split('/').pop() || l.file] && (
+                                                                    {!local[l.file.replace(/^\/+/, '')] && (
                                                                         <span className="text-xs text-sp-muted-foreground">
                                                                             (скачается при применении)
                                                                         </span>
