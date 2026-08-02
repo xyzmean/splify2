@@ -12,7 +12,15 @@ STEER=/usr/sbin/steer
 SPEC=/etc/steer/spec.json
 LISTS=/etc/steer/lists
 MANIFEST=/etc/splify2/manifest.json
-MANIFEST_URL_DEFAULT="https://github.com/xyzmean/ru-bypass-ipsets/releases/latest/download/categories.json"
+# Тот же источник, что и у файлов списков: base_url внутри манифеста указывает на
+# raw в main, и брать сам манифест из релиза значило бы, что он описывает одни файлы,
+# а скачиваются другие. Расхождение проявилось бы как "список есть в интерфейсе, но
+# качается пустым" — то есть в самом непонятном для человека виде.
+#
+# Цена: raw кеширует минут на пять, поэтому свежий прогон CI видно не мгновенно. Для
+# списков, которые обновляются раз в сутки, это дешевле рассинхронизации. Переопределяется
+# через uci: splify2.main.manifest_url.
+MANIFEST_URL_DEFAULT="https://raw.githubusercontent.com/xyzmean/ru-bypass-ipsets/refs/heads/main/lists/categories.json"
 
 fail() { json_init; json_add_boolean ok 0; json_add_string error "$1"; json_dump; exit 0; }
 
@@ -117,12 +125,16 @@ call)
         json_get_var id id
         [ -n "$id" ] || fail "не указан список"
         [ -s "$MANIFEST" ] || fail "манифест не загружен"
-        # base_url и file берутся из манифеста, а не собираются из id: имя файла может
-        # отличаться от идентификатора (домены лежат в domains/<id>.lst).
-        base="$(sed -n 's/.*"base_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$MANIFEST" | head -1)"
-        file="$(tr ',' '\n' < "$MANIFEST" | grep -A2 "\"id\"[[:space:]]*:[[:space:]]*\"$id\"" |
-                sed -n 's/.*"file"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
-        [ -n "$file" ] || file="$id.lst"
+        # base_url и file берутся из манифеста через jsonfilter, а не скребутся текстом.
+        # Первая версия искала поле grep -A2 после строки с id — и работала для адресных
+        # категорий, где file третьим полем, но молча промахивалась на доменных, где оно
+        # четвёртое: список выбирался в интерфейсе и не скачивался. Имя файла к тому же
+        # не выводится из id (домены лежат в domains/<id>.lst), так что догадка тут
+        # исключена: спрашиваем ровно то, что написано.
+        base="$(jsonfilter -i "$MANIFEST" -e '@.base_url')"
+        file="$(jsonfilter -i "$MANIFEST" -e "@.domain_lists[@.id='$id'].file")"
+        [ -n "$file" ] || file="$(jsonfilter -i "$MANIFEST" -e "@.categories[@.id='$id'].file")"
+        [ -n "$file" ] || fail "списка $id нет в манифесте"
         [ -n "$base" ] || fail "в манифесте нет base_url"
         mkdir -p "$LISTS"
         dest="$LISTS/$(basename "$file")"
