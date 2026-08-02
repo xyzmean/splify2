@@ -1,0 +1,145 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Palette — 1:1 with luci-theme-argon. Every value FIRST tries the CSS custom
+   property that Argon itself puts on the page (cascade.css :root + the inline
+   --primary/--dark-primary block from /etc/config/argon), so a user-configured
+   accent colour propagates here automatically; the hex fallbacks are Argon's
+   own defaults, keeping the look identical under Bootstrap or a headless test.
+   Note: these are FULL colours (not HSL triplets) — tailwind.config wraps them
+   in color-mix() so `/NN` opacity modifiers still work. */
+@layer base {
+  :root {
+    --sp-background: transparent;
+    --sp-foreground: var(--gray-dark, #32325d);
+    --sp-card: #ffffff;
+    --sp-card-foreground: var(--gray-dark, #32325d);
+    --sp-popover: #ffffff;
+    --sp-popover-foreground: var(--gray-dark, #32325d);
+    --sp-primary: var(--primary, #5e72e4);
+    --sp-primary-foreground: #ffffff;
+    --sp-secondary: #f0f0f0;
+    --sp-secondary-foreground: var(--gray-dark, #32325d);
+    --sp-muted: var(--background-color, #f4f5f7);
+    --sp-muted-foreground: var(--gray, #8898aa);
+    --sp-accent: var(--background-color, #f4f5f7);
+    --sp-accent-foreground: var(--gray-dark, #32325d);
+    --sp-destructive: var(--danger, #f5365c);
+    --sp-destructive-foreground: #ffffff;
+    --sp-success: var(--success, #2dce89);
+    --sp-warning: var(--warning, #fb6340);
+    --sp-info: var(--info, #11cdef);
+    --sp-border: var(--lighter, #e9ecef);
+    --sp-input: #cccccc;
+    --sp-ring: var(--primary, #5e72e4);
+    --sp-card-shadow: 0 0 1rem 0 rgba(136, 152, 170, 0.15);
+    --radius: 0.25rem;
+  }
+
+  .dark {
+    --sp-background: transparent;
+    --sp-foreground: #cccccc;
+    --sp-card: #1e1e1e;
+    --sp-card-foreground: #cccccc;
+    --sp-popover: #252526;
+    --sp-popover-foreground: #cccccc;
+    --sp-primary: var(--dark-primary, #483d8b);
+    --sp-primary-foreground: #ffffff;
+    --sp-secondary: #2d2d2d;
+    --sp-secondary-foreground: #cccccc;
+    --sp-muted: #252526;
+    --sp-muted-foreground: #adb5bd;
+    --sp-accent: #2d2d2d;
+    --sp-accent-foreground: #ffffff;
+    --sp-destructive: #c60000;
+    --sp-destructive-foreground: #ffffff;
+    --sp-success: #00ad00;
+    --sp-warning: var(--warning, #fb6340);
+    --sp-info: var(--info, #11cdef);
+    --sp-border: #3c3c3c;
+    --sp-input: #3c3c3c;
+    --sp-ring: var(--dark-primary, #483d8b);
+    --sp-card-shadow: 0 0 0.5rem 0 rgba(0, 0, 0, 0.35);
+  }
+}
+
+/* Scoped preflight: global preflight is disabled (tailwind.config corePlugins),
+   so these resets — the ones Tailwind utilities rely on (border defaults,
+   box-sizing) plus the element normalisations — apply ONLY inside the React
+   root and never leak into the surrounding LuCI page. */
+@layer base {
+  .splify-react-root {
+    color: var(--sp-foreground);
+    /* Argon renders the whole admin at .875rem over a 16px root — inherit the
+       page font (Google Sans) and match its scale so the view doesn't look
+       like an island. */
+    font-family: inherit;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    -webkit-text-size-adjust: 100%;
+  }
+  .splify-react-root *,
+  .splify-react-root ::before,
+  .splify-react-root ::after {
+    box-sizing: border-box;
+    border-width: 0;
+    border-style: solid;
+    border-color: var(--sp-border);
+  }
+  .splify-react-root h1,
+  .splify-react-root h2,
+  .splify-react-root h3,
+  .splify-react-root h4,
+  .splify-react-root p,
+  .splify-react-root figure,
+  .splify-react-root ol,
+  .splify-react-root ul {
+    margin: 0;
+  }
+  .splify-react-root h1,
+  .splify-react-root h2,
+  .splify-react-root h3,
+  .splify-react-root h4 {
+    font-size: inherit;
+    font-weight: inherit;
+  }
+  .splify-react-root ol,
+  .splify-react-root ul {
+    list-style: none;
+    padding: 0;
+  }
+  .splify-react-root a {
+    color: inherit;
+    text-decoration: inherit;
+  }
+  /* :where() keeps these resets at .splify-react-root specificity (0-1-0) so
+     they lose ties against later utility classes — a plain `... button`
+     selector (0-1-1) silently beats every bg-* and text-* utility on buttons. */
+  .splify-react-root :where(button, input, select, textarea) {
+    font: inherit;
+    color: inherit;
+    margin: 0;
+  }
+  .splify-react-root :where(button) {
+    background: none;
+    cursor: pointer;
+  }
+  /* Argon's dark.css forces `border:1px solid #3c3c3c !important` on every
+     button. Argon itself repaints the border on its filled (apply/primary)
+     buttons to match the fill — mirror that for ours. */
+  .splify-react-root button.bg-primary { border-color: var(--sp-primary) !important; }
+  .splify-react-root button.bg-destructive { border-color: var(--sp-destructive) !important; }
+  .splify-react-root button.bg-success { border-color: var(--sp-success) !important; }
+  .splify-react-root button.bg-secondary { border-color: var(--sp-secondary) !important; }
+  .splify-react-root :disabled {
+    cursor: default;
+  }
+  .splify-react-root table {
+    border-collapse: collapse;
+  }
+  .splify-react-root svg {
+    display: block;
+    vertical-align: middle;
+  }
+}
