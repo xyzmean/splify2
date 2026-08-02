@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
-import { EMPTY_SPEC, type Channel, type Manifest, type Spec } from '@/lib/model'
+import { toLists, EMPTY_SPEC, type Channel, type Manifest, type Spec } from '@/lib/model'
 
 // The central page, because a channel is the unit of the whole system: (who, what)
 // -> where. Rendered as a RANKED list rather than a set of switches — the order is
@@ -14,13 +14,15 @@ import { EMPTY_SPEC, type Channel, type Manifest, type Spec } from '@/lib/model'
 
 function describe(ch: Channel, lists: Manifest | null): string {
     if (ch.match.any) return 'весь трафик'
-    const file = ch.match.prefixes_file || ch.match.domains_file || ''
-    const known = lists?.lists.find((l) => l.file === file || file.endsWith('/' + l.file))
+    const files = [...(ch.match.prefixes_files || []), ...(ch.match.domains_files || [])]
+    const file = files[0] || ''
+    const known = lists?.lists.find((l) => file.endsWith('/' + l.file.split('/').pop()!))
     const base = known ? known.name : file.split('/').pop() || 'список не выбран'
-    if (ch.match.domains_file) {
-        return `домены: ${base}${ch.match.mode === 'realip' ? ' (realip)' : ''}`
+    const more = files.length > 1 ? ` +${files.length - 1}` : ''
+    if (ch.match.domains_files?.length) {
+        return `домены: ${base}${more}${ch.match.mode === 'realip' ? ' (realip)' : ''}`
     }
-    return `адреса: ${base}`
+    return `адреса: ${base}${more}`
 }
 
 export default function ChannelsPage() {
@@ -31,7 +33,7 @@ export default function ChannelsPage() {
 
     useEffect(() => {
         rpc.specGet().then(setSpec).catch(() => setSpec(EMPTY_SPEC))
-        rpc.lists().then(setLists).catch(() => setLists(null))
+        rpc.manifest().then((m) => setLists(toLists(m))).catch(() => setLists(null))
     }, [])
 
     function edit(next: Spec) {

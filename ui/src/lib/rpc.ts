@@ -5,26 +5,27 @@
 // deliberately does not model channels itself — a second model would be a second
 // thing to keep in sync with the engine's contract.
 
-import type { Manifest, Spec, Status } from './model'
+import { toLists, type RawManifest, type Spec, type Status } from './model'
+
+export { toLists }
 
 declare global {
     interface Window {
-        // Provided by LuCI's runtime on the page that hosts this bundle.
-        L?: {
-            rpc?: {
-                declare: (o: {
-                    object: string
-                    method: string
-                    params?: string[]
-                    expect?: Record<string, unknown>
-                }) => (...args: unknown[]) => Promise<unknown>
-            }
+        /** Handed over by the loader shim (view/splify2/home.js), the same bridge
+         *  splify 1 used. Absent when the bundle runs outside LuCI. */
+        luci_rpc?: {
+            declare: (o: {
+                object: string
+                method: string
+                params?: string[]
+                expect?: Record<string, unknown>
+            }) => (...args: unknown[]) => Promise<unknown>
         }
     }
 }
 
 function declare<T>(method: string, params: string[] = []) {
-    const rpc = window.L?.rpc
+    const rpc = window.luci_rpc
     if (!rpc) {
         // Standalone (vite dev) — fail loudly rather than pretending to have data.
         return async (): Promise<T> => {
@@ -53,8 +54,10 @@ export const rpc = {
      *  it also covers the case where a set failed to load. */
     explain: declare<{ text: string }>('explain', ['address']),
 
-    /** Lists available to point a channel at, IP and domain alike. */
-    lists: declare<Manifest>('lists'),
+    /** The publisher's manifest VERBATIM. Reshaping it in the rpcd wrapper would put
+     *  JSON surgery in shell, where it is both dearer and less checkable; the adapter
+     *  below does it here instead. */
+    manifest: declare<RawManifest>('lists'),
 
     /** Fetch a list's file so a channel can use it. Downloading is the management
      *  layer's job, not the engine's. */

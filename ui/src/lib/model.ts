@@ -34,9 +34,12 @@ export interface Channel {
     name: string
     /** Who: subnets or addresses. Empty means the spec's from_default. */
     from?: string[]
+    /** Arrays, like the engine: several lists feeding one channel is the normal case,
+     *  and the compiler merges channels that agree on output/clients/mode into ONE set
+     *  and ONE rule — so a dozen enabled lists cost two rules per packet, not a dozen. */
     match: {
-        prefixes_file?: string
-        domains_file?: string
+        prefixes_files?: string[]
+        domains_files?: string[]
         mode?: DomainMode
         any?: boolean
     }
@@ -89,12 +92,76 @@ export interface ListEntry {
     file: string
     /** Where the list came from, so the UI can say why two lists disagree. */
     source?: string
+    /** Address categories covering the same target. Shown as a warning, not hidden:
+     *  the choice between forms is real (domains are more precise, addresses cheaper),
+     *  but enabling both is never what someone means. */
+    same_as_ip?: string[]
+}
+
+/** Exactly what the publisher ships. Address categories and domain lists live under
+ *  separate keys because they have different shapes and different purposes — and
+ *  keeping them separate means an older consumer does not break on the new one. */
+export interface RawManifest {
+    version: string
+    base_url: string
+    categories?: {
+        id: string
+        name_ru: string
+        description_ru?: string
+        file: string
+        count?: number
+        default_on?: boolean
+        is_geoblock?: boolean
+    }[]
+    domain_lists?: {
+        id: string
+        kind: 'domains'
+        name_ru: string
+        file: string
+        count?: number
+        default_on?: boolean
+        source?: string
+        /** Address categories built from the SAME source file — the same target in
+         *  another form. Enabling both is the likeliest misconfiguration there is:
+         *  double the memory, and two channels arguing over one destination. */
+        same_as_ip?: string[]
+        overlaps?: { with: string; domains: number; percent: number }[]
+    }[]
 }
 
 export interface Manifest {
     version: string
     base_url: string
     lists: ListEntry[]
+}
+
+/** Flattens the publisher's two keys into one pickable list. */
+export function toLists(m: RawManifest): Manifest {
+    const lists: ListEntry[] = []
+    for (const c of m.categories || []) {
+        lists.push({
+            id: c.id,
+            kind: 'prefixes',
+            name: c.name_ru,
+            description: c.description_ru,
+            count: c.count,
+            default_on: c.default_on,
+            file: c.file,
+        })
+    }
+    for (const d of m.domain_lists || []) {
+        lists.push({
+            id: d.id,
+            kind: 'domains',
+            name: d.name_ru,
+            count: d.count,
+            default_on: d.default_on,
+            file: d.file,
+            source: d.source,
+            same_as_ip: d.same_as_ip,
+        })
+    }
+    return { version: m.version, base_url: m.base_url, lists }
 }
 
 /** What a fresh install starts from: nothing routed anywhere. An empty channel list

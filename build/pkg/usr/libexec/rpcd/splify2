@@ -1,0 +1,160 @@
+#!/bin/sh
+# ubus-объект splify2 — тонкая обёртка над движком.
+#
+# Здесь сознательно нет собственной модели каналов. Движок уже умеет отвечать на все
+# вопросы про своё состояние, и вторая модель означала бы второе место, которое надо
+# держать в согласии с контрактом. Поэтому status/explain отдаются дословно, а spec
+# только читается и записывается — с обязательной проверкой компилятором перед тем,
+# как файл встанет на место.
+. /usr/share/libubox/jshn.sh
+
+STEER=/usr/sbin/steer
+SPEC=/etc/steer/spec.json
+LISTS=/etc/steer/lists
+MANIFEST=/etc/splify2/manifest.json
+MANIFEST_URL_DEFAULT="https://github.com/xyzmean/ru-bypass-ipsets/releases/latest/download/categories.json"
+
+fail() { json_init; json_add_boolean ok 0; json_add_string error "$1"; json_dump; exit 0; }
+
+manifest_url() {
+    u="$(uci -q get splify2.main.manifest_url)"
+    [ -n "$u" ] && printf '%s' "$u" || printf '%s' "$MANIFEST_URL_DEFAULT"
+}
+
+# Единственный способ скачать: сначала во временный файл, потом переименовать. Иначе
+# оборванная загрузка оставляет на месте рабочего списка обрубок, и канал начинает
+# маршрутизировать половину.
+download() {  # URL DEST
+    tmp="$2.tmp"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --max-time 60 -o "$tmp" "$1" || { rm -f "$tmp"; return 1; }
+    else
+        uclient-fetch -q -T 60 -O "$tmp" "$1" || { rm -f "$tmp"; return 1; }
+    fi
+    [ -s "$tmp" ] || { rm -f "$tmp"; return 1; }
+    mv "$tmp" "$2"
+}
+
+case "$1" in
+list)
+    json_init
+    json_add_object status; json_close_object
+    json_add_object spec_get; json_close_object
+    json_add_object spec_set; json_add_string spec; json_close_object
+    json_add_object apply; json_close_object
+    json_add_object explain; json_add_string address; json_close_object
+    json_add_object lists; json_close_object
+    json_add_object list_fetch; json_add_string id; json_close_object
+    json_add_object devices; json_close_object
+    json_dump
+    ;;
+call)
+    case "$2" in
+    status)
+        # Движок печатает JSON сам. Если он не отвечает — честная ошибка, а не пустой
+        # объект, который интерфейс покажет как «всё в порядке».
+        out="$("$STEER" status --spec "$SPEC" 2>/dev/null)"
+        case "$out" in '{'*) printf '%s\n' "$out" ;; *) fail "движок не ответил" ;; esac
+        ;;
+
+    spec_get)
+        [ -s "$SPEC" ] && cat "$SPEC" || printf '{"schema":1,"outputs":{},"channels":[]}\n'
+        ;;
+
+    spec_set)
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var spec spec
+        [ -n "$spec" ] || fail "пустая спецификация"
+        tmp=/tmp/splify2-spec.$$
+        printf '%s' "$spec" > "$tmp"
+        # Компилятор — единственный судья: он же будет это применять. Проверка до
+        # записи означает, что на диске не окажется спеки, которую движок отвергнет
+        # при следующей загрузке.
+        if ! err="$("$STEER" apply --dry-run --spec "$tmp" 2>&1 >/dev/null)"; then
+            rm -f "$tmp"
+            fail "${err:-движок отверг спецификацию}"
+        fi
+        mkdir -p "$(dirname "$SPEC")"
+        mv "$tmp" "$SPEC"
+        json_init; json_add_boolean ok 1; json_dump
+        ;;
+
+    apply)
+        out="$("$STEER" apply --spec "$SPEC" 2>&1)"; rc=$?
+        # Вывод движка отдаётся целиком, включая предупреждения: он знает то, чего
+        # интерфейс знать не может — например, что у туннеля нет NAT и трафик в него
+        # уедет без возврата.
+        json_init
+        json_add_boolean ok $([ $rc -eq 0 ] && echo 1 || echo 0)
+        json_add_string output "$out"
+        json_dump
+        ;;
+
+    explain)
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var address address
+        [ -n "$address" ] || fail "не указан адрес"
+        json_init
+        json_add_string text "$("$STEER" explain "$address" --spec "$SPEC" 2>&1)"
+        json_dump
+        ;;
+
+    lists)
+        # Манифест отдаётся как есть — превращать его в форму интерфейса здесь значило
+        # бы держать разбор в shell, где он дороже и хуже проверяем.
+        if [ ! -s "$MANIFEST" ]; then
+            mkdir -p "$(dirname "$MANIFEST")"
+            download "$(manifest_url)" "$MANIFEST" || fail "манифест не скачался"
+        fi
+        cat "$MANIFEST"
+        ;;
+
+    list_fetch)
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var id id
+        [ -n "$id" ] || fail "не указан список"
+        [ -s "$MANIFEST" ] || fail "манифест не загружен"
+        # base_url и file берутся из манифеста, а не собираются из id: имя файла может
+        # отличаться от идентификатора (домены лежат в domains/<id>.lst).
+        base="$(sed -n 's/.*"base_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$MANIFEST" | head -1)"
+        file="$(tr ',' '\n' < "$MANIFEST" | grep -A2 "\"id\"[[:space:]]*:[[:space:]]*\"$id\"" |
+                sed -n 's/.*"file"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+        [ -n "$file" ] || file="$id.lst"
+        [ -n "$base" ] || fail "в манифесте нет base_url"
+        mkdir -p "$LISTS"
+        dest="$LISTS/$(basename "$file")"
+        download "$base/$file" "$dest" || fail "список не скачался"
+        json_init
+        json_add_boolean ok 1
+        json_add_int count "$(grep -c . "$dest")"
+        json_add_string path "$dest"
+        json_dump
+        ;;
+
+    devices)
+        # Кандидаты в выход interface. Мосты, wifi и физические порты не предлагаются:
+        # выход в них не имеет смысла и приглашает конфигурацию, которая молча ничего
+        # не маршрутизирует.
+        json_init
+        json_add_array devices
+        for d in /sys/class/net/*; do
+            n="$(basename "$d")"
+            case "$n" in lo|br-*|eth*|wlan*|phy*|ifb*) continue ;; esac
+            [ -d "$d" ] || continue
+            json_add_object ""
+            json_add_string name "$n"
+            json_add_boolean up "$([ "$(cat "$d/operstate" 2>/dev/null)" = down ] && echo 0 || echo 1)"
+            json_add_string kind "$(cat "$d/uevent" 2>/dev/null | sed -n 's/^DEVTYPE=//p' | head -1)"
+            json_close_object
+        done
+        json_close_array
+        json_dump
+        ;;
+
+    *) fail "неизвестный метод" ;;
+    esac
+    ;;
+esac

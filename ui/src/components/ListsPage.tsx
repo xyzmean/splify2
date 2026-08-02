@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
-import { type ListEntry, type Manifest, type Spec } from '@/lib/model'
+import { toLists, type ListEntry, type Manifest, type Spec } from '@/lib/model'
 
 // Two kinds of list, and the difference is not cosmetic:
 //
@@ -27,17 +27,17 @@ export default function ListsPage() {
     const [filter, setFilter] = useState<'all' | 'domains' | 'prefixes'>('all')
 
     useEffect(() => {
-        rpc.lists().then(setManifest).catch(() => setManifest(null))
+        rpc.manifest().then((m) => setManifest(toLists(m))).catch(() => setManifest(null))
         rpc.specGet().then(setSpec).catch(() => setSpec(null))
     }, [])
 
     const used = useMemo(() => {
         const m = new Map<string, string[]>()
         for (const ch of spec?.channels || []) {
-            const f = ch.match.prefixes_file || ch.match.domains_file
-            if (!f) continue
-            const key = f.split('/').pop() || f
-            m.set(key, [...(m.get(key) || []), ch.name])
+            for (const f of [...(ch.match.prefixes_files || []), ...(ch.match.domains_files || [])]) {
+                const key = f.split('/').pop() || f
+                m.set(key, [...(m.get(key) || []), ch.name])
+            }
         }
         return m
     }, [spec])
@@ -48,7 +48,7 @@ export default function ListsPage() {
             const r = await rpc.listFetch(l.id)
             if (!r.ok) throw new Error(r.error || 'не удалось загрузить')
             notify(`${l.name}: загружено ${r.count ?? '—'} записей`)
-            setManifest(await rpc.lists())
+            setManifest(toLists(await rpc.manifest()))
         } catch (e) {
             notify(String(e instanceof Error ? e.message : e), 'error')
         } finally {
