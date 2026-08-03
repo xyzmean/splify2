@@ -58,12 +58,21 @@ exit 0
 EOF
 chmod +x build/scripts/post-install
 
+# Движок в depends НЕ объявлен, хотя без него интерфейс бесполезен. Причина практическая:
+# steer лежит в GitHub Releases, а не в репозитории apk, и жёсткая зависимость делает пакет
+# неустанавливаемым — «ERROR: steer (no such package)» у любого, кто ставит интерфейс
+# первым. А первым его ставят как раз новички.
+#
+# Вместо зависимости движок ставится двумя путями, и оба, в отличие от apk, объясняют выбор
+# варианта: install.sh при установке одной строкой и карточка в самом интерфейсе, если
+# движка нет. Отсутствие движка интерфейс переживает и говорит об этом прямо — это
+# предусмотренное состояние, а не поломка.
 mkdir -p "$OUT"
 docker run --rm -v "$PWD":/w -w /w alpine:latest sh -c \
     "apk add --no-cache apk-tools >/dev/null 2>&1; apk mkpkg \
        --info name:luci-app-splify2 --info version:$VERSION-r1 \
        --info description:'splify2: каналы, выходы и списки поверх движка steer' \
-       --info arch:noarch --info depends:'luci-base steer' \
+       --info arch:noarch --info depends:'luci-base' \
        --script post-install:build/scripts/post-install \
        -F $PKG -o $OUT/luci-app-splify2-$VERSION-1_noarch.apk" >/dev/null 2>&1 \
     || { echo "упаковка провалилась"; exit 1; }
