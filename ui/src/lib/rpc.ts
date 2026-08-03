@@ -85,8 +85,24 @@ export const rpc = {
 
     /** Умеет ли установленный движок VLESS. Спрашивается у движка, а не выводится из
      *  имени пакета: пакет мог быть собран из исходников или переименован. Без этого
-     *  интерфейс предлагал бы выход, который отвергается при сохранении. */
-    engine: declare<{ present: boolean; vless: boolean }>('engine'),
+     *  интерфейс предлагал бы выход, который отвергается при сохранении.
+     *
+     *  arch — архитектура ПАКЕТОВ (aarch64_cortex-a53, а не aarch64): по ней собирается
+     *  имя файла релиза, и `apk --print-arch` для этого не годится. */
+    engine: declare<{ present: boolean; vless: boolean; arch?: string; version?: string }>('engine'),
+
+    /** Версии движка, доступные в релизах. Спрашиваются у GitHub, а не зашиты: зашитая
+     *  версия означает, что интерфейс ставит прошлое, и заметить это можно только по
+     *  отсутствию чего-то нужного. */
+    steerVersions: declare<{ arch: string; versions: string[] }>('steer_versions'),
+
+    /** Скачать и поставить движок выбранной версии и варианта. Вариант — выбор человека:
+     *  он зависит от того, поднимает ли туннель сам движок, и пакетный менеджер такого не
+     *  решает. */
+    steerInstall: declare<{ ok: boolean; error?: string; installed?: string }>(
+        'steer_install',
+        ['version', 'extended'],
+    ),
 
     /** Подписка: где лежит, откуда взята, когда обновлялась. */
     subInfo: declare<{ url?: string; path: string; present: boolean; bytes?: number; mtime?: number }>('sub_info'),

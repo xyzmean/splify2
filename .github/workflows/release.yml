@@ -1,0 +1,103 @@
+name: Релиз
+
+# Сборка и публикация по кнопке. От человека нужна одна вещь — номер версии.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Версия (например 0.6.0). Ставится в VERSION и в тег vX.Y.Z'
+        required: true
+        type: string
+      prerelease:
+        description: 'Черновик для проверки: пометить как pre-release'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Проверить формат версии
+        run: |
+          set -eu
+          V='${{ inputs.version }}'
+          # Версия попадает не только в имя пакета: build.sh штампует её в ?v= у бандлов и
+          # в build-id.txt, по которому загрузчик решает, брать интерфейс из кеша браузера
+          # или заново. Опечатка здесь — это «пакет обновился, интерфейс прежний».
+          echo "$V" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || {
+            echo "::error::версия '$V' не в виде X.Y.Z"; exit 1; }
+          echo "$V" > VERSION
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+
+      - name: Установить зависимости интерфейса
+        working-directory: ui
+        run: npm ci
+
+      - name: Проверки интерфейса
+        working-directory: ui
+        run: |
+          set -eu
+          # Те же проверки, что и локально. check:cn сверяет свою реализацию tw-merge с
+          # настоящей, а check-dist ловит расхождение раскладки бандлов с тем, что ждёт
+          # build.sh, — в splify 1 один чанк, доступный по двум URL, стоил мёртвой вкладки.
+          npm run lint
+          npx tsc -b
+          npm run check:cn
+
+      - name: Собрать пакет
+        run: ./build.sh 2>&1 | tee /tmp/build.log
+
+      - name: Убедиться, что пакет собрался
+        run: |
+          set -eu
+          ls -la out/
+          test -f "out/luci-app-splify2-${VERSION}-1_noarch.apk" || {
+            echo "::error::пакет luci-app-splify2-${VERSION}-1_noarch.apk не найден"; exit 1; }
+
+      - name: Зафиксировать версию в репозитории
+        run: |
+          set -eu
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          if ! git diff --quiet VERSION; then
+            git add VERSION
+            git commit -m "Версия ${VERSION}"
+            git push
+          fi
+
+      - name: Опубликовать релиз
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: splify2 ${{ env.VERSION }}
+          prerelease: ${{ inputs.prerelease }}
+          files: |
+            out/luci-app-splify2-${{ env.VERSION }}-1_noarch.apk
+            install.sh
+          body: |
+            Интерфейс и управление для [steer](https://github.com/xyzmean/steer).
+
+            Установка одной строкой — она же поставит движок, если его нет:
+
+            ```sh
+            sh -c "$(wget -qO- https://raw.githubusercontent.com/xyzmean/splify2/main/install.sh)"
+            ```
+
+            Пакет один на все роутеры: архитектуры здесь нет, весь бинарный код в движке.

@@ -92,6 +92,8 @@ export default function App() {
                 </button>
             </nav>
 
+            {/* И в расширенном виде тоже: тот, кто дошёл сюда, скорее всего и полезет в
+                документацию движка. */}
             {tab === 'channels' ? (
                 <ChannelsPage />
             ) : (
@@ -103,6 +105,18 @@ export default function App() {
                     {tab === 'status' && <StatusPage />}
                 </Suspense>
             )}
+
+            <div className="mt-6 border-t border-sp-border pt-3 text-xs text-sp-muted-foreground">
+                powered by{' '}
+                <a
+                    href="https://github.com/xyzmean/steer"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline decoration-dotted hover:text-sp-foreground"
+                >
+                    steer
+                </a>
+            </div>
         </div>
     )
 }

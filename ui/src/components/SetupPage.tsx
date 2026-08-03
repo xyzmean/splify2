@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
 import { t } from '@/lib/i18n'
+import EngineCard from '@/components/EngineCard'
 import { EMPTY_SPEC, type Channel, type RawManifest, type Spec, type Status } from '@/lib/model'
 
 // Простая настройка: один экран от «ничего не настроено» до работающего туннеля.
@@ -70,7 +71,9 @@ export default function SetupPage({ onExpert }: { onExpert: () => void }) {
     const [spec, setSpec] = useState<Spec | null>(null)
     const [raw, setRaw] = useState<RawManifest | null>(null)
     const [status, setStatus] = useState<Status | null>(null)
-    const [vlessOk, setVlessOk] = useState<boolean | null>(null)
+    /** Движок целиком, а не только «умеет ли VLESS»: карточке установки нужны и версия,
+     *  и архитектура, и сам факт наличия — три разных случая, которые нельзя путать. */
+    const [engine, setEngine] = useState<{ present: boolean; vless: boolean; arch?: string; version?: string } | null>(null)
     const [sub, setSub] = useState<{ url?: string; present: boolean } | null>(null)
     const [url, setUrl] = useState('')
     /** Выбранные ФАЙЛЫ, а не идентификаторы: в спеку идут пути, и хранить то же, что
@@ -83,7 +86,7 @@ export default function SetupPage({ onExpert }: { onExpert: () => void }) {
         rpc.specGet().then((s) => { setSpec(s); seed(s) }).catch(() => setSpec(EMPTY_SPEC))
         rpc.manifest().then(setRaw).catch(() => setRaw(null))
         rpc.status().then(setStatus).catch(() => setStatus(null))
-        rpc.engine().then((e) => setVlessOk(e.vless)).catch(() => setVlessOk(null))
+        rpc.engine().then(setEngine).catch(() => setEngine(null))
         rpc.subInfo().then((s) => { setSub(s); setUrl(s.url || '') }).catch(() => setSub(null))
     }, [])
 
@@ -278,14 +281,14 @@ export default function SetupPage({ onExpert }: { onExpert: () => void }) {
                 </CardContent>
             </Card>
 
-            {/* Движок без VLESS — не ошибка настройки, а другой пакет. Говорим это до того,
-                как человек вставит ссылку и не поймёт, почему ничего не вышло. */}
-            {vlessOk === false && (
-                <Card className="border-sp-destructive">
-                    <CardContent className="py-4 text-sm">
-                        {t('Установлен базовый движок — он не умеет VLESS. Нужен пакет steer-extended.')}
-                    </CardContent>
-                </Card>
+            {/* Движка нет или он базовый — это не ошибка настройки, а другой пакет, и ставится
+                он ЗДЕСЬ ЖЕ. Раньше здесь была строчка «нужен пакет steer-extended», после
+                которой человеку оставалось идти в консоль: верное сообщение, из которого
+                ничего не следует. */}
+            {engine !== null && !(engine.present && engine.vless) && (
+                <EngineCard engine={engine} onInstalled={() => {
+                    rpc.engine().then(setEngine).catch(() => {})
+                }} />
             )}
 
             <Card>
@@ -304,7 +307,7 @@ export default function SetupPage({ onExpert }: { onExpert: () => void }) {
                             aria-label={t('Ссылка на подписку')}
                             className="min-w-0 flex-1 rounded-lg border border-sp-input bg-transparent px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sp-ring"
                         />
-                        <Button onClick={connect} disabled={busy !== '' || vlessOk === false}>
+                        <Button onClick={connect} disabled={busy !== '' || engine?.vless === false}>
                             {busy === 'sub' && <Loader2 className="h-4 w-4 animate-spin" />}
                             {t('Подключить')}
                         </Button>
@@ -377,6 +380,21 @@ export default function SetupPage({ onExpert }: { onExpert: () => void }) {
                 {t('Расширенные настройки')}
                 <ChevronDown className="h-4 w-4" aria-hidden="true" />
             </button>
+
+            {/* Движок под интерфейсом называется прямо. Не украшение: когда человек ищет,
+                почему трафик пошёл не туда, ему нужно знать, ЧТО читать и где спрашивать, —
+                а вся маршрутизация здесь чужая работа, и она названа. */}
+            <div className="pt-2 text-xs text-sp-muted-foreground">
+                powered by{' '}
+                <a
+                    href="https://github.com/xyzmean/steer"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline decoration-dotted hover:text-sp-foreground"
+                >
+                    steer
+                </a>
+            </div>
 
             {status?.warnings?.length ? (
                 <div className="space-y-1 pt-2">
