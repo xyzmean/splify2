@@ -361,15 +361,27 @@ splify2: туннель $o перезапущен — сменился узел 
         ;;
 
     devices)
-        # Кандидаты в выход interface. Мосты, wifi и физические порты не предлагаются:
-        # выход в них не имеет смысла и приглашает конфигурацию, которая молча ничего
-        # не маршрутизирует.
+        # Кандидаты в выход interface: только туннельные устройства.
+        #
+        # Отбор по /sys/class/net/*/type, а не по имени. Признак — ARPHRD_NONE (65534):
+        # он у wireguard, amneziawg и tun, и его нет ни у мостов, ни у физических портов,
+        # ни у wifi. 768 — ARPHRD_TUNNEL (ipip, gre), тоже туннель.
+        #
+        # Раньше отбор шёл по имени и отсекал eth*, но на современном OpenWrt порты
+        # называются lan2, lan3, wan — и они попадали в список. Выход в физический порт
+        # молча ничего не маршрутизирует: конфигурация выглядит настроенной, трафик
+        # пропадает. Проверено на роутере — предлагались wan и три lan-порта.
         json_init
         json_add_array devices
         for d in /sys/class/net/*; do
             n="$(basename "$d")"
-            case "$n" in lo|br-*|eth*|wlan*|phy*|ifb*) continue ;; esac
             [ -d "$d" ] || continue
+            case "$(cat "$d/type" 2>/dev/null)" in
+                65534|768) ;;
+                *) continue ;;
+            esac
+            # Физическое устройство туннелем не бывает: у него есть ссылка device.
+            [ -e "$d/device" ] && continue
             json_add_object ""
             json_add_string name "$n"
             json_add_boolean up "$([ "$(cat "$d/operstate" 2>/dev/null)" = down ] && echo 0 || echo 1)"

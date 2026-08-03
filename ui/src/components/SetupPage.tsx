@@ -76,6 +76,15 @@ export default function SetupPage({ onExpert }: { onExpert: () => void }) {
     const [engine, setEngine] = useState<{ present: boolean; vless: boolean; arch?: string; version?: string } | null>(null)
     const [sub, setSub] = useState<{ url?: string; present: boolean } | null>(null)
     const [url, setUrl] = useState('')
+    /** Куда ведём трафик: подписка или уже готовое устройство.
+     *
+     *  Выбор появился не для полноты. Мастер сначала умел только подписку, и человек с
+     *  работающим wireguard или amneziawg оставался без простого пути: интерфейс предлагал
+     *  ему завести VPN заново вместо того, чтобы воспользоваться имеющимся. В расширенных
+     *  настройках это всегда было, но идти туда за одним выпадающим списком — не «просто». */
+    const [via, setVia] = useState<'sub' | 'device'>('sub')
+    const [device, setDevice] = useState('')
+    const [devices, setDevices] = useState<{ name: string; up: boolean }[] | null>(null)
     /** Выбранные ФАЙЛЫ, а не идентификаторы: в спеку идут пути, и хранить то же, что
      *  сохраняем, значит не иметь второго представления, которое может разойтись. */
     const [picked, setPicked] = useState<Set<string>>(new Set())
@@ -88,6 +97,16 @@ export default function SetupPage({ onExpert }: { onExpert: () => void }) {
         rpc.status().then(setStatus).catch(() => setStatus(null))
         rpc.engine().then(setEngine).catch(() => setEngine(null))
         rpc.subInfo().then((s) => { setSub(s); setUrl(s.url || '') }).catch(() => setSub(null))
+        rpc.devices()
+            .then((r) => {
+                // Своё же устройство из списка убираем: выход, указывающий сам на себя, —
+                // конфигурация, которая молча никуда не ведёт.
+                const list = (r.devices || []).filter((d) => d.name !== OUT_NAME)
+                setDevices(list)
+                const up = list.find((d) => d.up) || list[0]
+                if (up) setDevice(up.name)
+            })
+            .catch(() => setDevices([]))
     }, [])
 
     /** Прочитать из спеки то, что мастер сам туда и положил. Без этого повторный вход
@@ -97,6 +116,13 @@ export default function SetupPage({ onExpert }: { onExpert: () => void }) {
         for (const ch of s.channels)
             if (ch.name === CH_NAME) for (const f of ch.match.domains_files || []) files.add(f)
         setPicked(files)
+        // Чем выход был настроен раньше, тем и показываем: иначе повторный вход
+        // предлагал бы подписку тому, у кого выход и так ведёт в его wireguard.
+        const out = s.outputs?.[OUT_NAME]
+        if (out?.kind === 'interface') {
+            setVia('device')
+            if (out.device) setDevice(out.device)
+        }
     }
 
     const all: Item[] = useMemo(
@@ -162,7 +188,8 @@ export default function SetupPage({ onExpert }: { onExpert: () => void }) {
      *  ошибку, с которой человеку нечего делать. */
     async function apply() {
         if (!spec) return
-        if (!sub?.present) { notify(t('Сначала подключите подписку'), 'warning'); return }
+        if (via === 'sub' && !sub?.present) { notify(t('Сначала подключите подписку'), 'warning'); return }
+        if (via === 'device' && !device) { notify(t('Выберите туннель'), 'warning'); return }
         if (!picked.size) { notify(t('Выберите хотя бы один сервис'), 'warning'); return }
         setBusy('apply')
         try {
@@ -183,15 +210,24 @@ export default function SetupPage({ onExpert }: { onExpert: () => void }) {
                 ...spec,
                 outputs: {
                     ...spec.outputs,
-                    [OUT_NAME]: {
-                        // node: -1 — «первый рабочий». Зашитый номер молча перестаёт быть тем
-                        // узлом при обновлении подписки, а проверка находит живой сама.
-                        name: OUT_NAME, kind: 'vless', sub_file: SUB_FILE, node: -1,
-                        // drop, а не direct: туннель заводят ровно чтобы трафик НЕ шёл
-                        // напрямую, и вернуть его на открытый путь при поломке — нарушить это
-                        // обещание тогда, когда это опаснее всего, причём незаметно.
-                        on_fail: 'drop',
-                    },
+                    // on_fail: drop в обоих случаях. Туннель заводят ровно чтобы трафик НЕ
+                    // шёл напрямую, и вернуть его на открытый путь при поломке — нарушить
+                    // это обещание тогда, когда это опаснее всего, причём незаметно.
+                    [OUT_NAME]: via === 'device'
+                        ? {
+                            // Готовое устройство: wireguard, amneziawg, что угодно уже
+                            // работающее. Движку здесь достаточно базовой сборки — VLESS
+                            // он поднимать не будет.
+                            name: OUT_NAME, kind: 'interface',
+                            device, devices: [device], on_fail: 'drop',
+                          }
+                        : {
+                            // node: -1 — «первый рабочий». Зашитый номер молча перестаёт
+                            // быть тем узлом при обновлении подписки, а проверка находит
+                            // живой сама.
+                            name: OUT_NAME, kind: 'vless', sub_file: SUB_FILE, node: -1,
+                            on_fail: 'drop',
+                          },
                 },
                 // Свой канал первым: каналы проверяются сверху вниз, и сервисы должны
                 // побеждать более широкие правила, настроенные вручную.
@@ -272,7 +308,7 @@ export default function SetupPage({ onExpert }: { onExpert: () => void }) {
                             </div>
                         )}
                     </div>
-                    {sub?.present && (
+                    {via === 'sub' && sub?.present && (
                         <Button variant="outline" size="sm" onClick={check} disabled={busy !== ''}>
                             {busy === 'check' && <Loader2 className="h-4 w-4 animate-spin" />}
                             {t('Проверить')}
@@ -285,7 +321,15 @@ export default function SetupPage({ onExpert }: { onExpert: () => void }) {
                 он ЗДЕСЬ ЖЕ. Раньше здесь была строчка «нужен пакет steer-extended», после
                 которой человеку оставалось идти в консоль: верное сообщение, из которого
                 ничего не следует. */}
-            {engine !== null && !(engine.present && engine.vless) && (
+            {engine !== null && !engine.present && (
+                <EngineCard engine={engine} onInstalled={() => {
+                    rpc.engine().then(setEngine).catch(() => {})
+                }} />
+            )}
+            {/* Расширенная сборка нужна ТОЛЬКО для подписки. Тому, кто ведёт трафик в свой
+                wireguard, базового движка достаточно, и предлагать ему обновление значит
+                гнать за лишним пакетом ни за чем. */}
+            {engine?.present && !engine.vless && via === 'sub' && (
                 <EngineCard engine={engine} onInstalled={() => {
                     rpc.engine().then(setEngine).catch(() => {})
                 }} />
@@ -293,10 +337,66 @@ export default function SetupPage({ onExpert }: { onExpert: () => void }) {
 
             <Card>
                 <CardHeader className="pb-2">
-                    <CardTitle className="text-base">1. {t('Подписка')}</CardTitle>
+                    <CardTitle className="text-base">1. {t('Куда пускать')}</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-2">
+                <CardContent className="space-y-3">
+                    {/* Два пути, и второй — не «для продвинутых». У множества людей туннель
+                        уже поднят (wireguard, amneziawg), и заводить рядом второй VPN им
+                        незачем: движку всё равно, кто поднял устройство. */}
                     <div className="flex flex-wrap gap-2">
+                        {[
+                            { id: 'sub' as const, name: t('Подписка VPN'), why: t('вставить ссылку') },
+                            { id: 'device' as const, name: t('Свой туннель'), why: t('wireguard, amneziawg') },
+                        ].map((o) => (
+                            <button
+                                key={o.id}
+                                type="button"
+                                aria-pressed={via === o.id}
+                                onClick={() => setVia(o.id)}
+                                disabled={o.id === 'device' && devices?.length === 0}
+                                className={[
+                                    'flex-1 rounded-lg border px-3 py-2 text-left text-sm transition-colors disabled:opacity-50',
+                                    via === o.id ? 'border-sp-primary bg-sp-primary/10' : 'border-sp-border',
+                                ].join(' ')}
+                            >
+                                <span className="font-medium">{o.name}</span>
+                                <span className="block text-xs text-sp-muted-foreground">{o.why}</span>
+                            </button>
+                        ))}
+                    </div>
+
+                    {via === 'device' ? (
+                        <div className="space-y-2">
+                            {devices === null ? (
+                                <p className="text-sm text-sp-muted-foreground">{t('Загрузка…')}</p>
+                            ) : devices.length === 0 ? (
+                                <p className="text-sm text-sp-muted-foreground">
+                                    {t('Туннельных устройств на роутере нет. Поднимите wireguard или amneziawg — или выберите подписку.')}
+                                </p>
+                            ) : (
+                                <>
+                                    <select
+                                        value={device}
+                                        onChange={(e) => setDevice(e.target.value)}
+                                        aria-label={t('Туннель')}
+                                        className="w-full rounded-lg border border-sp-input bg-transparent px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sp-ring"
+                                    >
+                                        {devices.map((d) => (
+                                            <option key={d.name} value={d.name}>
+                                                {d.name}
+                                                {d.up ? '' : ` — ${t('не поднят')}`}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <p className="text-xs text-sp-muted-foreground">
+                                        {t('Трафик отмеченных сервисов пойдёт в это устройство. Настраивать его не нужно — оно уже работает.')}
+                                    </p>
+                                </>
+                            )}
+                        </div>
+                    ) : (
+                        <>
+                        <div className="flex flex-wrap gap-2">
                         <input
                             type="url"
                             inputMode="url"
@@ -317,6 +417,8 @@ export default function SetupPage({ onExpert }: { onExpert: () => void }) {
                             ? t('Подписка на роутере. Вставьте другую ссылку, чтобы заменить.')
                             : t('Ссылку выдаёт продавец VPN. Серверы скачаются на роутер, узел выберется сам — первый рабочий.')}
                     </p>
+                        </>
+                    )}
                 </CardContent>
             </Card>
 
