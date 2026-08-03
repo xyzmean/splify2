@@ -18,6 +18,7 @@ const DIST = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist')
 const EXPECTED_JS = [
   'splify-index.js', 'splify-x.js',
   'splify-OutputsPage.js', 'splify-ListsPage.js', 'splify-StatusPage.js',
+  'splify-SetupPage.js',
 ]
 
 const js = readdirSync(DIST).filter((f) => f.endsWith('.js')).sort()
