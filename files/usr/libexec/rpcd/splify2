@@ -190,6 +190,7 @@ list)
     json_add_object sub_set; json_add_string url; json_close_object
     json_add_object sub_info; json_close_object
     json_add_object dev_stats; json_close_object
+    json_add_object diag; json_close_object
     json_add_object engine_state; json_close_object
     json_add_object ui_get; json_close_object
     json_add_object ui_set; json_add_string state; json_close_object
@@ -622,6 +623,20 @@ splify2: туннель $o перезапущен — сменился узел 
         done
         json_close_object
         json_dump
+        ;;
+
+    diag)
+        # Проверки состояния — движок печатает JSON сам. Отдаём дословно по той же причине,
+        # что и status: свой разбор здесь означал бы вторую модель проверок в shell, которая
+        # начнёт расходиться с движком при первой же новой проверке.
+        #
+        # Ненулевой код возврата — НЕ повод для ошибки: движок возвращает 1, когда нашёл
+        # поломку, и это ровно тот ответ, который надо показать. Проверяем по виду вывода.
+        out="$("$STEER" diag --spec "$SPEC" 2>/dev/null)"
+        case "$out" in
+            '{'*) printf '%s\n' "$out" ;;
+            *) fail "движок не умеет diag — обновите steer" ;;
+        esac
         ;;
 
     engine_state)

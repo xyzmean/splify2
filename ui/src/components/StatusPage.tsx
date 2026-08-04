@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { AlertTriangle, Search } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { AlertTriangle, Check, Search, TriangleAlert, XCircle } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -21,6 +21,16 @@ function human(n: number) {
     return `${i === 0 ? v : v.toFixed(1).replace('.', ',')} ${u[i]}`
 }
 
+/** Скорость из разницы двух опросов. Именно её человек и высматривает, глядя на счётчики:
+ *  «сколько всего» отвечает на другой вопрос, а «идёт ли прямо сейчас» — на этот. */
+function rate(bytes: number, ms: number) {
+    if (!(ms > 0) || !(bytes > 0)) return null
+    const bits = (bytes * 8 * 1000) / ms
+    if (bits >= 1e6) return `${(bits / 1e6).toFixed(1).replace('.', ',')} Мбит/с`
+    if (bits >= 1e3) return `${Math.round(bits / 1e3)} кбит/с`
+    return `${Math.round(bits)} бит/с`
+}
+
 export default function StatusPage() {
     const [status, setStatus] = useState<Status | null>(null)
     const [error, setError] = useState<string | null>(null)
@@ -37,19 +47,79 @@ export default function StatusPage() {
         log: string[]
     } | null>(null)
     const [showLog, setShowLog] = useState(false)
+    /** Проверки состояния от движка. Отдельно от status: тот отвечает «что применено», а этот
+     *  — «работает ли», и это разные вопросы с разными ответами. */
+    const [diag, setDiag] = useState<{
+        checks: { id: string; verdict: 'ok' | 'warn' | 'fail'; what: string; why: string }[]
+        warn: number
+        fail: number
+    } | null>(null)
+    const [diagOld, setDiagOld] = useState(false)
+    const [showOk, setShowOk] = useState(false)
+    /** Прошлый снимок счётчиков — из него берётся скорость. Снимок ОДИН на все источники:
+     *  считать разницу по значениям, снятым в разные моменты, значит делить на неверное время
+     *  и показывать скорость, которой не было. */
+    const prev = useRef<{
+        t: number
+        ch: Record<string, { up: number; down: number }>
+        dev: Record<string, { rx: number; tx: number }>
+    } | null>(null)
+    const [speed, setSpeed] = useState<{
+        ch: Record<string, { up: string | null; down: string | null }>
+        dev: Record<string, { rx: string | null; tx: string | null }>
+    }>({ ch: {}, dev: {} })
 
     useEffect(() => {
-        const load = () => {
-            rpc
-                .status()
-                .then((s) => { setStatus(s); setError(null) })
-                .catch((e) => setError(String(e instanceof Error ? e.message : e)))
-            rpc.devStats().then((r) => setDevs(r.devices || {})).catch(() => {})
-            rpc.engineState().then((r) => setEngine(r)).catch(() => {})
+        let stop = false
+        const load = async () => {
+            /* allSettled, а не all: отказ одного источника не должен уносить остальные —
+             * diag отсутствует на старом движке, и это не повод гасить всю страницу. */
+            const [s, d, e, g] = await Promise.allSettled([
+                rpc.status(), rpc.devStats(), rpc.engineState(), rpc.diag(),
+            ])
+            if (stop) return
+            if (s.status === 'fulfilled') { setStatus(s.value); setError(null) }
+            else setError(String(s.reason instanceof Error ? s.reason.message : s.reason))
+            const devices = d.status === 'fulfilled' ? d.value.devices || {} : null
+            if (devices) setDevs(devices)
+            if (e.status === 'fulfilled') setEngine(e.value)
+            if (g.status === 'fulfilled') { setDiag(g.value); setDiagOld(false) }
+            else setDiagOld(true)
+
+            /* Скорость — по разнице с прошлым снимком. Отрицательная разница значит, что
+             * счётчики начались заново (перезагрузка): показывать её нельзя, и rate() на
+             * такой разнице молчит. */
+            const now = Date.now()
+            const ch: Record<string, { up: number; down: number }> = {}
+            if (s.status === 'fulfilled')
+                for (const c of s.value.channels || [])
+                    ch[c.name] = { up: c.bytes ?? 0, down: c.down_bytes ?? 0 }
+            const dev: Record<string, { rx: number; tx: number }> = {}
+            if (devices)
+                for (const [n, v] of Object.entries(devices))
+                    dev[n] = { rx: Number(v.rx), tx: Number(v.tx) }
+            const p = prev.current
+            if (p) {
+                const ms = now - p.t
+                const chs: Record<string, { up: string | null; down: string | null }> = {}
+                for (const [n, v] of Object.entries(ch))
+                    chs[n] = {
+                        up: p.ch[n] ? rate(v.up - p.ch[n].up, ms) : null,
+                        down: p.ch[n] ? rate(v.down - p.ch[n].down, ms) : null,
+                    }
+                const devs2: Record<string, { rx: string | null; tx: string | null }> = {}
+                for (const [n, v] of Object.entries(dev))
+                    devs2[n] = {
+                        rx: p.dev[n] ? rate(v.rx - p.dev[n].rx, ms) : null,
+                        tx: p.dev[n] ? rate(v.tx - p.dev[n].tx, ms) : null,
+                    }
+                setSpeed({ ch: chs, dev: devs2 })
+            }
+            prev.current = { t: now, ch, dev }
         }
-        load()
-        const id = setInterval(load, 5000)
-        return () => clearInterval(id)
+        void load()
+        const id = setInterval(() => void load(), 5000)
+        return () => { stop = true; clearInterval(id) }
     }, [])
 
     async function explain() {
@@ -77,8 +147,81 @@ export default function StatusPage() {
 
     const outputs = Object.entries(status.outputs || {})
 
+    /* Плохое — наверх: если что-то сломано, человек пришёл именно за этим. Исправное
+     * сворачивается, потому что «двенадцать зелёных галочек» прячут одну красную. */
+    const bad = (diag?.checks || []).filter((c) => c.verdict !== 'ok')
+    const good = (diag?.checks || []).filter((c) => c.verdict === 'ok')
+
     return (
         <div className="space-y-4">
+            {(diag || diagOld) && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            {diagOld ? (
+                                <>Проверка состояния недоступна</>
+                            ) : diag!.fail ? (
+                                <><XCircle className="h-4 w-4 text-sp-destructive" aria-hidden="true" />
+                                Есть поломки: {diag!.fail}</>
+                            ) : diag!.warn ? (
+                                <><TriangleAlert className="h-4 w-4 text-sp-warning" aria-hidden="true" />
+                                Работает, но есть о чём знать: {diag!.warn}</>
+                            ) : (
+                                <><Check className="h-4 w-4 text-sp-success" aria-hidden="true" />
+                                Всё в порядке</>
+                            )}
+                        </CardTitle>
+                        <CardDescription>
+                            {diagOld
+                                ? 'Движок этой версии не умеет проверки состояния — обновите steer.'
+                                : 'Движок спрашивает ядро и живые процессы, а не свою же настройку: ' +
+                                  'совпадение с настройкой ничего не доказывает.'}
+                        </CardDescription>
+                    </CardHeader>
+                    {!diagOld && (
+                        <CardContent className="space-y-2">
+                            {bad.map((c, i) => (
+                                <div key={`${c.id}-${i}`} className="flex gap-2 text-sm">
+                                    {c.verdict === 'fail' ? (
+                                        <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-sp-destructive" aria-hidden="true" />
+                                    ) : (
+                                        <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-sp-warning" aria-hidden="true" />
+                                    )}
+                                    <div>
+                                        <div>{c.what}</div>
+                                        {c.why && (
+                                            <div className="text-xs text-sp-muted-foreground">{c.why}</div>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                            {good.length > 0 && (
+                                <div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowOk((v) => !v)}
+                                        className="text-xs text-sp-muted-foreground underline"
+                                    >
+                                        {showOk
+                                            ? 'скрыть исправное'
+                                            : `исправно: ${good.length} — показать`}
+                                    </button>
+                                    {showOk && (
+                                        <div className="mt-2 space-y-1">
+                                            {good.map((c, i) => (
+                                                <div key={`${c.id}-ok-${i}`} className="flex gap-2 text-sm">
+                                                    <Check className="mt-0.5 h-4 w-4 shrink-0 text-sp-success" aria-hidden="true" />
+                                                    <span className="text-sp-muted-foreground">{c.what}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </CardContent>
+                    )}
+                </Card>
+            )}
             {(status.warnings?.length ?? 0) > 0 && (
                 <Card>
                     <CardHeader>
@@ -216,6 +359,16 @@ export default function StatusPage() {
                                     ↓ {human(Number(devs[o.device].rx))} · ↑ {human(Number(devs[o.device].tx))}
                                 </span>
                             )}
+                            {/* Скорость прямо сейчас — то, за чем и смотрят на счётчики.
+                                Появляется со второго опроса: из одного замера её взять
+                                неоткуда, а показать нуль значило бы соврать. */}
+                            {o.device && (speed.dev[o.device]?.rx || speed.dev[o.device]?.tx) && (
+                                <span className="text-xs text-sp-foreground">
+                                    {speed.dev[o.device].rx && <>↓ {speed.dev[o.device].rx}</>}
+                                    {speed.dev[o.device].rx && speed.dev[o.device].tx && ' · '}
+                                    {speed.dev[o.device].tx && <>↑ {speed.dev[o.device].tx}</>}
+                                </span>
+                            )}
                             {/* Для vless устройство создаёт САМ процесс туннеля, поэтому
                                 «устройства нет» и «процесс мёртв» — одно и то же событие,
                                 а вот причина видна только у procd. Показываем её здесь,
@@ -281,8 +434,10 @@ export default function StatusPage() {
                         <b>↑</b> — правило, ставящее метку: путь из локальной сети наружу. <b>↓</b> — встречная
                         цепочка, считающая ответные пакеты. Поэтому нормально видеть вверху мегабайты там, где
                         внизу гигабайты: 60–80 байт на пакет вверх означает, что это подтверждения и запросы.
-                        Точное число байт — в подсказке к значению. Прочерк вместо <b>↓</b> значит, что движок
-                        старее встречной цепочки: нуль там был бы неправдой.
+                        Точное число байт и пакетов — в подсказке к значению. Прочерк вместо <b>↓</b> значит,
+                        что движок старее встречной цепочки: нуль там был бы неправдой. Объёмы считаются с
+                        загрузки роутера и <b>переживают применение настройки</b> — раньше их обнуляло любое
+                        обновление списков, то есть каждую ночь.
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -291,12 +446,15 @@ export default function StatusPage() {
                             <tr className="text-left text-xs text-sp-muted-foreground">
                                 <th className="pb-2">Канал</th>
                                 <th className="pb-2">Выход</th>
-                                <th className="pb-2 text-right">Пакетов</th>
                                 {/* Стрелками, а не «Байт»: счётчики стоят на двух разных
                                     путях, и одно имя на оба звало их сравнивать, чего
-                                    делать нельзя. */}
+                                    делать нельзя. Отдельного столбца «Пакетов» больше нет:
+                                    он показывал пакеты ТОЛЬКО наружу, стоя рядом с двумя
+                                    столбцами объёма, и читался как общий. Теперь пакеты в
+                                    подсказке того направления, к которому относятся. */}
                                 <th className="pb-2 text-right">↑ наружу</th>
                                 <th className="pb-2 text-right">↓ внутрь</th>
+                                <th className="pb-2 text-right">сейчас</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -311,12 +469,9 @@ export default function StatusPage() {
                                         )}
                                     </td>
                                     <td className="py-1.5 text-sp-muted-foreground">{c.out}</td>
-                                    <td className="py-1.5 text-right">
-                                        {(c.packets ?? 0).toLocaleString('ru-RU')}
-                                    </td>
                                     <td
                                         className="py-1.5 text-right"
-                                        title={`${(c.bytes ?? 0).toLocaleString('ru-RU')} Б`}
+                                        title={`${(c.bytes ?? 0).toLocaleString('ru-RU')} Б, пакетов ${(c.packets ?? 0).toLocaleString('ru-RU')}`}
                                     >
                                         {human(c.bytes ?? 0)}
                                     </td>
@@ -328,10 +483,24 @@ export default function StatusPage() {
                                         title={
                                             c.down_bytes === undefined
                                                 ? 'движок не считает встречный путь'
-                                                : `${c.down_bytes.toLocaleString('ru-RU')} Б`
+                                                : `${c.down_bytes.toLocaleString('ru-RU')} Б, пакетов ${(c.down_packets ?? 0).toLocaleString('ru-RU')}`
                                         }
                                     >
                                         {c.down_bytes === undefined ? '—' : human(c.down_bytes)}
+                                    </td>
+                                    {/* Скорость по каналу. Пусто до второго опроса и когда
+                                        трафика нет: прочерк здесь честнее нуля, которого мы
+                                        не измеряли. */}
+                                    <td className="py-1.5 text-right whitespace-nowrap">
+                                        {speed.ch[c.name]?.down || speed.ch[c.name]?.up ? (
+                                            <span className="text-xs">
+                                                {speed.ch[c.name].down && <>↓ {speed.ch[c.name].down}</>}
+                                                {speed.ch[c.name].down && speed.ch[c.name].up && <br />}
+                                                {speed.ch[c.name].up && <>↑ {speed.ch[c.name].up}</>}
+                                            </span>
+                                        ) : (
+                                            <span className="text-sp-muted-foreground">—</span>
+                                        )}
                                     </td>
                                 </tr>
                             ))}
