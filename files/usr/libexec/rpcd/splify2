@@ -189,6 +189,7 @@ list)
     json_add_object engine; json_close_object
     json_add_object sub_set; json_add_string url; json_close_object
     json_add_object sub_info; json_close_object
+    json_add_object dev_stats; json_close_object
     json_add_object vless_nodes; json_add_string output; json_close_object
     json_add_object vless_probe
         json_add_string output; json_add_int node
@@ -483,18 +484,39 @@ splify2: туннель $o перезапущен — сменился узел 
         ;;
 
     sub_set)
-        # Скачать подписку. Это дело управляющего слоя: движок читает файл, который ему
-        # положили, и про URL не знает — см. правило про списки в контракте.
+        # Две формы одного и того же: ссылка на подписку и сами ссылки vless://.
+        #
+        # Движок различия не знает вовсе — он читает файл, где по строке на узел, и сам
+        # разбирает base64, если это base64 (см. sub.c). Подписка это ровно такой файл,
+        # который кто-то другой держит на сервере. Значит «вставить одну vless://» — не
+        # новая возможность движка, а отсутствовавшая строчка ЗДЕСЬ: прежний код отвечал
+        # «ссылка должна начинаться с http://», то есть человек с одним сервером от
+        # знакомого не мог сделать вообще ничего.
+        #
+        # Ссылок может быть несколько — по одной на строку или через пробел. Пишем как
+        # есть: разбирать их здесь значило бы держать вторую реализацию разбора vless://
+        # в shell, а у движка она уже есть и она же будет применена.
         read -r input
         json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
         json_get_var url url
         [ -n "$url" ] || fail "не указана ссылка"
-        case "$url" in
-            https://*|http://*) ;;
-            *) fail "ссылка должна начинаться с http:// или https://" ;;
-        esac
         mkdir -p "$(dirname "$SUB")"
-        download "$url" "$SUB" || fail "подписка не скачалась"
+        case "$url" in
+            https://*|http://*)
+                download "$url" "$SUB" || fail "подписка не скачалась"
+                kind=url
+                ;;
+            vless://*)
+                # Пробелы между ссылками превращаем в переводы строк: из однострочного
+                # поля ввода многострочная вставка приезжает склеенной пробелами.
+                printf '%s\n' "$url" | tr ' \t' '\n\n' | grep '^vless://' > "$SUB.tmp" \
+                    || fail "в тексте нет ссылок vless://"
+                [ -s "$SUB.tmp" ] || { rm -f "$SUB.tmp"; fail "в тексте нет ссылок vless://"; }
+                mv "$SUB.tmp" "$SUB"
+                kind=links
+                ;;
+            *) fail "нужна ссылка на подписку (http:// или https://) либо ссылка vless://" ;;
+        esac
         # Новая подписка — новые узлы, значит клиента надо перечитать. Иначе туннель
         # продолжает работать по узлу, которого в подписке может уже не быть.
         : > "$VLESS_DIRTY"
@@ -505,12 +527,17 @@ splify2: туннель $o перезапущен — сменился узел 
         # Файл конфигурации создаётся здесь: пакет его не кладёт, а `uci set` в
         # несуществующий файл молча ничего не делает — ссылка «сохранялась» и пропадала,
         # причём sub_set отвечал ok. Тихая потеря настройки хуже отказа.
+        #
+        # Для vless:// сохраняется ВИД, а не текст: показывать человеку обратно ссылку с
+        # его же ключом незачем, а обновлять её нечем — обновляют подписку, не ссылку.
         [ -f /etc/config/splify2 ] || : > /etc/config/splify2
         uci -q get splify2.main >/dev/null 2>&1 || uci -q set splify2.main=splify2
-        uci -q set splify2.main.sub_url="$url"
+        [ "$kind" = url ] && uci -q set splify2.main.sub_url="$url" || uci -q delete splify2.main.sub_url
+        uci -q set splify2.main.sub_kind="$kind"
         uci -q commit splify2
         json_init
         json_add_boolean ok 1
+        json_add_string kind "$kind"
         json_add_string path "$SUB"
         json_add_int bytes "$(wc -c < "$SUB" 2>/dev/null || echo 0)"
         json_dump
@@ -519,6 +546,12 @@ splify2: туннель $o перезапущен — сменился узел 
     sub_info)
         json_init
         json_add_string url "$(uci -q get splify2.main.sub_url)"
+        # Вид источника: url — подписка, которую можно обновить; links — вставленные
+        # руками ссылки, обновлять которые нечем. Интерфейсу это нужно, чтобы не
+        # предлагать «Обновить» там, где обновление ничего не значит.
+        kind="$(uci -q get splify2.main.sub_kind)"
+        [ -n "$kind" ] || { [ -n "$(uci -q get splify2.main.sub_url)" ] && kind=url || kind=none; }
+        json_add_string kind "$kind"
         json_add_string path "$SUB"
         if [ -s "$SUB" ]; then
             json_add_boolean present 1
@@ -527,6 +560,34 @@ splify2: туннель $o перезапущен — сменился узел 
         else
             json_add_boolean present 0
         fi
+        json_dump
+        ;;
+
+    dev_stats)
+        # Счётчики САМИХ устройств, а не правил.
+        #
+        # Понадобилось потому, что счётчик канала в nft отвечает не на тот вопрос, который
+        # человек задаёт. Он стоит на правиле, ставящем метку, а метка ставится на пути
+        # «из локальной сети наружу»: обратный поток приходит с туннельного устройства и
+        # под `ip saddr <локальная сеть>` не подпадает. На живом роутере это выглядело как
+        # 4,3 МБ при скачанных 223 МБ — то есть 61 байт на пакет, одни подтверждения.
+        #
+        # rx у туннельного устройства — это то, что движок ОТДАЛ клиентам, то есть
+        # скачанное; tx — то, что он у них забрал. Для wireguard и amneziawg смысл тот же,
+        # считает ядро.
+        json_init
+        json_add_object devices
+        for d in /sys/class/net/*/statistics; do
+            n="${d%/statistics}"; n="${n##*/}"
+            [ "$n" = lo ] && continue
+            json_add_object "$n"
+            json_add_string rx "$(cat "$d/rx_bytes" 2>/dev/null || echo 0)"
+            json_add_string tx "$(cat "$d/tx_bytes" 2>/dev/null || echo 0)"
+            json_add_string rx_packets "$(cat "$d/rx_packets" 2>/dev/null || echo 0)"
+            json_add_string tx_packets "$(cat "$d/tx_packets" 2>/dev/null || echo 0)"
+            json_close_object
+        done
+        json_close_object
         json_dump
         ;;
 

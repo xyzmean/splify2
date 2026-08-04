@@ -104,10 +104,31 @@ export const rpc = {
         ['version', 'extended'],
     ),
 
-    /** Подписка: где лежит, откуда взята, когда обновлялась. */
-    subInfo: declare<{ url?: string; path: string; present: boolean; bytes?: number; mtime?: number }>('sub_info'),
-    /** Скачать подписку по ссылке. Загрузка — дело управляющего слоя, движок читает файл. */
-    subSet: declare<{ ok: boolean; error?: string; bytes?: number }>('sub_set', ['url']),
+    /** Подписка: где лежит, откуда взята, когда обновлялась.
+     *
+     *  kind различает два источника: `url` — подписка, которую есть чем обновить, `links` —
+     *  вставленные руками ссылки vless://, для которых кнопка «Обновить» лишена смысла. */
+    subInfo: declare<{
+        url?: string
+        kind?: 'url' | 'links' | 'none'
+        path: string
+        present: boolean
+        bytes?: number
+        mtime?: number
+    }>('sub_info'),
+    /** Задать источник узлов: ссылка на подписку ЛИБО одна или несколько ссылок vless://.
+     *  Одно поле на оба случая — различает их бэкенд по схеме, а не человек выбором режима. */
+    subSet: declare<{ ok: boolean; error?: string; kind?: string; bytes?: number }>('sub_set', ['url']),
+
+    /** Счётчики устройств из /sys/class/net.
+     *
+     *  Нужны потому, что счётчик канала в nft считает только путь «наружу»: он стоит на
+     *  правиле, ставящем метку, а обратный поток под него не подпадает. У туннельного
+     *  устройства rx — это скачанное, tx — отданное. Числа приходят строками: байты на
+     *  сутках работы не влезают в 32 бита. */
+    devStats: declare<{
+        devices: Record<string, { rx: string; tx: string; rx_packets: string; tx_packets: string }>
+    }>('dev_stats'),
 
     /** Узлы подписки глазами движка, с причинами непригодности. */
     vlessNodes: declare<{

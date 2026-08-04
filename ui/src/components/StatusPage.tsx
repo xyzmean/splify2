@@ -10,18 +10,34 @@ import { type Status } from '@/lib/model'
 // its own opinion of what is live: the engine knows things the UI cannot see, and two
 // answers to "is it working" is one answer too many.
 
+/** Байты человеческим размером. Точность до десятой доли: «223,4 МБ» отвечает на вопрос,
+ *  а «234085837» требует считать разряды глазами. Полное число остаётся в подсказке. */
+function human(n: number) {
+    if (!isFinite(n) || n <= 0) return '0 Б'
+    const u = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ']
+    let i = 0
+    let v = n
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++ }
+    return `${i === 0 ? v : v.toFixed(1).replace('.', ',')} ${u[i]}`
+}
+
 export default function StatusPage() {
     const [status, setStatus] = useState<Status | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [q, setQ] = useState('')
     const [answer, setAnswer] = useState<string | null>(null)
+    /** Счётчики устройств. Отдельным запросом, а не из `status`: тот приходит от движка
+     *  дословно, и дописывать в него своё значило бы иметь два источника одной правды. */
+    const [devs, setDevs] = useState<Record<string, { rx: string; tx: string }> | null>(null)
 
     useEffect(() => {
-        const load = () =>
+        const load = () => {
             rpc
                 .status()
                 .then((s) => { setStatus(s); setError(null) })
                 .catch((e) => setError(String(e instanceof Error ? e.message : e)))
+            rpc.devStats().then((r) => setDevs(r.devices || {})).catch(() => {})
+        }
         load()
         const id = setInterval(load, 5000)
         return () => clearInterval(id)
@@ -180,6 +196,17 @@ export default function StatusPage() {
                             <span className="text-sp-muted-foreground">
                                 {o.kind === 'direct' ? 'напрямую' : o.device || 'нет живого устройства'}
                             </span>
+                            {/* Скачано и отдано — по устройству выхода. Именно эти два числа
+                                человек и ищет, глядя на счётчик: тот, что в таблице каналов
+                                ниже, считает только путь наружу и потому всегда мал. */}
+                            {o.device && devs?.[o.device] && (
+                                <span
+                                    className="text-xs text-sp-muted-foreground"
+                                    title={`вниз ${Number(devs[o.device].rx).toLocaleString('ru-RU')} Б, вверх ${Number(devs[o.device].tx).toLocaleString('ru-RU')} Б`}
+                                >
+                                    ↓ {human(Number(devs[o.device].rx))} · ↑ {human(Number(devs[o.device].tx))}
+                                </span>
+                            )}
                             {o.kind === 'interface' && (
                                 <>
                                     <Badge variant={o.up ? 'default' : 'destructive'}>
@@ -204,8 +231,11 @@ export default function StatusPage() {
                 <CardHeader>
                     <CardTitle>Каналы</CardTitle>
                     <CardDescription>
-                        Счётчик показывает, что правило совпадало, — но не что трафик доехал. Если он растёт,
-                        а сайты молчат, смотрите NAT у выхода.
+                        Счётчик считает <b>только путь наружу</b>: он стоит на правиле, которое ставит метку, а
+                        метка ставится на пути из локальной сети в интернет. Скачанное сюда не попадает — оно
+                        приходит с туннельного устройства. Поэтому здесь нормально видеть мегабайты там, где
+                        скачаны гигабайты: 60–80 байт на пакет означает, что это подтверждения и запросы. Объём
+                        в обе стороны — у выходов выше (↓ и ↑).
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
