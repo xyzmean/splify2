@@ -17,8 +17,10 @@ const DIST = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist')
 // so an unexpected chunk means something is being served without cache-busting.
 const EXPECTED_JS = [
   'splify-index.js', 'splify-x.js',
-  'splify-OutputsPage.js', 'splify-ListsPage.js', 'splify-StatusPage.js',
-  'splify-SetupPage.js',
+  // Вкладки пульта. StatusPage и SetupPage ушли: состояние переехало в закреплённую
+  // колонку, а мастер — в пустые состояния, и отдельного режима больше нет.
+  'splify-RulesTab.js', 'splify-OutputsPage.js', 'splify-ListsPage.js',
+  'splify-LogsTab.js',
 ]
 
 const js = readdirSync(DIST).filter((f) => f.endsWith('.js')).sort()
