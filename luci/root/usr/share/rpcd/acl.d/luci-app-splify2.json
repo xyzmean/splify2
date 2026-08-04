@@ -17,7 +17,12 @@
           "engine",
           "sub_info",
           "vless_nodes",
-          "vless_probe"
+          "vless_probe",
+          "dev_stats",
+          "diag",
+          "engine_state",
+          "ui_get",
+          "steer_versions"
         ]
       }
     },
@@ -32,7 +37,9 @@
           "apply",
           "list_fetch",
           "list_remove",
-          "sub_set"
+          "sub_set",
+          "ui_set",
+          "steer_install"
         ]
       }
     }

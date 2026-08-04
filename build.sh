@@ -13,6 +13,25 @@ RES="$PKG/www/luci-static/resources/splify2"
 command -v docker >/dev/null 2>&1 || { echo "нужен docker (сборка пакета в alpine)"; exit 1; }
 
 echo "splify2 $VERSION"
+
+# Каждый метод rpcd обязан быть в ACL LuCI, иначе он работает из ssh и НЕ работает из
+# браузера. Проверяется здесь, потому что этот сбой не виден ни в одном другом месте:
+# `ubus call splify2 diag` с роутера отвечает, а тот же вызов со страницы получает отказ
+# доступа — и если у вызова есть запасной путь (а у нас у половины есть), страница молча
+# показывает «нет данных». Так уже уехали в релиз dev_stats, ui_get/ui_set, diag,
+# engine_state и установка движка: семь методов, проверенных не на том слое.
+acl=luci/root/usr/share/rpcd/acl.d/luci-app-splify2.json
+missing=''
+for m in $(sed -n '/^list)/,/^    ;;/p' files/usr/libexec/rpcd/splify2 |
+           grep -o 'json_add_object [a-z_]*' | awk '{print $2}'); do
+    grep -q "\"$m\"" "$acl" || missing="$missing $m"
+done
+[ -z "$missing" ] || {
+    echo "методы rpcd не объявлены в ACL ($acl):$missing"
+    echo "из браузера они получат отказ доступа, из ssh будут работать"
+    exit 1
+}
+
 ( cd ui && npm run build >/dev/null 2>&1 ) || { echo "сборка интерфейса провалилась"; exit 1; }
 
 rm -rf "$PKG"
