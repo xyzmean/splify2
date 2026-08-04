@@ -190,6 +190,8 @@ list)
     json_add_object sub_set; json_add_string url; json_close_object
     json_add_object sub_info; json_close_object
     json_add_object dev_stats; json_close_object
+    json_add_object ui_get; json_close_object
+    json_add_object ui_set; json_add_string state; json_close_object
     json_add_object vless_nodes; json_add_string output; json_close_object
     json_add_object vless_probe
         json_add_string output; json_add_int node
@@ -561,6 +563,36 @@ splify2: туннель $o перезапущен — сменился узел 
             json_add_boolean present 0
         fi
         json_dump
+        ;;
+
+    ui_get|ui_set)
+        # Память мастера: какие выходы он создал, как человек их назвал, что в каждом.
+        #
+        # Отдельно от спеки, и это принципиально. Спека — вход движка, и «как человек назвал
+        # outbound» ему не нужно ни для чего; дописать туда своё поле значило бы, что движок
+        # обязан его сохранять при любой правке, то есть управляющий слой протёк в модель.
+        #
+        # А знать это надо, иначе мастер не отличит свои записи от чужих. Прежде он узнавал их
+        # по зашитым именам («сервисы», выход «vpn»), и на живом роутере это провалилось сразу:
+        # там канал назывался funny и выход vless, настроенные руками. Мастер их не увидел и
+        # предложил создать рядом второй туннель — то есть тихо развёл настройку на две.
+        #
+        # Хранится как непрозрачная строка: разбирать её здесь нечем и незачем, а формат
+        # принадлежит интерфейсу и будет меняться вместе с ним.
+        [ -f /etc/config/splify2 ] || : > /etc/config/splify2
+        uci -q get splify2.main >/dev/null 2>&1 || uci -q set splify2.main=splify2
+        if [ "$2" = ui_set ]; then
+            read -r input
+            json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+            json_get_var state state
+            uci -q set splify2.main.wizard="$state"
+            uci -q commit splify2
+            json_init; json_add_boolean ok 1; json_dump
+        else
+            json_init
+            json_add_string state "$(uci -q get splify2.main.wizard)"
+            json_dump
+        fi
         ;;
 
     dev_stats)
