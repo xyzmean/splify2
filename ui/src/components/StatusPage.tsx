@@ -29,6 +29,14 @@ export default function StatusPage() {
     /** Счётчики устройств. Отдельным запросом, а не из `status`: тот приходит от движка
      *  дословно, и дописывать в него своё значило бы иметь два источника одной правды. */
     const [devs, setDevs] = useState<Record<string, { rx: string; tx: string }> | null>(null)
+    /** Состояние экземпляров движка. Нужно, чтобы «выход настроен» и «туннель работает» не
+     *  выглядели одинаково: у vless устройство создаёт сам процесс, и когда он падает,
+     *  видно было только пропавшее устройство, но не причину. */
+    const [engine, setEngine] = useState<{
+        instances: Record<string, { running: boolean; pid: number }>
+        log: string[]
+    } | null>(null)
+    const [showLog, setShowLog] = useState(false)
 
     useEffect(() => {
         const load = () => {
@@ -37,6 +45,7 @@ export default function StatusPage() {
                 .then((s) => { setStatus(s); setError(null) })
                 .catch((e) => setError(String(e instanceof Error ? e.message : e)))
             rpc.devStats().then((r) => setDevs(r.devices || {})).catch(() => {})
+            rpc.engineState().then((r) => setEngine(r)).catch(() => {})
         }
         load()
         const id = setInterval(load, 5000)
@@ -207,6 +216,25 @@ export default function StatusPage() {
                                     ↓ {human(Number(devs[o.device].rx))} · ↑ {human(Number(devs[o.device].tx))}
                                 </span>
                             )}
+                            {/* Для vless устройство создаёт САМ процесс туннеля, поэтому
+                                «устройства нет» и «процесс мёртв» — одно и то же событие,
+                                а вот причина видна только у procd. Показываем её здесь,
+                                чтобы за ней не приходилось идти в logread. */}
+                            {o.kind === 'vless' && engine && (() => {
+                                const inst = engine.instances[`vless_${name}`]
+                                if (!inst) {
+                                    return (
+                                        <Badge variant="destructive">
+                                            движок не запущен
+                                        </Badge>
+                                    )
+                                }
+                                return (
+                                    <Badge variant={inst.running ? 'default' : 'destructive'}>
+                                        {inst.running ? `работает, pid ${inst.pid}` : 'перезапускается'}
+                                    </Badge>
+                                )
+                            })()}
                             {o.kind === 'interface' && (
                                 <>
                                     <Badge variant={o.up ? 'default' : 'destructive'}>
@@ -224,6 +252,25 @@ export default function StatusPage() {
                             )}
                         </div>
                     ))}
+                    {/* Последние слова движка. Свёрнуты: когда всё работает, они не нужны,
+                        а когда туннель падает — это первое, что просят показать. Текст
+                        отдаётся дословно, разбирать его интерфейс не берётся. */}
+                    {engine && engine.log.length > 0 && (
+                        <div className="pt-1">
+                            <button
+                                type="button"
+                                onClick={() => setShowLog((v) => !v)}
+                                className="text-xs text-sp-muted-foreground underline"
+                            >
+                                {showLog ? 'скрыть журнал движка' : 'журнал движка'}
+                            </button>
+                            {showLog && (
+                                <pre className="mt-2 max-h-56 overflow-auto rounded border border-sp-border bg-sp-muted p-2 text-[11px] leading-relaxed whitespace-pre-wrap">
+                                    {engine.log.join('\n')}
+                                </pre>
+                            )}
+                        </div>
+                    )}
                 </CardContent>
             </Card>
 
@@ -235,7 +282,8 @@ export default function StatusPage() {
                         метка ставится на пути из локальной сети в интернет. Скачанное сюда не попадает — оно
                         приходит с туннельного устройства. Поэтому здесь нормально видеть мегабайты там, где
                         скачаны гигабайты: 60–80 байт на пакет означает, что это подтверждения и запросы. Объём
-                        в обе стороны — у выходов выше (↓ и ↑).
+                        в обе стороны — у выходов выше (↓ и ↑). Точное число байт — в подсказке
+                        к значению.
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -245,7 +293,10 @@ export default function StatusPage() {
                                 <th className="pb-2">Канал</th>
                                 <th className="pb-2">Выход</th>
                                 <th className="pb-2 text-right">Пакетов</th>
-                                <th className="pb-2 text-right">Байт</th>
+                                {/* «Вверх», а не «Байт»: счётчик стоит на пути наружу, то
+                                    есть это tx и только он. Названный байтами, он звал
+                                    сравнивать себя со скачанным, чего сравнивать нельзя. */}
+                                <th className="pb-2 text-right">Вверх</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -263,8 +314,11 @@ export default function StatusPage() {
                                     <td className="py-1.5 text-right">
                                         {(c.packets ?? 0).toLocaleString('ru-RU')}
                                     </td>
-                                    <td className="py-1.5 text-right">
-                                        {(c.bytes ?? 0).toLocaleString('ru-RU')}
+                                    <td
+                                        className="py-1.5 text-right"
+                                        title={`${(c.bytes ?? 0).toLocaleString('ru-RU')} Б`}
+                                    >
+                                        {human(c.bytes ?? 0)}
                                     </td>
                                 </tr>
                             ))}

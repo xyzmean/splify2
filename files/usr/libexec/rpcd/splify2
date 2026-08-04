@@ -190,6 +190,7 @@ list)
     json_add_object sub_set; json_add_string url; json_close_object
     json_add_object sub_info; json_close_object
     json_add_object dev_stats; json_close_object
+    json_add_object engine_state; json_close_object
     json_add_object ui_get; json_close_object
     json_add_object ui_set; json_add_string state; json_close_object
     json_add_object vless_nodes; json_add_string output; json_close_object
@@ -620,6 +621,63 @@ splify2: туннель $o перезапущен — сменился узел 
             json_close_object
         done
         json_close_object
+        json_dump
+        ;;
+
+    engine_state)
+        # Состояние экземпляров движка и его последние слова.
+        #
+        # Понадобилось из-за того, что «выход настроен» и «туннель несёт трафик» — разные
+        # вещи, а до сих пор интерфейс различал их только по наличию устройства. Устройство
+        # у vless создаёт сам процесс туннеля, поэтому мёртвый туннель виден как пропавшее
+        # устройство — но НЕ видно, почему он умер, и человеку оставалось лезть в logread.
+        #
+        # Движок теперь завершается с ненулевым кодом, когда туннель перестал нести трафик
+        # (раньше в этом случае возвращался ноль, и procd с интерфейсом считали, что всё
+        # прошло успешно). Значит procd знает про отказ, и это знание можно показать.
+        #
+        # Текст сообщений движка здесь НЕ разбирается, и это осознанно: их формулировки
+        # меняются вместе с движком, а разбор на стороне интерфейса означал бы, что каждая
+        # правка сообщения тихо ломает показ. Отдаём последние строки дословно — человек
+        # прочитает их сам, а согласовывать нечего.
+        # Собираем ДО json_init своего ответа: json_load затирает разбираемый документ,
+        # и смешивать чужой разбор со своей сборкой в одном наборе нельзя.
+        names=''
+        state="$(ubus call service list '{"name":"steer","verbose":true}' 2>/dev/null)"
+        if [ -n "$state" ] && json_load "$state" 2>/dev/null &&
+           json_select steer 2>/dev/null && json_select instances 2>/dev/null; then
+            json_get_keys inames
+            for nm in $inames; do
+                json_select "$nm" 2>/dev/null || continue
+                json_get_var r running
+                json_get_var p pid
+                # Имя экземпляра — vless_<выход>, а выход проверен движком при apply:
+                # пробелов и кавычек в нём быть не может, поэтому список через пробел.
+                names="$names $nm:${r:-0}:${p:-0}"
+                json_select ..
+            done
+        fi
+        # Последние слова движка. Дословно и без разбора — см. пояснение выше.
+        lines="$(logread -l 300 2>/dev/null | grep 'steer' | tail -12)"
+
+        json_init
+        json_add_object instances
+        for e in $names; do
+            nm="${e%%:*}"; rest="${e#*:}"
+            json_add_object "$nm"
+            json_add_boolean running "${rest%%:*}"
+            json_add_int pid "${rest##*:}"
+            json_close_object
+        done
+        json_close_object
+        json_add_array log
+        # Перебор построчно: в строках журнала есть пробелы, кавычки и что угодно ещё,
+        # поэтому только IFS-разделение по переводу строки, а экранирование — на json_add_string.
+        OIFS="$IFS"; IFS='
+'
+        for l in $lines; do json_add_string "" "$l"; done
+        IFS="$OIFS"
+        json_close_array
         json_dump
         ;;
 
