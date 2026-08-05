@@ -75,7 +75,17 @@ function whoText(ch: Channel) {
     return `${ch.from.length} адресов и подсетей`
 }
 
-export default function RulesTab({ live }: { live: Live }) {
+interface Props {
+    live: Live
+    /** Запись каталога, которую попросили «в правило» с другой вкладки. */
+    wanted?: ListEntry | null
+    onWantedUsed?: () => void
+    /** Уйти туда, где заводят outbound. Правилу некуда вести, пока его нет, и оставлять
+     *  человека с советом «заведите» без дороги туда — это тупик в один щелчок. */
+    onGoOutbounds?: () => void
+}
+
+export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: Props) {
     const [spec, setSpec] = useState<Spec | null>(null)
     const [lists, setLists] = useState<ListEntry[]>([])
     const [local, setLocal] = useState<Record<string, { count: number; mtime: number }>>({})
@@ -95,6 +105,37 @@ export default function RulesTab({ live }: { live: Live }) {
         setSpec(next)
         setDirty(true)
     }
+
+    /** Просьба из каталога: завести правило с этой записью и открыть его.
+     *
+     *  Ждём загрузки спеки — иначе новое правило легло бы в пустую и затёрло настоящую. И
+     *  сбрасываем просьбу сразу: иначе повторный заход на вкладку снова открывал бы редактор,
+     *  которого человек уже не просил. */
+    useEffect(() => {
+        if (!wanted || !spec) return
+        onWantedUsed?.()
+        const out = Object.keys(spec.outputs)[0]
+        if (!out) {
+            notify('Сначала заведите outbound — правилу некуда вести', 'warning')
+            return
+        }
+        const used = new Set(spec.channels.map((c) => c.name))
+        let name = wanted.name
+        let n = 2
+        while (used.has(name)) name = `${wanted.name} ${n++}`
+        const key = wanted.kind === 'domains' ? 'domains_files' : 'prefixes_files'
+        const ch: Channel = {
+            name,
+            out,
+            match: {
+                [key]: [pathFor(wanted)],
+                ...(wanted.kind === 'domains' ? { mode: 'fakeip' as const } : {}),
+            },
+        }
+        edit({ ...spec, channels: [...spec.channels, ch] })
+        setOpen(spec.channels.length)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [wanted, spec])
 
     function move(i: number, delta: number) {
         if (!spec) return
@@ -343,6 +384,18 @@ export default function RulesTab({ live }: { live: Live }) {
                                         Правило говорит движку: этот сервис или категорию — вот этим
                                         устройствам — через такой outbound.
                                     </div>
+                                    {Object.keys(outputs).length === 0 && (
+                                        <div className="mt-2 text-xs">
+                                            Сначала нужен outbound — вести пока некуда.{' '}
+                                            <button
+                                                type="button"
+                                                onClick={onGoOutbounds}
+                                                className="text-sp-primary underline decoration-dotted"
+                                            >
+                                                Завести outbound
+                                            </button>
+                                        </div>
+                                    )}
                                 </td>
                             </tr>
                         )}

@@ -32,8 +32,20 @@ export interface EngineState {
     log: string[]
 }
 
+export interface Build {
+    present: boolean
+    vless: boolean
+    arch?: string
+    version?: string
+}
+
 export interface Live {
     status: Status | null
+    /** Что установлено: версия, вариант, архитектура. Спрашивается ОДИН раз, а не по кругу:
+     *  ответ добывается запуском движка, и делать это каждые пять секунд на роутере с 64 МБ
+     *  значит платить процессом за неменяющееся число. Перечитывается по refresh() — то есть
+     *  после установки, когда оно и меняется. */
+    build: Build | null
     /** Ошибка движка. Отдельно от `status === null`, потому что «ещё не пришло» и «не
      *  отвечает» требуют разного: первое — подождать, второе — показать причину. */
     error: string | null
@@ -85,6 +97,7 @@ export function useLive(): Live {
     const [devs, setDevs] = useState<Record<string, { rx: string; tx: string }> | null>(null)
     const [engine, setEngine] = useState<EngineState | null>(null)
     const [speed, setSpeed] = useState<Live['speed']>({ ch: {}, dev: {} })
+    const [build, setBuild] = useState<Build | null>(null)
     const prev = useRef<{
         t: number
         ch: Record<string, { up: number; down: number }>
@@ -143,8 +156,18 @@ export function useLive(): Live {
         return () => { stop = true; clearInterval(id) }
     }, [nonce])
 
+    /* Отдельным эффектом: этот ответ добывается запуском движка, и в общем круге он стоил бы
+     * процесса каждые пять секунд. */
+    useEffect(() => {
+        let stop = false
+        rpc.engine()
+            .then((b) => { if (!stop) setBuild(b) })
+            .catch(() => { if (!stop) setBuild(null) })
+        return () => { stop = true }
+    }, [nonce])
+
     return {
-        status, error, diag, diagOld, devs, engine, speed,
+        status, error, diag, diagOld, devs, engine, speed, build,
         refresh: () => setNonce((n) => n + 1),
     }
 }

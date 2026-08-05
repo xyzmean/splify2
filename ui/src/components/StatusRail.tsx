@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { AlertTriangle, Activity, Cpu, RotateCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
@@ -34,12 +34,10 @@ const DOT: Record<string, string> = {
 }
 
 export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: () => void }) {
-    const [eng, setEng] = useState<{ present: boolean; vless: boolean; arch?: string; version?: string } | null>(null)
     const [busy, setBusy] = useState(false)
-
-    useEffect(() => {
-        rpc.engine().then(setEng).catch(() => setEng(null))
-    }, [])
+    /* Сведения о сборке — из общего опроса: свой запрос здесь запускал бы движок ещё раз, и на
+     * роутере с 64 МБ это процесс ради неменяющегося числа. */
+    const eng = live.build
 
     const v = verdict(live)
     const outputs = Object.entries(live.status?.outputs || {})

@@ -1,6 +1,8 @@
 import { lazy, Suspense, useState } from 'react'
 import { useLive } from '@/lib/live'
+import { type ListEntry } from '@/lib/model'
 import StatusRail from '@/components/StatusRail'
+import FirstRun from '@/components/FirstRun'
 
 /** Пульт: один экран вместо пары «мастер / эксперт».
  *
@@ -16,8 +18,8 @@ import StatusRail from '@/components/StatusRail'
  *  показывали бы два разных мгновения, и оба были бы правдой. */
 
 const RulesTab = lazy(() => import('@/components/tabs/RulesTab'))
-const OutboundsTab = lazy(() => import('@/components/OutputsPage'))
-const CatalogTab = lazy(() => import('@/components/ListsPage'))
+const OutboundsTab = lazy(() => import('@/components/tabs/OutboundsTab'))
+const CatalogTab = lazy(() => import('@/components/tabs/CatalogTab'))
 const LogsTab = lazy(() => import('@/components/tabs/LogsTab'))
 
 type TabId = 'rules' | 'outbounds' | 'catalog' | 'logs'
@@ -37,6 +39,19 @@ const FALLBACK = <div className="p-5 text-sm text-sp-muted-foreground">Загр�
 export default function Console() {
     const [tab, setTab] = useState<TabId>('rules')
     const live = useLive()
+    /** Запись каталога, которую попросили «в правило». Живёт здесь, а не в каталоге, потому что
+     *  переход между вкладками — дело оболочки; каталог только просит. Считывается вкладкой
+     *  правил один раз и сбрасывается: иначе повторный заход на вкладку снова открывал бы
+     *  редактор, которого человек уже не просил. */
+    const [wanted, setWanted] = useState<ListEntry | null>(null)
+
+    /* Движка нет — показываем установку ВМЕСТО вкладок. Не «рядом»: без движка ни одна из них
+     * не может подействовать, и открывать их значило бы дать человеку заполнить настройку,
+     * которая откажется применяться на последнем шаге.
+     *
+     * Пока не знаем (build === null) — вкладки, а не установку: угадав неверно, мы покажем
+     * «движка нет» тому, у кого он работает, и это худшая из двух ошибок. */
+    if (live.build && !live.build.present) return <FirstRun live={live} />
 
     return (
         <div className="sp-root text-sp-foreground">
@@ -67,9 +82,23 @@ export default function Console() {
                     </nav>
 
                     <Suspense fallback={FALLBACK}>
-                        {tab === 'rules' && <RulesTab live={live} />}
-                        {tab === 'outbounds' && <OutboundsTab />}
-                        {tab === 'catalog' && <CatalogTab />}
+                        {tab === 'rules' && (
+                            <RulesTab
+                                live={live}
+                                wanted={wanted}
+                                onWantedUsed={() => setWanted(null)}
+                                onGoOutbounds={() => setTab('outbounds')}
+                            />
+                        )}
+                        {tab === 'outbounds' && <OutboundsTab live={live} />}
+                        {tab === 'catalog' && (
+                            <CatalogTab
+                                onUseInRule={(l) => {
+                                    setWanted(l)
+                                    setTab('rules')
+                                }}
+                            />
+                        )}
                         {tab === 'logs' && <LogsTab live={live} />}
                     </Suspense>
 

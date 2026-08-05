@@ -5,8 +5,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
-import { EMPTY_SPEC, ON_FAIL_TEXT, type OnFail, type Output, type Spec, type Status } from '@/lib/model'
-import VlessPanel from './VlessPanel'
+import { EMPTY_SPEC, ON_FAIL_TEXT, type OnFail, type Output, type Spec } from '@/lib/model'
+import { type Live } from '@/lib/live'
+import VlessPanel from '@/components/VlessPanel'
 
 // Outputs are named, and channels point at the NAME. That indirection is what lets
 // several tunnels coexist: failover re-points an output's device without touching a
@@ -18,9 +19,12 @@ import VlessPanel from './VlessPanel'
 
 const NAME_RE = /^[A-Za-z0-9_-]{1,24}$/
 
-export default function OutputsPage() {
+/** Состояние берётся из ОБЩЕГО опроса, а не запрашивается здесь.
+ *
+ *  Свой запрос давал второе мгновение на одном экране: закреплённая колонка говорила «поднят», а
+ *  строка рядом — «выключен», и оба были правдой, снятой в разные секунды. */
+export default function OutboundsTab({ live }: { live: Live }) {
     const [spec, setSpec] = useState<Spec | null>(null)
-    const [status, setStatus] = useState<Status | null>(null)
     const [devices, setDevices] = useState<{ name: string; up: boolean; kind: string }[]>([])
     const [dirty, setDirty] = useState(false)
     const [busy, setBusy] = useState(false)
@@ -39,7 +43,6 @@ export default function OutputsPage() {
         rpc.specGet()
             .then((s) => { setSpec(s); setSaved(new Set(Object.keys(s.outputs || {}))) })
             .catch(() => setSpec(EMPTY_SPEC))
-        rpc.status().then(setStatus).catch(() => setStatus(null))
         rpc.devices().then((d) => setDevices(d.devices || [])).catch(() => setDevices([]))
         rpc.engine().then((e) => setHasVless(!!e.vless)).catch(() => setHasVless(null))
     }, [])
@@ -164,7 +167,7 @@ export default function OutputsPage() {
              * узлы. До сохранения он о выходе не слышал, и вопрос был бы бессмысленным. */
             setSaved(new Set(Object.keys(spec.outputs)))
             notify(ap.output?.trim() || 'Применено', ap.ok ? 'info' : 'error')
-            rpc.status().then(setStatus).catch(() => {})
+            live.refresh()
         } catch (e) {
             notify(String(e instanceof Error ? e.message : e), 'error')
         } finally {
@@ -229,7 +232,7 @@ export default function OutputsPage() {
 
                     {names.map((name) => {
                         const o = spec.outputs[name]
-                        const s = status?.outputs?.[name]
+                        const s = live.status?.outputs?.[name]
                         const usedBy = spec.channels.filter((c) => c.out === name).map((c) => c.name)
                         return (
                             <div key={name} className="space-y-2 rounded-md border border-sp-border bg-sp-card p-3">

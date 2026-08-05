@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Check, Search, TriangleAlert, XCircle } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -16,12 +16,7 @@ export default function LogsTab({ live }: { live: Live }) {
     const [q, setQ] = useState('')
     const [answer, setAnswer] = useState<string | null>(null)
     const [asking, setAsking] = useState(false)
-    const [eng, setEng] = useState<{ present: boolean; vless: boolean; arch?: string; version?: string } | null>(null)
     const [showOk, setShowOk] = useState(false)
-
-    useEffect(() => {
-        rpc.engine().then(setEng).catch(() => setEng(null))
-    }, [])
 
     async function ask() {
         const address = q.trim()
@@ -227,7 +222,7 @@ export default function LogsTab({ live }: { live: Live }) {
                 </CardContent>
             </Card>
 
-            <EngineCard engine={eng} onInstalled={() => { rpc.engine().then(setEng).catch(() => {}); live.refresh() }} />
+            <EngineCard engine={live.build} onInstalled={live.refresh} />
         </div>
     )
 }

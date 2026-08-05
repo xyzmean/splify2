@@ -19,7 +19,7 @@ const EXPECTED_JS = [
   'splify-index.js', 'splify-x.js',
   // Вкладки пульта. StatusPage и SetupPage ушли: состояние переехало в закреплённую
   // колонку, а мастер — в пустые состояния, и отдельного режима больше нет.
-  'splify-RulesTab.js', 'splify-OutputsPage.js', 'splify-ListsPage.js',
+  'splify-RulesTab.js', 'splify-OutboundsTab.js', 'splify-CatalogTab.js',
   'splify-LogsTab.js',
 ]
 
