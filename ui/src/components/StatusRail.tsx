@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Activity, Cpu, RotateCw } from 'lucide-react'
+import { AlertTriangle, Activity, Check, Cpu } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
@@ -40,10 +40,10 @@ function uptimeText(sec: number) {
 }
 
 const DOT: Record<string, string> = {
-    good: 'bg-sp-success',
-    warn: 'bg-sp-warning',
-    bad: 'bg-sp-destructive',
-    idle: 'bg-sp-muted-foreground',
+    good: 'bg-success',
+    warn: 'bg-warning',
+    bad: 'bg-destructive',
+    idle: 'bg-muted-foreground',
 }
 
 export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: () => void }) {
@@ -70,12 +70,22 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
 
     async function probeAll() {
         setPinging(true)
+        let failed: string | null = null
         try {
             for (const [name, o] of outputs) {
                 if (o.kind === 'direct') continue
-                const r = await rpc.outboundProbe(name).catch(() => null)
-                if (r) setPings((p) => ({ ...p, [name]: { ms: r.ms, state: r.state } }))
+                try {
+                    const r = await rpc.outboundProbe(name)
+                    setPings((p) => ({ ...p, [name]: { ms: r.ms, state: r.state } }))
+                } catch (e) {
+                    /* Отказ метода — не то же, что «узел не ответил», и путать их нельзя:
+                     * первое чинится обновлением splify2, второе — сменой узла. Прежде оба
+                     * молчали одинаково, и кнопка выглядела неработающей. */
+                    failed = String(e instanceof Error ? e.message : e)
+                    setPings((p) => ({ ...p, [name]: { ms: -1, state: 'не спросить' } }))
+                }
             }
+            if (failed) notify(`Проверка недоступна: ${failed}`, 'error')
         } finally {
             setPinging(false)
         }
@@ -103,16 +113,16 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
 
     return (
         <aside className="space-y-3">
-            <div className="rounded-md border border-sp-border bg-sp-card p-4 shadow-card">
+            <div className="rounded-md border border-border bg-card p-4 shadow-card">
                 <div className="flex items-center gap-2">
                     <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${DOT[v.tone]}`} aria-hidden="true" />
                     <h2 className="text-lg font-semibold">{v.text}</h2>
                 </div>
-                {v.why && <p className="mt-1 text-xs text-sp-muted-foreground">{v.why}</p>}
+                {v.why && <p className="mt-1 text-xs text-muted-foreground">{v.why}</p>}
                 {/* Время работы — движка, а не роутера: применение настройки туннель не
                     перезапускает, и человек спрашивает именно про процесс. */}
                 {live.net && uptimeText(live.net.uptime) && (
-                    <p className="mt-1 text-xs text-sp-muted-foreground">
+                    <p className="mt-1 text-xs text-muted-foreground">
                         время работы {uptimeText(live.net.uptime)}
                         {live.net.active_clients > 0 && (
                             <> · устройств в сети {live.net.active_clients}</>
@@ -121,13 +131,13 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                 )}
 
                 {eng && (
-                    <div className="mt-3 flex items-start gap-2 rounded-md border border-sp-border p-2">
-                        <Cpu className="mt-0.5 h-4 w-4 shrink-0 text-sp-primary" aria-hidden="true" />
+                    <div className="mt-3 flex items-start gap-2 rounded-md border border-border p-2">
+                        <Cpu className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
                         <div className="min-w-0 flex-1">
                             {eng.present ? (
                                 <>
                                     <div className="truncate text-sm">
-                                        <span className="text-sp-primary">steer {eng.version || '—'}</span>
+                                        <span className="text-primary">steer {eng.version || '—'}</span>
                                         {' · '}
                                         {eng.vless ? 'extended' : 'basic'}
                                     </div>
@@ -135,14 +145,14 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                                         Сами имена вариантов сборки не переводим: они стоят в
                                         названии пакета, и перевод развёл бы их с тем, что человек
                                         ищет в apk. */}
-                                    <div className="truncate font-mono text-xs text-sp-muted-foreground">
+                                    <div className="truncate font-mono text-xs text-muted-foreground">
                                         {eng.arch || 'архитектура неизвестна'}
                                     </div>
                                 </>
                             ) : (
                                 <div className="text-sm">
                                     Движок не установлен
-                                    <div className="text-xs text-sp-muted-foreground">
+                                    <div className="text-xs text-muted-foreground">
                                         без него интерфейс ничего не может применить
                                     </div>
                                 </div>
@@ -151,7 +161,7 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                         <button
                             type="button"
                             onClick={onGoDiag}
-                            className="shrink-0 text-xs text-sp-primary underline decoration-dotted"
+                            className="shrink-0 text-xs text-primary underline decoration-dotted"
                         >
                             {eng.present ? 'Обновить' : 'Установить'}
                         </button>
@@ -160,15 +170,15 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
 
                 <dl className="mt-3 space-y-1.5 text-sm">
                     <div className="flex items-baseline justify-between gap-2">
-                        <dt className="text-sp-muted-foreground">Активный outbound</dt>
+                        <dt className="text-muted-foreground">Активный outbound</dt>
                         <dd className="truncate font-medium">{active?.name || '—'}</dd>
                     </div>
                     {active && pings[active.name] && (
                         <div className="flex items-baseline justify-between gap-2">
-                            <dt className="text-sp-muted-foreground">Отклик</dt>
+                            <dt className="text-muted-foreground">Отклик</dt>
                             <dd
                                 className={`font-medium ${
-                                    pings[active.name].ms < 0 ? 'text-sp-destructive' : 'text-sp-success'
+                                    pings[active.name].ms < 0 ? 'text-destructive' : 'text-success'
                                 }`}
                             >
                                 {pings[active.name].ms < 0
@@ -181,7 +191,7 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                         показывать прочерк с обещанием честнее, чем рисовать поле, которое
                         всегда пусто. */}
                     <div className="flex items-baseline justify-between gap-2">
-                        <dt className="text-sp-muted-foreground">Через туннель</dt>
+                        <dt className="text-muted-foreground">Через туннель</dt>
                         <dd className="font-medium">
                             {tunnel ? (
                                 <>
@@ -194,7 +204,7 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                     </div>
                     {tunnelDev && (live.speed.dev[tunnelDev]?.rx || live.speed.dev[tunnelDev]?.tx) && (
                         <div className="flex items-baseline justify-between gap-2">
-                            <dt className="text-sp-muted-foreground">Сейчас</dt>
+                            <dt className="text-muted-foreground">Сейчас</dt>
                             <dd className="font-medium">
                                 {live.speed.dev[tunnelDev].rx && <>↓ {live.speed.dev[tunnelDev].rx}</>}
                                 {live.speed.dev[tunnelDev].rx && live.speed.dev[tunnelDev].tx && ' · '}
@@ -209,16 +219,19 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                         <Activity className="mr-1 h-4 w-4" aria-hidden="true" />
                         {pinging ? 'Проверяем…' : 'Проверить'}
                     </Button>
+                    {/* Галочка, а не круговая стрелка: «Применить» ставит настройку в ядро, а не
+                        перезапускает туннель — соединения при этом не рвутся, и значок
+                        перезапуска обещал бы обратное. */}
                     <Button variant="secondary" className="flex-1" onClick={restart} disabled={busy}>
-                        <RotateCw className="mr-1 h-4 w-4" aria-hidden="true" />
+                        <Check className="mr-1 h-4 w-4" aria-hidden="true" />
                         {busy ? 'Применяем…' : 'Применить'}
                     </Button>
                 </div>
             </div>
 
             {outputs.length > 0 && (
-                <div className="rounded-md border border-sp-border bg-sp-card p-4 shadow-card">
-                    <h3 className="text-xs font-semibold uppercase tracking-wide text-sp-muted-foreground">
+                <div className="rounded-md border border-border bg-card p-4 shadow-card">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                         Outbounds
                     </h3>
                     <ul className="mt-2 space-y-1.5 text-sm">
@@ -227,10 +240,10 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                                 <span
                                     className={`h-2 w-2 shrink-0 rounded-full ${
                                         o.kind === 'direct'
-                                            ? 'bg-sp-muted-foreground'
+                                            ? 'bg-muted-foreground'
                                             : o.up
-                                              ? 'bg-sp-success'
-                                              : 'bg-sp-destructive'
+                                              ? 'bg-success'
+                                              : 'bg-destructive'
                                     }`}
                                     aria-hidden="true"
                                 />
@@ -238,10 +251,10 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                                 <span
                                     className={`shrink-0 text-xs ${
                                         pings[name] && pings[name].ms < 0
-                                            ? 'text-sp-destructive'
+                                            ? 'text-destructive'
                                             : pings[name]
-                                              ? 'text-sp-success'
-                                              : 'text-sp-muted-foreground'
+                                              ? 'text-success'
+                                              : 'text-muted-foreground'
                                     }`}
                                 >
                                     {o.kind === 'direct'
@@ -263,8 +276,8 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
             {/* Предупреждения движка — дословно и с последствием. Это единственное место, где
                 текст приходит от steer как есть: сокращать его нельзя, там названа причина. */}
             {(live.status?.warnings?.length ?? 0) > 0 && (
-                <div className="rounded-md border border-sp-warning/40 bg-sp-warning/10 p-4">
-                    <h3 className="flex items-center gap-2 text-sm font-semibold text-sp-warning">
+                <div className="rounded-md border border-warning/40 bg-warning/10 p-4">
+                    <h3 className="flex items-center gap-2 text-sm font-semibold text-warning">
                         <AlertTriangle className="h-4 w-4" aria-hidden="true" /> Предупреждения steer
                     </h3>
                     <ul className="mt-2 space-y-2 text-xs">

@@ -3,7 +3,7 @@ import { Download, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
-import { toLists, type ListEntry, type Manifest, type Spec } from '@/lib/model'
+import { toCatalog, type Catalog, type ServiceEntry, type Spec } from '@/lib/model'
 
 /** Каталог: что доступно, сколько записей, где используется. ТОЛЬКО справка.
  *
@@ -17,21 +17,21 @@ import { toLists, type ListEntry, type Manifest, type Spec } from '@/lib/model'
  *  Список сам ничего не меняет — он становится работающим, когда на него укажет правило. */
 
 interface Props {
-    /** Открыть редактор правила с этой записью. Переключает вкладку — каталог не умеет
+    /** Открыть редактор правила с этим сервисом. Переключает вкладку — каталог не умеет
      *  назначать сам, и это ровно то разделение, ради которого он переписан. */
-    onUseInRule: (l: ListEntry) => void
+    onUseInRule: (s: ServiceEntry) => void
 }
 
 export default function CatalogTab({ onUseInRule }: Props) {
-    const [manifest, setManifest] = useState<Manifest | null>(null)
+    const [manifest, setManifest] = useState<Catalog | null>(null)
     const [spec, setSpec] = useState<Spec | null>(null)
     const [local, setLocal] = useState<Record<string, { count: number; mtime: number }>>({})
     const [busy, setBusy] = useState<string | null>(null)
     const [q, setQ] = useState('')
-    const [only, setOnly] = useState<'all' | 'domains' | 'prefixes' | 'used'>('all')
+    const [only, setOnly] = useState<'all' | 'used'>('all')
 
     useEffect(() => {
-        rpc.manifest().then((m) => setManifest(toLists(m))).catch(() => setManifest(null))
+        rpc.manifest().then((m) => setManifest(toCatalog(m))).catch(() => setManifest(null))
         rpc.specGet().then(setSpec).catch(() => setSpec(null))
         rpc.localLists().then((d) => setLocal(d.files || {})).catch(() => setLocal({}))
     }, [])
@@ -49,29 +49,30 @@ export default function CatalogTab({ onUseInRule }: Props) {
         return m
     }, [spec])
 
-    async function fetchList(l: ListEntry) {
-        setBusy(l.id)
+    /* Загрузка и удаление — по ВСЕМ частям сервиса. Части качаются по отдельности (у издателя
+     * это разные файлы), но человек попросил сервис, и отчитываться надо о нём. */
+    async function fetchService(sv: ServiceEntry) {
+        setBusy(sv.id)
+        let bad = 0
         try {
-            const r = await rpc.listFetch(l.id, l.kind)
-            if (!r.ok) throw new Error(r.error || 'не удалось загрузить')
-            notify(`${l.name}: загружено ${r.count ?? '—'} записей`)
+            for (const p of sv.parts) {
+                const r = await rpc.listFetch(p.id, p.kind).catch(() => ({ ok: false }) as { ok: boolean })
+                if (!r.ok) bad++
+            }
             setLocal((await rpc.localLists()).files || {})
-        } catch (e) {
-            notify(String(e instanceof Error ? e.message : e), 'error')
+            if (bad) notify(`${sv.name}: не загрузилось частей — ${bad} из ${sv.parts.length}`, 'warning')
+            else notify(`${sv.name}: загружено`)
         } finally {
             setBusy(null)
         }
     }
 
-    async function removeList(l: ListEntry) {
-        setBusy(l.id)
+    async function removeService(sv: ServiceEntry) {
+        setBusy(sv.id)
         try {
-            const r = await rpc.listRemove(l.id, l.kind)
-            if (!r.ok) throw new Error(r.error || 'не удалось удалить')
-            notify(`${l.name}: удалён с роутера`)
+            for (const p of sv.parts) await rpc.listRemove(p.id, p.kind).catch(() => {})
             setLocal((await rpc.localLists()).files || {})
-        } catch (e) {
-            notify(String(e instanceof Error ? e.message : e), 'error')
+            notify(`${sv.name}: удалён с роутера`)
         } finally {
             setBusy(null)
         }
@@ -79,28 +80,34 @@ export default function CatalogTab({ onUseInRule }: Props) {
 
     if (!manifest)
         return (
-            <div className="rounded-md border border-sp-border bg-sp-card p-5 text-sm text-sp-muted-foreground">
+            <div className="rounded-md border border-border bg-card p-5 text-sm text-muted-foreground">
                 Каталог недоступен: манифест не загрузился. Проверьте, есть ли у роутера сеть — записи
                 скачиваются с сервера издателя, а не лежат в пакете.
             </div>
         )
 
-    const shown = manifest.lists.filter((l) => {
-        const rel = l.file.replace(/^\/+/, '')
-        if (only === 'used' && !used.get(rel)) return false
-        if (only === 'domains' && l.kind !== 'domains') return false
-        if (only === 'prefixes' && l.kind !== 'prefixes') return false
+    /** Кем занят сервис — по всем его частям сразу: включённый доменный список и есть
+     *  «сервис используется», даже если адресная часть не тронута. */
+    const rulesFor = (sv: ServiceEntry) => {
+        const names = new Set<string>()
+        for (const p of sv.parts)
+            for (const r of used.get(p.file.replace(/^\/+/, '')) || []) names.add(r)
+        return [...names]
+    }
+
+    const shown = manifest.services.filter((sv) => {
+        if (only === 'used' && rulesFor(sv).length === 0) return false
         const s = q.trim().toLowerCase()
-        return !s || l.name.toLowerCase().includes(s) || l.id.toLowerCase().includes(s)
+        return !s || sv.name.toLowerCase().includes(s) || sv.id.toLowerCase().includes(s)
     })
 
-    const usedCount = manifest.lists.filter((l) => used.get(l.file.replace(/^\/+/, ''))).length
+    const usedCount = manifest.services.filter((sv) => rulesFor(sv).length > 0).length
 
     return (
         <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
-                <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-sp-border bg-sp-card px-2">
-                    <Search className="h-4 w-4 shrink-0 text-sp-muted-foreground" aria-hidden="true" />
+                <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-card px-2">
+                    <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                     <input
                         value={q}
                         onChange={(e) => setQ(e.currentTarget.value)}
@@ -109,10 +116,10 @@ export default function CatalogTab({ onUseInRule }: Props) {
                     />
                 </div>
                 <div className="flex gap-1" role="tablist" aria-label="Что показывать">
+                    {/* Разделения по виду списка здесь больше нет: человек выбирает сервис, а
+                        не «адресами или доменами». Осталось только «что уже задействовано». */}
                     {([
-                        ['all', 'все'],
-                        ['domains', 'сервисы'],
-                        ['prefixes', 'категории'],
+                        ['all', `все · ${manifest.services.length}`],
                         ['used', `используются · ${usedCount}`],
                     ] as const).map(([id, label]) => (
                         <button
@@ -122,10 +129,10 @@ export default function CatalogTab({ onUseInRule }: Props) {
                             onClick={() => setOnly(id)}
                             className={[
                                 'rounded-md px-3 py-1.5 text-sm',
-                                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sp-primary',
+                                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
                                 only === id
-                                    ? 'bg-sp-primary text-sp-primary-foreground'
-                                    : 'text-sp-muted-foreground hover:text-sp-foreground',
+                                    ? 'bg-primary text-primary-foreground'
+                                    : 'text-muted-foreground hover:text-foreground',
                             ].join(' ')}
                         >
                             {label}
@@ -134,10 +141,10 @@ export default function CatalogTab({ onUseInRule }: Props) {
                 </div>
             </div>
 
-            <div className="overflow-x-auto rounded-md border border-sp-border bg-sp-card shadow-card">
+            <div className="overflow-x-auto rounded-md border border-border bg-card shadow-card">
                 <table className="w-full min-w-[38rem] text-sm">
                     <thead>
-                        <tr className="border-b border-sp-border text-left text-xs uppercase tracking-wide text-sp-muted-foreground">
+                        <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
                             <th className="px-3 py-2">Запись</th>
                             <th className="px-3 py-2">Записей</th>
                             <th className="px-3 py-2">Где используется</th>
@@ -145,39 +152,44 @@ export default function CatalogTab({ onUseInRule }: Props) {
                         </tr>
                     </thead>
                     <tbody>
-                        {shown.map((l) => {
-                            const rel = l.file.replace(/^\/+/, '')
-                            const byRules = used.get(rel)
-                            const have = local[rel]
+                        {shown.map((sv) => {
+                            const byRules = rulesFor(sv)
+                            /* «Загружено» считаем по частям: сервис бывает наполовину на роутере,
+                               и сказать про него «загружен» было бы неправдой. */
+                            const have = sv.parts.filter((p) => local[p.file.replace(/^\/+/, '')])
+                            const localCount = have.reduce(
+                                (n, p) => n + (local[p.file.replace(/^\/+/, '')]?.count || 0), 0)
+                            const kinds = [...new Set(sv.parts.map((p) => p.kind))]
                             return (
-                                <tr key={l.id} className="border-b border-sp-border/50 last:border-b-0">
+                                <tr key={sv.id} className="border-b border-border/50 last:border-b-0">
                                     <td className="px-3 py-2">
-                                        <div className="truncate font-medium">{l.name}</div>
-                                        {/* Вторая строка объясняет слово выше: «сервис» — это домены,
-                                            «категория» — адреса, и разница не косметическая. Домены
-                                            наполняет резолвер по мере запросов, адреса читаются из
-                                            файла при компиляции. */}
-                                        <div className="truncate text-xs text-sp-muted-foreground">
-                                            {l.kind === 'domains' ? 'сервис · домены' : 'категория · адреса'}
-                                            {l.source ? ` · ${l.source}` : ''}
-                                            {have ? '' : ' · не загружен на роутер'}
+                                        <div className="truncate font-medium">{sv.name}</div>
+                                        {/* Вторая строка — из чего сервис собран. Вид списка не
+                                            исчез из мира, он перестал быть тем, что ВЫБИРАЮТ:
+                                            домены точнее, адреса работают без DNS. */}
+                                        <div className="truncate text-xs text-muted-foreground">
+                                            {kinds.length === 2
+                                                ? 'домены и адреса'
+                                                : kinds[0] === 'domains'
+                                                  ? 'только домены'
+                                                  : 'только адреса'}
+                                            {sv.parts.length > 1 && ` · частей ${sv.parts.length}`}
+                                            {have.length === 0 && ' · не загружен на роутер'}
+                                            {have.length > 0 && have.length < sv.parts.length &&
+                                                ` · загружено ${have.length} из ${sv.parts.length}`}
                                         </div>
                                     </td>
-                                    <td className="px-3 py-2 whitespace-nowrap text-sp-muted-foreground">
-                                        {have
-                                            ? have.count.toLocaleString('ru-RU')
-                                            : typeof l.count === 'number'
-                                              ? l.count.toLocaleString('ru-RU')
-                                              : '—'}
+                                    <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
+                                        {(localCount || sv.count || 0).toLocaleString('ru-RU')}
                                     </td>
                                     <td className="px-3 py-2">
-                                        {byRules ? (
-                                            <span className="text-sp-primary">{byRules.join(', ')}</span>
+                                        {byRules.length ? (
+                                            <span className="text-primary">{byRules.join(', ')}</span>
                                         ) : (
                                             <button
                                                 type="button"
-                                                onClick={() => onUseInRule(l)}
-                                                className="text-sp-primary underline decoration-dotted"
+                                                onClick={() => onUseInRule(sv)}
+                                                className="text-primary underline decoration-dotted"
                                             >
                                                 В правило
                                             </button>
@@ -188,23 +200,23 @@ export default function CatalogTab({ onUseInRule }: Props) {
                                             <Button
                                                 variant="secondary"
                                                 size="sm"
-                                                disabled={busy === l.id}
-                                                onClick={() => fetchList(l)}
+                                                disabled={busy === sv.id}
+                                                onClick={() => fetchService(sv)}
                                             >
-                                                {have ? (
+                                                {have.length ? (
                                                     <RefreshCw className="mr-1 h-4 w-4" aria-hidden="true" />
                                                 ) : (
                                                     <Download className="mr-1 h-4 w-4" aria-hidden="true" />
                                                 )}
-                                                {busy === l.id ? 'Загрузка…' : have ? 'Обновить' : 'Загрузить'}
+                                                {busy === sv.id ? 'Загрузка…' : have.length ? 'Обновить' : 'Загрузить'}
                                             </Button>
-                                            {have && (
+                                            {have.length > 0 && (
                                                 <Button
                                                     variant="ghost"
                                                     size="icon"
-                                                    aria-label={`Удалить ${l.name} с роутера`}
-                                                    disabled={busy === l.id}
-                                                    onClick={() => removeList(l)}
+                                                    aria-label={`Удалить ${sv.name} с роутера`}
+                                                    disabled={busy === sv.id}
+                                                    onClick={() => removeService(sv)}
                                                 >
                                                     <Trash2 className="h-4 w-4" aria-hidden="true" />
                                                 </Button>
@@ -216,7 +228,7 @@ export default function CatalogTab({ onUseInRule }: Props) {
                         })}
                         {shown.length === 0 && (
                             <tr>
-                                <td colSpan={4} className="px-3 py-8 text-center text-sm text-sp-muted-foreground">
+                                <td colSpan={4} className="px-3 py-8 text-center text-sm text-muted-foreground">
                                     Ничего не нашлось.
                                 </td>
                             </tr>
@@ -225,7 +237,7 @@ export default function CatalogTab({ onUseInRule }: Props) {
                 </table>
             </div>
 
-            <p className="text-xs text-sp-muted-foreground">
+            <p className="text-xs text-muted-foreground">
                 Здесь ничего не назначается: запись становится работающей, когда на неё укажет правило.
                 Манифест версии {manifest.version}. Загрузка и удаление — про то, лежит ли файл на
                 роутере, а не про маршрут.

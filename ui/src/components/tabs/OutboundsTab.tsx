@@ -175,7 +175,7 @@ export default function OutboundsTab({ live }: { live: Live }) {
         }
     }
 
-    if (!spec) return <div className="p-5 text-sm text-sp-muted-foreground">Загрузка…</div>
+    if (!spec) return <div className="p-5 text-sm text-muted-foreground">Загрузка…</div>
 
     const names = Object.keys(spec.outputs)
 
@@ -214,7 +214,7 @@ export default function OutboundsTab({ live }: { live: Live }) {
                     </div>
 
                     {hasVless === false && (
-                        <p className="text-xs text-sp-muted-foreground">
+                        <p className="text-xs text-muted-foreground">
                             Установленный движок без VLESS. Чтобы выходы VLESS стали доступны, нужен
                             пакет <code>steer-extended</code> — он заменяет <code>steer</code> и весит
                             примерно втрое больше.
@@ -222,7 +222,7 @@ export default function OutboundsTab({ live }: { live: Live }) {
                     )}
 
                     {names.length === 0 && (
-                        <p className="py-6 text-center text-sm text-sp-muted-foreground">
+                        <p className="py-6 text-center text-sm text-muted-foreground">
                             Выходов нет. «Туннель» — трафик уходит в уже существующее устройство
                             (wireguard, amneziawg). «VLESS» — движок поднимает своё, по подписке.
                             «Напрямую» — канал забирает адреса себе и оставляет их на обычном пути;
@@ -235,7 +235,7 @@ export default function OutboundsTab({ live }: { live: Live }) {
                         const s = live.status?.outputs?.[name]
                         const usedBy = spec.channels.filter((c) => c.out === name).map((c) => c.name)
                         return (
-                            <div key={name} className="space-y-2 rounded-md border border-sp-border bg-sp-card p-3">
+                            <div key={name} className="space-y-2 rounded-md border border-border bg-card p-3">
                                 <div className="flex flex-wrap items-end gap-3">
                                     <label className="flex flex-col gap-1 text-xs">
                                         Имя
@@ -244,7 +244,7 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                                 value={draft[name] ?? name}
                                                 onChange={(e) => setDraft({ ...draft, [name]: e.currentTarget.value })}
                                                 onKeyDown={(e) => e.key === 'Enter' && rename(name)}
-                                                className="w-32 rounded-md border border-sp-border bg-sp-background px-2 py-1 text-sm"
+                                                className="w-32 rounded-md border border-border bg-background px-2 py-1 text-sm"
                                                 aria-label={`Имя выхода ${name}`}
                                             />
                                             <Button
@@ -268,7 +268,7 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                             <select
                                                 value={o.on_fail || 'drop'}
                                                 onChange={(e) => patch(name, { ...o, on_fail: e.currentTarget.value as OnFail })}
-                                                className="rounded-md border border-sp-border bg-sp-background px-2 py-1 text-sm"
+                                                className="rounded-md border border-border bg-background px-2 py-1 text-sm"
                                             >
                                                 {(Object.keys(ON_FAIL_TEXT) as OnFail[]).map((k) => (
                                                     <option key={k} value={k}>{ON_FAIL_TEXT[k]}</option>
@@ -302,13 +302,13 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                     const list = devList(o)
                                     const free = devices.filter((d) => !list.includes(d.name))
                                     return (
-                                        <div className="rounded-md border border-sp-border p-2">
-                                            <div className="mb-1 text-xs text-sp-muted-foreground">
+                                        <div className="rounded-md border border-border p-2">
+                                            <div className="mb-1 text-xs text-muted-foreground">
                                                 Устройства по приоритету — трафик пойдёт через первое
                                                 работающее, и сам вернётся наверх, когда основное оживёт.
                                             </div>
                                             {list.length === 0 && (
-                                                <p className="py-1 text-xs text-sp-warning">
+                                                <p className="py-1 text-xs text-warning">
                                                     Устройств нет — выход никуда не ведёт.
                                                 </p>
                                             )}
@@ -317,10 +317,10 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                                 const active = s?.device === dev
                                                 return (
                                                     <div key={dev} className="flex items-center gap-2 py-0.5 text-sm">
-                                                        <span className="w-4 text-center text-xs text-sp-muted-foreground">
+                                                        <span className="w-4 text-center text-xs text-muted-foreground">
                                                             {di + 1}
                                                         </span>
-                                                        <span className={active ? 'font-medium text-sp-primary' : ''}>
+                                                        <span className={active ? 'font-medium text-primary' : ''}>
                                                             {dev}
                                                         </span>
                                                         {active && <Badge variant="default">активно</Badge>}
@@ -356,7 +356,7 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                                         const v = e.currentTarget.value
                                                         if (v) setDevs(name, o, [...list, v])
                                                     }}
-                                                    className="mt-1 rounded-md border border-sp-border bg-sp-background px-2 py-1 text-sm"
+                                                    className="mt-1 rounded-md border border-border bg-background px-2 py-1 text-sm"
                                                     aria-label={`Добавить устройство в ${name}`}
                                                 >
                                                     <option value="">+ добавить устройство</option>
@@ -383,13 +383,13 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                                 {s.nat ? 'NAT есть' : 'NAT не найден'}
                                             </Badge>
                                             {s.mark && (
-                                                <span className="text-sp-muted-foreground">
+                                                <span className="text-muted-foreground">
                                                     метка {s.mark}, таблица {s.table}
                                                 </span>
                                             )}
                                         </>
                                     )}
-                                    <span className="text-sp-muted-foreground">
+                                    <span className="text-muted-foreground">
                                         {usedBy.length ? `каналы: ${usedBy.join(', ')}` : 'каналов нет'}
                                     </span>
                                 </div>
@@ -403,7 +403,7 @@ export default function OutboundsTab({ live }: { live: Live }) {
                 <Button onClick={save} disabled={busy || !dirty}>
                     {busy ? 'Применяем…' : 'Сохранить и применить'}
                 </Button>
-                {dirty && <span className="text-xs text-sp-warning">Есть несохранённые изменения</span>}
+                {dirty && <span className="text-xs text-warning">Есть несохранённые изменения</span>}
             </div>
         </div>
     )

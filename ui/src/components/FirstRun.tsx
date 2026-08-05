@@ -13,11 +13,11 @@ import { type Live } from '@/lib/live'
  *  работает» уже после настройки всего остального. Поэтому объяснение стоит РЯДОМ с выбором. */
 export default function FirstRun({ live }: { live: Live }) {
     return (
-        <div className="sp-root text-sp-foreground">
+        <div className="sp-root text-foreground">
             <div className="mx-auto max-w-2xl space-y-4">
-                <div className="rounded-md border border-sp-border bg-sp-card p-5 shadow-card">
+                <div className="rounded-md border border-border bg-card p-5 shadow-card">
                     <h1 className="text-lg font-semibold">Движок не установлен</h1>
-                    <p className="mt-2 text-sm text-sp-muted-foreground">
+                    <p className="mt-2 text-sm text-muted-foreground">
                         splify2 — это интерфейс, а маршрутизацией занимается <b>steer</b>: он превращает
                         правила в собственную таблицу nftables и раздаёт метки. Без него интерфейсу нечего
                         ни проверить, ни применить, поэтому начинать надо отсюда.
@@ -25,14 +25,14 @@ export default function FirstRun({ live }: { live: Live }) {
                     <ul className="mt-3 space-y-1.5 text-sm">
                         <li>
                             <b>extended</b>
-                            <span className="text-sp-muted-foreground">
+                            <span className="text-muted-foreground">
                                 {' '}— поднимает VLESS/Reality сам, достаточно подписки. Нужен, если туннеля
                                 на роутере ещё нет.
                             </span>
                         </li>
                         <li>
                             <b>basic</b>
-                            <span className="text-sp-muted-foreground">
+                            <span className="text-muted-foreground">
                                 {' '}— только маршрутизация по готовым устройствам: wireguard, amneziawg,
                                 любой существующий интерфейс.
                             </span>
@@ -42,7 +42,7 @@ export default function FirstRun({ live }: { live: Live }) {
 
                 <EngineCard engine={live.build} onInstalled={live.refresh} />
 
-                <p className="text-xs text-sp-muted-foreground">
+                <p className="text-xs text-muted-foreground">
                     Пакет можно поставить и руками:{' '}
                     <code className="font-mono">apk add --allow-untrusted ./steer-extended-*.apk</code>. На
                     роутере с 64 МБ перед установкой стоит остановить движок, если он уже работал: apk

@@ -6,7 +6,7 @@
 // thing to keep in sync with the engine's contract.
 
 import {
-    toLists,
+    toCatalog,
     type RawManifest,
     type Spec,
     type Status,
@@ -14,7 +14,7 @@ import {
     type VlessProbe,
 } from './model'
 
-export { toLists }
+export { toCatalog }
 
 declare global {
     interface Window {

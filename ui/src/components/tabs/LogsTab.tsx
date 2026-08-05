@@ -61,13 +61,13 @@ export default function LogsTab({ live }: { live: Live }) {
                         {bad.map((c, i) => (
                             <div key={`${c.id}-${i}`} className="flex gap-2 text-sm">
                                 {c.verdict === 'fail' ? (
-                                    <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-sp-destructive" aria-hidden="true" />
+                                    <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
                                 ) : (
-                                    <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-sp-warning" aria-hidden="true" />
+                                    <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
                                 )}
                                 <div>
                                     <div>{c.what}</div>
-                                    {c.why && <div className="text-xs text-sp-muted-foreground">{c.why}</div>}
+                                    {c.why && <div className="text-xs text-muted-foreground">{c.why}</div>}
                                 </div>
                             </div>
                         ))}
@@ -76,7 +76,7 @@ export default function LogsTab({ live }: { live: Live }) {
                                 <button
                                     type="button"
                                     onClick={() => setShowOk((v) => !v)}
-                                    className="text-xs text-sp-muted-foreground underline"
+                                    className="text-xs text-muted-foreground underline"
                                 >
                                     {showOk ? 'скрыть исправное' : `исправно: ${good.length} — показать`}
                                 </button>
@@ -84,8 +84,8 @@ export default function LogsTab({ live }: { live: Live }) {
                                     <div className="mt-2 space-y-1">
                                         {good.map((c, i) => (
                                             <div key={`${c.id}-ok-${i}`} className="flex gap-2 text-sm">
-                                                <Check className="mt-0.5 h-4 w-4 shrink-0 text-sp-success" aria-hidden="true" />
-                                                <span className="text-sp-muted-foreground">{c.what}</span>
+                                                <Check className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+                                                <span className="text-muted-foreground">{c.what}</span>
                                             </div>
                                         ))}
                                     </div>
@@ -114,7 +114,7 @@ export default function LogsTab({ live }: { live: Live }) {
                             onChange={(e) => setQ(e.currentTarget.value)}
                             onKeyDown={(e) => e.key === 'Enter' && ask()}
                             placeholder="www.youtube.com или 142.250.185.78"
-                            className="min-w-0 flex-1 rounded-md border border-sp-border bg-sp-background px-3 py-2 font-mono text-sm"
+                            className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-2 font-mono text-sm"
                         />
                         <Button onClick={ask} disabled={asking || !q.trim()}>
                             <Search className="mr-1 h-4 w-4" aria-hidden="true" />
@@ -122,7 +122,7 @@ export default function LogsTab({ live }: { live: Live }) {
                         </Button>
                     </div>
                     {answer && (
-                        <pre className="mt-3 overflow-x-auto rounded-md border border-sp-border bg-sp-muted p-3 text-xs leading-relaxed whitespace-pre-wrap">
+                        <pre className="mt-3 overflow-x-auto rounded-md border border-border bg-muted p-3 text-xs leading-relaxed whitespace-pre-wrap">
                             {answer}
                         </pre>
                     )}
@@ -143,7 +143,7 @@ export default function LogsTab({ live }: { live: Live }) {
                 <CardContent className="overflow-x-auto">
                     <table className="w-full min-w-[34rem] text-sm">
                         <thead>
-                            <tr className="text-left text-xs text-sp-muted-foreground">
+                            <tr className="text-left text-xs text-muted-foreground">
                                 <th className="pb-2">Набор</th>
                                 <th className="pb-2">Outbound</th>
                                 <th className="pb-2 text-right">↑ наружу</th>
@@ -153,14 +153,14 @@ export default function LogsTab({ live }: { live: Live }) {
                         </thead>
                         <tbody>
                             {(live.status?.channels || []).map((c) => (
-                                <tr key={c.name} className="border-t border-sp-border">
+                                <tr key={c.name} className="border-t border-border">
                                     <td className="py-1.5">
                                         {c.name}
                                         {!c.live && (
-                                            <span className="ml-2 text-xs text-sp-destructive">нет в ядре</span>
+                                            <span className="ml-2 text-xs text-destructive">нет в ядре</span>
                                         )}
                                     </td>
-                                    <td className="py-1.5 text-sp-muted-foreground">{c.out}</td>
+                                    <td className="py-1.5 text-muted-foreground">{c.out}</td>
                                     <td
                                         className="py-1.5 text-right"
                                         title={`${(c.bytes ?? 0).toLocaleString('ru-RU')} Б, пакетов ${(c.packets ?? 0).toLocaleString('ru-RU')}`}
@@ -185,14 +185,14 @@ export default function LogsTab({ live }: { live: Live }) {
                                                 {live.speed.ch[c.name].up && <>↑ {live.speed.ch[c.name].up}</>}
                                             </>
                                         ) : (
-                                            <span className="text-sp-muted-foreground">—</span>
+                                            <span className="text-muted-foreground">—</span>
                                         )}
                                     </td>
                                 </tr>
                             ))}
                             {(live.status?.channels?.length ?? 0) === 0 && (
                                 <tr>
-                                    <td colSpan={5} className="py-6 text-center text-sp-muted-foreground">
+                                    <td colSpan={5} className="py-6 text-center text-muted-foreground">
                                         Правил нет — весь трафик идёт напрямую.
                                     </td>
                                 </tr>
@@ -214,7 +214,7 @@ export default function LogsTab({ live }: { live: Live }) {
                 </CardHeader>
                 <CardContent>
                     {live.engine?.log?.length ? (
-                        <div className="max-h-72 overflow-auto rounded-md border border-sp-border bg-sp-muted p-3 text-[11px] leading-relaxed">
+                        <div className="max-h-72 overflow-auto rounded-md border border-border bg-muted p-3 text-[11px] leading-relaxed">
                             {live.engine.log.map((line, i) => {
                                 const m = /steer\[(warn|info)\]/.exec(line)
                                 return (
@@ -222,7 +222,7 @@ export default function LogsTab({ live }: { live: Live }) {
                                         {m && (
                                             <span
                                                 className={`shrink-0 font-mono ${
-                                                    m[1] === 'warn' ? 'text-sp-warning' : 'text-sp-muted-foreground'
+                                                    m[1] === 'warn' ? 'text-warning' : 'text-muted-foreground'
                                                 }`}
                                             >
                                                 {m[1]}
@@ -234,7 +234,7 @@ export default function LogsTab({ live }: { live: Live }) {
                             })}
                         </div>
                     ) : (
-                        <p className="py-4 text-center text-sm text-sp-muted-foreground">
+                        <p className="py-4 text-center text-sm text-muted-foreground">
                             Движок ничего не писал в журнал.
                         </p>
                     )}

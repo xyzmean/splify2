@@ -206,33 +206,108 @@ export interface Manifest {
     lists: ListEntry[]
 }
 
-/** Flattens the publisher's two keys into one pickable list. */
-export function toLists(m: RawManifest): Manifest {
-    const lists: ListEntry[] = []
-    for (const c of m.categories || []) {
-        lists.push({
-            id: c.id,
-            kind: 'prefixes',
-            name: c.name_ru,
-            description: c.description_ru,
-            count: c.count,
-            default_on: c.default_on,
-            file: c.file,
-        })
+/** Одна запись каталога — ОДИН СЕРВИС, а не один вид списка.
+ *
+ *  Издатель шлёт два ключа: `categories` (адреса) и `domain_lists` (домены). Раньше интерфейс
+ *  просто складывал их в один список, и человек выбирал «YouTube адресами» либо «YouTube
+ *  доменами» — то есть выбирал ВИД СПИСКА, хотя думал про сервис. Оба про одно и то же, и
+ *  включать их приходилось двумя правилами.
+ *
+ *  Теперь записи, описывающие один сервис, показываются одной строкой. Связь берётся из
+ *  `same_as_ip` — издатель сам говорит, какая адресная категория собрана из того же источника.
+ *  Связь бывает не только парная: два доменных списка Google смотрят в одну категорию, а
+ *  доменный список Meta — сразу в две (Meta и WhatsApp). Поэтому объединяем СВЯЗНЫМИ ГРУППАМИ,
+ *  а не парами: иначе часть записей осталась бы разделённой по виду именно там, где сервис один.
+ *
+ *  Где есть только адреса — остаются только адреса, где только домены — только домены. Ничего
+ *  не выдумывается: движок принимает правило с обоими видами сразу, но лишь если они есть. */
+export interface ServiceEntry {
+    /** Устойчив между запусками: собран из id участников по порядку. */
+    id: string
+    name: string
+    description?: string
+    /** Пути у издателя, отдельно по видам: движку их надо класть в разные поля правила. */
+    prefixes: string[]
+    domains: string[]
+    /** Сколько записей обещает издатель — суммой по участникам. */
+    count: number
+    /** Составные части, чтобы каталог мог сказать, из чего сервис собран. */
+    parts: { id: string; kind: ListKind; name: string; file: string; count?: number }[]
+}
+
+export interface Catalog {
+    version: string
+    base_url: string
+    services: ServiceEntry[]
+}
+
+export function toCatalog(m: RawManifest): Catalog {
+    const cats = m.categories || []
+    const doms = m.domain_lists || []
+
+    /* Система непересекающихся множеств по ключам «c:<id>» и «d:<id>». Проще графа: нам нужны
+     * только связные группы, а не пути в них. */
+    const parent = new Map<string, string>()
+    const find = (x: string): string => {
+        const p = parent.get(x)
+        if (!p || p === x) { parent.set(x, x); return x }
+        const r = find(p)
+        parent.set(x, r)
+        return r
     }
-    for (const d of m.domain_lists || []) {
-        lists.push({
-            id: d.id,
-            kind: 'domains',
-            name: d.name_ru,
-            count: d.count,
-            default_on: d.default_on,
-            file: d.file,
-            source: d.source,
-            same_as_ip: d.same_as_ip,
-        })
+    const union = (a: string, b: string) => { parent.set(find(a), find(b)) }
+
+    for (const c of cats) find('c:' + c.id)
+    for (const d of doms) {
+        find('d:' + d.id)
+        for (const cid of d.same_as_ip || [])
+            if (cats.some((c) => c.id === cid)) union('d:' + d.id, 'c:' + cid)
     }
-    return { version: m.version, base_url: m.base_url, lists }
+
+    const groups = new Map<string, ServiceEntry>()
+    const put = (key: string, part: ServiceEntry['parts'][0], file: string) => {
+        const root = find(key)
+        let g = groups.get(root)
+        if (!g) {
+            g = { id: root, name: '', prefixes: [], domains: [], count: 0, parts: [] }
+            groups.set(root, g)
+        }
+        g.parts.push(part)
+        if (part.kind === 'domains') g.domains.push(file)
+        else g.prefixes.push(file)
+        g.count += part.count || 0
+    }
+
+    for (const c of cats)
+        put('c:' + c.id, { id: c.id, kind: 'prefixes', name: c.name_ru, file: c.file, count: c.count }, c.file)
+    for (const d of doms)
+        put('d:' + d.id, { id: d.id, kind: 'domains', name: d.name_ru, file: d.file, count: d.count }, d.file)
+
+    const services = [...groups.values()].map((g) => {
+        /* Имя обычно берём у АДРЕСНЫХ частей: у издателя они названы полнее — «Google
+         * (Meet/Play/AI)» против «Google Play».
+         *
+         * Но когда адресных категорий несколько, а доменный список один, имя берём у него:
+         * именно он их и связал. Иначе выходило «WhatsApp · Meta (Facebook/Instagram)» —
+         * перечисление вместо названия сервиса, причём в порядке, который человеку ни о чём не
+         * говорит. */
+        const ipNames = [...new Set(g.parts.filter((p) => p.kind === 'prefixes').map((p) => p.name))]
+        const domNames = [...new Set(g.parts.filter((p) => p.kind === 'domains').map((p) => p.name))]
+        const names = !ipNames.length
+            ? domNames
+            : ipNames.length > 1 && domNames.length === 1
+              ? domNames
+              : ipNames
+        return {
+            ...g,
+            id: g.parts.map((p) => p.id).sort().join('+'),
+            name: [...new Set(names)].join(' · '),
+            description: cats.find((c) => c.id === g.parts[0].id)?.description_ru,
+        }
+    })
+    /* Порядок как у издателя: сначала адресные категории, потом чисто доменные. Алфавит здесь
+     * хуже — издатель ставит вперёд то, что включают чаще. */
+    return { version: m.version, base_url: m.base_url, services }
 }
 
 /** What a fresh install starts from: nothing routed anywhere. An empty channel list

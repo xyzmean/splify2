@@ -102,8 +102,8 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
     const chosen = output.node ?? -1
 
     return (
-        <div className="space-y-2 rounded-md border border-sp-border p-2">
-            <div className="text-xs text-sp-muted-foreground">
+        <div className="space-y-2 rounded-md border border-border p-2">
+            <div className="text-xs text-muted-foreground">
                 Клиент VLESS/Reality внутри движка: он поднимает своё устройство, поэтому каналы,
                 метки и переключение при отказе работают с ним так же, как с wireguard.
             </div>
@@ -115,7 +115,7 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
                         value={url}
                         onChange={(e) => setUrl(e.currentTarget.value)}
                         placeholder="https://example.com/sub/xxxxx"
-                        className="w-full rounded-md border border-sp-border bg-sp-background px-2 py-1 text-sm"
+                        className="w-full rounded-md border border-border bg-background px-2 py-1 text-sm"
                         aria-label="Ссылка на подписку"
                     />
                 </label>
@@ -127,7 +127,7 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
             </div>
 
             {sub?.present && (
-                <div className="text-xs text-sp-muted-foreground">
+                <div className="text-xs text-muted-foreground">
                     Файл на роутере: {sub.bytes} байт{sub.mtime ? `, обновлён ${when(sub.mtime)}` : ''}
                     {meta && (
                         <> · узлов пригодно {meta.usable}
@@ -139,13 +139,13 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
             )}
 
             {!sub?.present && (
-                <p className="text-xs text-sp-warning">
+                <p className="text-xs text-warning">
                     Подписки нет. Без неё выход никуда не ведёт: узлы движок берёт только из файла.
                 </p>
             )}
 
             {sub?.present && !saved && (
-                <p className="text-xs text-sp-warning">
+                <p className="text-xs text-warning">
                     Сохраните выход — узлы движок покажет для уже сохранённой настройки.
                 </p>
             )}
@@ -160,7 +160,7 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
                             onChange={() => onChange({ ...output, node: -1 })}
                         />
                         <span className="font-medium">Первый рабочий</span>
-                        <span className="text-xs text-sp-muted-foreground">
+                        <span className="text-xs text-muted-foreground">
                             движок сам проверит узлы при подъёме — не сломается при обновлении подписки
                         </span>
                     </label>
@@ -176,7 +176,7 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
                                     onChange={() => onChange({ ...output, node: n.index })}
                                     aria-label={`Узел ${n.name}`}
                                 />
-                                <span className={chosen === n.index ? 'font-medium text-sp-primary' : ''}>
+                                <span className={chosen === n.index ? 'font-medium text-primary' : ''}>
                                     {n.name || `${n.host}:${n.port}`}
                                 </span>
                                 <Badge variant="secondary">{n.type}{n.mode ? `/${n.mode}` : ''}</Badge>
@@ -185,7 +185,7 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
                                 {p && (p.ok
                                     ? <>
                                         <Badge variant={latencyTone(p.ttfb_ms)}>ответ {p.ttfb_ms} мс</Badge>
-                                        <span className="text-xs text-sp-muted-foreground">
+                                        <span className="text-xs text-muted-foreground">
                                             подключение {p.handshake_ms} мс
                                         </span>
                                       </>
@@ -208,7 +208,7 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
                         )
                     })}
 
-                    <p className="pt-1 text-xs text-sp-muted-foreground">
+                    <p className="pt-1 text-xs text-muted-foreground">
                         «Ответ» — время до первого байта от 1.1.1.1 через туннель, то же, что показывает
                         curl. Не пинг: ICMP через туннель не ходит, и пинг измерял бы не тот путь.
                     </p>

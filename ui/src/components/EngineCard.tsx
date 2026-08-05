@@ -64,13 +64,13 @@ export default function EngineCard({ engine, onInstalled }: Props) {
           : t('Движок')
 
     return (
-        <Card className={engine?.present && engine.vless ? '' : 'border-sp-destructive'}>
+        <Card className={engine?.present && engine.vless ? '' : 'border-destructive'}>
             <CardHeader className="pb-2">
                 <CardTitle className="text-base">{title}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
                 {engine?.present && (
-                    <p className="text-xs text-sp-muted-foreground">
+                    <p className="text-xs text-muted-foreground">
                         {t('Сейчас')}: steer {engine.version || '?'}
                         {engine.vless ? ` (${t('расширенный')})` : ` (${t('базовый')})`}
                         {engine.arch ? ` · ${engine.arch}` : ''}
@@ -110,15 +110,15 @@ export default function EngineCard({ engine, onInstalled }: Props) {
                             onClick={() => setExt(o.on)}
                             className={[
                                 'flex w-full items-start gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors',
-                                ext === o.on ? 'border-sp-primary bg-sp-primary/10' : 'border-sp-border',
+                                ext === o.on ? 'border-primary bg-primary/10' : 'border-border',
                             ].join(' ')}
                         >
                             <span
                                 className={[
                                     'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border',
                                     ext === o.on
-                                        ? 'border-sp-primary bg-sp-primary text-sp-primary-foreground'
-                                        : 'border-sp-border',
+                                        ? 'border-primary bg-primary text-primary-foreground'
+                                        : 'border-border',
                                 ].join(' ')}
                                 aria-hidden="true"
                             >
@@ -126,7 +126,7 @@ export default function EngineCard({ engine, onInstalled }: Props) {
                             </span>
                             <span>
                                 <span className="font-medium">{o.name}</span>
-                                <span className="block text-xs text-sp-muted-foreground">{o.why}</span>
+                                <span className="block text-xs text-muted-foreground">{o.why}</span>
                             </span>
                         </button>
                     ))}
@@ -137,7 +137,7 @@ export default function EngineCard({ engine, onInstalled }: Props) {
                         value={ver}
                         onChange={(e) => setVer(e.target.value)}
                         aria-label={t('Версия движка')}
-                        className="rounded-lg border border-sp-input bg-transparent px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sp-ring"
+                        className="rounded-lg border border-input bg-transparent px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     >
                         {versions === null && <option value="">{t('загрузка…')}</option>}
                         {versions?.length === 0 && <option value="">{t('релизов не найдено')}</option>}
@@ -155,7 +155,7 @@ export default function EngineCard({ engine, onInstalled }: Props) {
                 </div>
 
                 {versions?.length === 0 && (
-                    <p className="text-xs text-sp-muted-foreground">
+                    <p className="text-xs text-muted-foreground">
                         {t('Список версий не пришёл — проверьте интернет на роутере. Можно поставить пакет вручную:')}{' '}
                         <a
                             href="https://github.com/xyzmean/steer/releases"

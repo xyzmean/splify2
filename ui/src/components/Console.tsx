@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState } from 'react'
 import { useLive } from '@/lib/live'
-import { type ListEntry } from '@/lib/model'
+import { type ServiceEntry } from '@/lib/model'
 import StatusRail from '@/components/StatusRail'
 import FirstRun from '@/components/FirstRun'
 
@@ -34,16 +34,16 @@ const TABS: { id: TabId; label: string }[] = [
     { id: 'logs', label: 'Логи steer' },
 ]
 
-const FALLBACK = <div className="p-5 text-sm text-sp-muted-foreground">Загрузка…</div>
+const FALLBACK = <div className="p-5 text-sm text-muted-foreground">Загрузка…</div>
 
 export default function Console() {
     const [tab, setTab] = useState<TabId>('rules')
     const live = useLive()
-    /** Запись каталога, которую попросили «в правило». Живёт здесь, а не в каталоге, потому что
+    /** Сервис, который попросили «в правило». Живёт здесь, а не в каталоге, потому что
      *  переход между вкладками — дело оболочки; каталог только просит. Считывается вкладкой
      *  правил один раз и сбрасывается: иначе повторный заход на вкладку снова открывал бы
      *  редактор, которого человек уже не просил. */
-    const [wanted, setWanted] = useState<ListEntry | null>(null)
+    const [wanted, setWanted] = useState<ServiceEntry | null>(null)
 
     /* Движка нет — показываем установку ВМЕСТО вкладок. Не «рядом»: без движка ни одна из них
      * не может подействовать, и открывать их значило бы дать человеку заполнить настройку,
@@ -54,14 +54,14 @@ export default function Console() {
     if (live.build && !live.build.present) return <FirstRun live={live} />
 
     return (
-        <div className="sp-root text-sp-foreground">
+        <div className="sp-root text-foreground">
             {/* Одна колонка на узком экране: закреплённое состояние уезжает наверх, а не
                 прячется — на телефоне это первое, что человек хочет увидеть. */}
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
                 <StatusRail live={live} onGoDiag={() => setTab('logs')} />
 
                 <main className="min-w-0">
-                    <nav className="mb-4 flex flex-wrap gap-1 border-b border-sp-border" role="tablist">
+                    <nav className="mb-4 flex flex-wrap gap-1 border-b border-border" role="tablist">
                         {TABS.map(({ id, label }) => (
                             <button
                                 key={id}
@@ -70,10 +70,10 @@ export default function Console() {
                                 onClick={() => setTab(id)}
                                 className={[
                                     'rounded-t-md px-4 py-2 text-sm transition-colors',
-                                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sp-primary',
+                                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
                                     tab === id
-                                        ? 'border-b-2 border-sp-primary font-medium text-sp-primary'
-                                        : 'border-b-2 border-transparent text-sp-muted-foreground hover:text-sp-foreground',
+                                        ? 'border-b-2 border-primary font-medium text-primary'
+                                        : 'border-b-2 border-transparent text-muted-foreground hover:text-foreground',
                                 ].join(' ')}
                             >
                                 {label}
@@ -102,13 +102,13 @@ export default function Console() {
                         {tab === 'logs' && <LogsTab live={live} />}
                     </Suspense>
 
-                    <div className="mt-6 border-t border-sp-border pt-3 text-right text-xs text-sp-muted-foreground">
+                    <div className="mt-6 border-t border-border pt-3 text-right text-xs text-muted-foreground">
                         powered by{' '}
                         <a
                             href="https://github.com/xyzmean/steer"
                             target="_blank"
                             rel="noreferrer"
-                            className="underline decoration-dotted hover:text-sp-foreground"
+                            className="underline decoration-dotted hover:text-foreground"
                         >
                             steer
                         </a>

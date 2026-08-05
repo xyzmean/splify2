@@ -3,9 +3,9 @@ import { ArrowDown, ArrowUp, Pencil, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
-import { toLists, EMPTY_SPEC, type Channel, type ListEntry, type Spec } from '@/lib/model'
+import { toCatalog, EMPTY_SPEC, type Channel, type ServiceEntry, type Spec } from '@/lib/model'
 import { type Live } from '@/lib/live'
-import RuleEditor, { pathFor, selectedIds, isDomains } from '@/components/tabs/RuleEditor'
+import RuleEditor, { pathFor, selectedIds } from '@/components/tabs/RuleEditor'
 
 /** Правила: единственное место, где что-то назначается.
  *
@@ -25,18 +25,24 @@ import RuleEditor, { pathFor, selectedIds, isDomains } from '@/components/tabs/R
  *  поэтому оно остаётся на своём месте в порядке, видно движку (status, explain) и не действует.
  */
 
-function describe(ch: Channel, lists: ListEntry[]) {
-    const ids = selectedIds(ch, lists)
-    const entries = lists.filter((l) => ids.includes(l.id))
-    const total = entries.reduce((n, l) => n + (l.count || 0), 0)
-    const kind = isDomains(ch) ? 'сервис' : 'категория'
+/** Строка под именем правила: что оно перенаправляет, словами человека.
+ *
+ *  Называем СЕРВИСЫ, а не виды списков: «YouTube, Telegram» отвечает на вопрос, а «2 доменных
+ *  списка» заставляет вспоминать, что в них лежит. Вид упоминается только когда сервисов много
+ *  и перечислять их негде. */
+function describe(ch: Channel, services: ServiceEntry[]) {
+    const ids = selectedIds(ch, services)
+    const entries = services.filter((sv) => ids.includes(sv.id))
     if (!entries.length) {
         const files = [...(ch.match.prefixes_files || []), ...(ch.match.domains_files || [])]
         if (ch.match.any) return 'весь трафик'
-        if (!files.length) return 'список не выбран'
-        return `${files.length} свой список`
+        if (!files.length) return 'сервис не выбран'
+        return `свои списки: ${files.length}`
     }
-    const what = entries.length === 1 ? `${kind} · ${entries[0].name}` : `${entries.length} записей`
+    const total = entries.reduce((n, sv) => n + (sv.count || 0), 0)
+    const what = entries.length <= 3
+        ? entries.map((sv) => sv.name).join(', ')
+        : `${entries.slice(0, 2).map((sv) => sv.name).join(', ')} и ещё ${entries.length - 2}`
     return total ? `${what} · ${total.toLocaleString('ru-RU')} записей` : what
 }
 
@@ -49,7 +55,7 @@ function whoText(ch: Channel) {
 interface Props {
     live: Live
     /** Запись каталога, которую попросили «в правило» с другой вкладки. */
-    wanted?: ListEntry | null
+    wanted?: ServiceEntry | null
     onWantedUsed?: () => void
     /** Уйти туда, где заводят outbound. Правилу некуда вести, пока его нет, и оставлять
      *  человека с советом «заведите» без дороги туда — это тупик в один щелчок. */
@@ -58,7 +64,7 @@ interface Props {
 
 export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: Props) {
     const [spec, setSpec] = useState<Spec | null>(null)
-    const [lists, setLists] = useState<ListEntry[]>([])
+    const [services, setServices] = useState<ServiceEntry[]>([])
     const [local, setLocal] = useState<Record<string, { count: number; mtime: number }>>({})
     const [open, setOpen] = useState<number | null>(null)
     const [dirty, setDirty] = useState(false)
@@ -66,7 +72,7 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
 
     useEffect(() => {
         rpc.specGet().then(setSpec).catch(() => setSpec(EMPTY_SPEC))
-        rpc.manifest().then((m) => setLists(toLists(m).lists)).catch(() => setLists([]))
+        rpc.manifest().then((m) => setServices(toCatalog(m).services)).catch(() => setServices([]))
         rpc.localLists().then((d) => setLocal(d.files || {})).catch(() => setLocal({}))
     }, [])
 
@@ -92,13 +98,18 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
         let name = wanted.name
         let n = 2
         while (used.has(name)) name = `${wanted.name} ${n++}`
-        const key = wanted.kind === 'domains' ? 'domains_files' : 'prefixes_files'
+        /* Сразу ОБА вида, если у сервиса они есть: правило теперь про сервис, а движок такое
+         * принимает — набор один, адреса в нём постоянны, домены кладёт резолвер. */
         const ch: Channel = {
             name,
             out,
             match: {
-                [key]: [pathFor(wanted)],
-                ...(wanted.kind === 'domains' ? { mode: 'fakeip' as const } : {}),
+                ...(wanted.prefixes.length
+                    ? { prefixes_files: wanted.prefixes.map(pathFor) }
+                    : {}),
+                ...(wanted.domains.length
+                    ? { domains_files: wanted.domains.map(pathFor), mode: 'fakeip' as const }
+                    : {}),
             },
         }
         edit({ ...spec, channels: [...spec.channels, ch] })
@@ -150,11 +161,15 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
             for (const ch of spec.channels)
                 for (const f of [...(ch.match.prefixes_files || []), ...(ch.match.domains_files || [])])
                     needed.add(f)
-            for (const l of lists)
-                if (needed.has(pathFor(l))) {
-                    const r = await rpc.listFetch(l.id, l.kind).catch(() => ({ ok: false }) as { ok: boolean })
-                    if (!r.ok) notify(`${l.name}: список не скачался — правило будет без него`, 'warning')
-                }
+            for (const sv of services)
+                for (const p of sv.parts)
+                    if (needed.has(pathFor(p.file))) {
+                        const r = await rpc.listFetch(p.id, p.kind)
+                            .catch(() => ({ ok: false }) as { ok: boolean })
+                        if (!r.ok)
+                            notify(`${sv.name}: часть «${p.name}» не скачалась — правило будет без неё`,
+                                   'warning')
+                    }
 
             const res = await rpc.specSet(JSON.stringify(spec))
             if (!res.ok) throw new Error(res.error || 'не удалось сохранить')
@@ -174,16 +189,16 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
         }
     }
 
-    if (!spec) return <div className="p-5 text-sm text-sp-muted-foreground">Загрузка…</div>
+    if (!spec) return <div className="p-5 text-sm text-muted-foreground">Загрузка…</div>
 
     const outputs = live.status?.outputs || {}
 
     if (open !== null && spec.channels[open]) {
         const ch = spec.channels[open]
-        const mine = new Set(selectedIds(ch, lists))
+        const mine = new Set(selectedIds(ch, services))
         const clashing = spec.channels
             .map((o, k) => ({ o, k }))
-            .filter(({ o, k }) => k !== open && selectedIds(o, lists).some((id) => mine.has(id)))
+            .filter(({ o, k }) => k !== open && selectedIds(o, services).some((id) => mine.has(id)))
         const above = clashing.filter(({ k }) => k < open)
         const clash = clashing.length
             ? `Общие записи с: ${clashing.map(({ o }) => o.name).join(', ')}. ` +
@@ -196,7 +211,7 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
                 <RuleEditor
                     ch={ch}
                     index={open}
-                    lists={lists}
+                    services={services}
                     local={local}
                     outputs={outputs}
                     clash={clash}
@@ -217,7 +232,7 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
     return (
         <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs text-sp-muted-foreground">
+                <p className="text-xs text-muted-foreground">
                     Проверяются сверху вниз, побеждает первое совпадение.
                 </p>
                 <Button onClick={add}>
@@ -225,10 +240,10 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
                 </Button>
             </div>
 
-            <div className="overflow-x-auto rounded-md border border-sp-border bg-sp-card shadow-card">
+            <div className="overflow-x-auto rounded-md border border-border bg-card shadow-card">
                 <table className="w-full min-w-[34rem] text-sm">
                     <thead>
-                        <tr className="border-b border-sp-border text-left text-xs uppercase tracking-wide text-sp-muted-foreground">
+                        <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
                             <th className="px-3 py-2">Что перенаправляем</th>
                             <th className="px-3 py-2">Кого касается</th>
                             <th className="px-3 py-2">Куда</th>
@@ -245,7 +260,7 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
                                     /* Выключенное приглушено, но НА ВИДУ и на своём месте: спрятанное
                                        правило человек считает удалённым и заводит второе такое же, а
                                        уехавшее вниз меняет порядок, то есть приоритет. */
-                                    className={`border-b border-sp-border/50 last:border-b-0 ${on ? '' : 'opacity-50'}`}
+                                    className={`border-b border-border/50 last:border-b-0 ${on ? '' : 'opacity-50'}`}
                                 >
                                     <td className="px-3 py-2">
                                         <div className="flex items-start gap-3">
@@ -256,25 +271,25 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
                                             />
                                             <div className="min-w-0">
                                                 <div className="truncate font-medium">{ch.name}</div>
-                                                <div className="truncate text-xs text-sp-muted-foreground">
-                                                    {describe(ch, lists)}
+                                                <div className="truncate text-xs text-muted-foreground">
+                                                    {describe(ch, services)}
                                                     {!on && ' · выключено'}
                                                 </div>
                                             </div>
                                         </div>
                                     </td>
-                                    <td className="px-3 py-2 text-sp-muted-foreground">{whoText(ch)}</td>
+                                    <td className="px-3 py-2 text-muted-foreground">{whoText(ch)}</td>
                                     <td className="px-3 py-2">
                                         <span className="flex items-center gap-2">
                                             <span
                                                 className={`h-2 w-2 shrink-0 rounded-full ${
                                                     !o
-                                                        ? 'bg-sp-destructive'
+                                                        ? 'bg-destructive'
                                                         : o.kind === 'direct'
-                                                          ? 'bg-sp-muted-foreground'
+                                                          ? 'bg-muted-foreground'
                                                           : o.up
-                                                            ? 'bg-sp-success'
-                                                            : 'bg-sp-destructive'
+                                                            ? 'bg-success'
+                                                            : 'bg-destructive'
                                                 }`}
                                                 aria-hidden="true"
                                             />
@@ -312,7 +327,7 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
 
                         {spec.channels.length === 0 && (
                             <tr>
-                                <td colSpan={4} className="px-3 py-8 text-center text-sm text-sp-muted-foreground">
+                                <td colSpan={4} className="px-3 py-8 text-center text-sm text-muted-foreground">
                                     Правил нет — весь трафик идёт напрямую.
                                     <div className="mt-1 text-xs">
                                         Правило говорит движку: этот сервис или категорию — вот этим
@@ -324,7 +339,7 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
                                             <button
                                                 type="button"
                                                 onClick={onGoOutbounds}
-                                                className="text-sp-primary underline decoration-dotted"
+                                                className="text-primary underline decoration-dotted"
                                             >
                                                 Завести outbound
                                             </button>
@@ -337,7 +352,7 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
                 </table>
             </div>
 
-            <p className="text-xs text-sp-muted-foreground">
+            <p className="text-xs text-muted-foreground">
                 Правило собирается из записей каталога: карандаш открывает тот же список сервисов и
                 категорий, что и вкладка «Сервисы и категории». Порядок задаёт приоритет — steer раздаёт
                 метки по первому совпадению, остальное идёт напрямую.
@@ -357,7 +372,7 @@ function Switch({ on, label, onClick }: { on: boolean; label: string; onClick: (
             aria-label={label}
             onClick={onClick}
             className={`mt-0.5 h-5 w-9 shrink-0 rounded-full border transition-colors ${
-                on ? 'border-sp-primary bg-sp-primary' : 'border-sp-border bg-sp-muted'
+                on ? 'border-primary bg-primary' : 'border-border bg-muted'
             }`}
         >
             {/* Цвет ползунка — от токенов, а не белый. На светлой теме дорожка выключенного
@@ -366,8 +381,8 @@ function Switch({ on, label, onClick }: { on: boolean; label: string; onClick: (
             <span
                 className={`block h-4 w-4 rounded-full transition-transform ${
                     on
-                        ? 'translate-x-4 bg-sp-primary-foreground'
-                        : 'translate-x-0.5 bg-sp-muted-foreground'
+                        ? 'translate-x-4 bg-primary-foreground'
+                        : 'translate-x-0.5 bg-muted-foreground'
                 }`}
             />
         </button>
@@ -379,14 +394,14 @@ function SaveBar({
 }: { dirty: boolean; busy: boolean; onSave: (andApply: boolean) => void }) {
     if (!dirty && !busy) return null
     return (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-sp-border bg-sp-card p-3">
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-card p-3">
             <Button onClick={() => onSave(true)} disabled={busy}>
                 {busy ? 'Применяем…' : 'Сохранить и применить'}
             </Button>
             <Button variant="secondary" onClick={() => onSave(false)} disabled={busy}>
                 Только сохранить
             </Button>
-            <span className="text-xs text-sp-muted-foreground">
+            <span className="text-xs text-muted-foreground">
                 Применение перезаписывает настройку steer и перекомпилирует наборы — это около двух
                 секунд, соединения не рвутся.
             </span>
