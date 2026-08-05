@@ -21,9 +21,13 @@ import { human, type Live } from '@/lib/live'
 function verdict(live: Live) {
     if (live.error) return { text: 'Движок не отвечает', tone: 'bad' as const, why: live.error }
     if (live.diag?.fail) return { text: 'Есть поломки', tone: 'bad' as const, why: `проверок с отказом: ${live.diag.fail}` }
-    if (live.diag?.warn) return { text: 'Работает', tone: 'warn' as const, why: `есть о чём знать: ${live.diag.warn}` }
+    if (live.diag?.warn)
+        return { text: 'Работает', tone: 'warn' as const, why: `есть о чём знать: ${live.diag.warn}` }
     if (!live.status) return { text: 'Загрузка…', tone: 'idle' as const, why: '' }
-    return { text: 'Работает', tone: 'good' as const, why: '' }
+    /* Советы (note) сюда не приходят и цвет не меняют: они верны всегда, и красить ими
+     * состояние значило бы держать роутер вечно нездоровым. Их видно на вкладке диагностики. */
+    const notes = (live.diag?.checks || []).filter((c) => c.verdict === 'note').length
+    return { text: 'Работает', tone: 'good' as const, why: notes ? `советов: ${notes}` : '' }
 }
 
 /** «4 ч 12 мин» — то, как об этом говорят. Секунды показываем только первую минуту: дальше они

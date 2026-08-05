@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, Search, TriangleAlert, XCircle } from 'lucide-react'
+import { Check, Info, Search, TriangleAlert, XCircle } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import EngineCard from '@/components/EngineCard'
@@ -32,7 +32,11 @@ export default function LogsTab({ live }: { live: Live }) {
         }
     }
 
-    const bad = (live.diag?.checks || []).filter((c) => c.verdict !== 'ok')
+    const bad = (live.diag?.checks || []).filter((c) => c.verdict === 'fail' || c.verdict === 'warn')
+    /* Советы отдельно и НЕ в счётчиках: они верны всегда, а не описывают эту установку. Смешав
+     * их с находками, мы держали бы «есть о чём знать» постоянно — и человек перестал бы читать
+     * находки вовсе. */
+    const notes = (live.diag?.checks || []).filter((c) => c.verdict === 'note')
     const good = (live.diag?.checks || []).filter((c) => c.verdict === 'ok')
 
     return (
@@ -71,6 +75,21 @@ export default function LogsTab({ live }: { live: Live }) {
                                 </div>
                             </div>
                         ))}
+                        {notes.length > 0 && (
+                            <div className="space-y-2 border-t border-border pt-2">
+                                {notes.map((c, i) => (
+                                    <div key={`${c.id}-note-${i}`} className="flex gap-2 text-sm">
+                                        <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                                        <div>
+                                            <div>{c.what}</div>
+                                            {c.why && (
+                                                <div className="text-xs text-muted-foreground">{c.why}</div>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                         {good.length > 0 && (
                             <div>
                                 <button

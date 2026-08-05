@@ -16,7 +16,10 @@ import { type Status } from './model'
 
 export interface DiagCheck {
     id: string
-    verdict: 'ok' | 'warn' | 'fail'
+    /** `note` — совет, а не находка: верен всегда и в счётчики движка не идёт. Без него советы
+     *  считались предупреждениями, и «работает, но есть о чём знать» горело постоянно — то есть
+     *  тревога стояла на исправном роутере и учила не смотреть на неё вовсе. */
+    verdict: 'ok' | 'note' | 'warn' | 'fail'
     what: string
     why: string
 }

@@ -184,13 +184,18 @@ export default function RuleEditor({
                                         onChange={() => pick(sv)}
                                         className="shrink-0"
                                     />
-                                    <span className="min-w-0 flex-1 truncate">{sv.name}</span>
-                                    {missing > 0 && (
-                                        <span className="shrink-0 text-xs text-muted-foreground">
-                                            скачается
-                                        </span>
-                                    )}
-                                    <span className="shrink-0 text-xs text-muted-foreground">
+                                    <span className="min-w-0 flex-1 truncate">
+                                        {sv.name}
+                                        {/* «Скачается» — под именем, а не в строку справа: там
+                                            оно вклинивалось между именем и видом, и вид с числом
+                                            обрезался как раз у самых длинных названий. */}
+                                        {missing > 0 && (
+                                            <span className="ml-2 text-xs text-muted-foreground">
+                                                скачается
+                                            </span>
+                                        )}
+                                    </span>
+                                    <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
                                         {kinds.length === 2
                                             ? 'домены и адреса'
                                             : kinds[0] === 'domains'

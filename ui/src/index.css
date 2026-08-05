@@ -34,7 +34,10 @@
     --sp-destructive: var(--danger, #f5365c);
     --sp-destructive-foreground: #ffffff;
     --sp-success: var(--success, #2dce89);
-    --sp-warning: var(--warning, #fb6340);
+    /* Янтарный, а не оранжево-красный: прежний запасной #fb6340 рядом с destructive
+     * читался как ошибка, и предупреждение выглядело поломкой. Тема, если она свой
+     * --warning объявляет, по-прежнему главнее. */
+    --sp-warning: var(--warning, #ffc107);
     --sp-info: var(--info, #11cdef);
     --sp-border: var(--lighter, #e9ecef);
     --sp-input: #cccccc;
@@ -65,7 +68,10 @@
     --sp-destructive: #c60000;
     --sp-destructive-foreground: #ffffff;
     --sp-success: #00ad00;
-    --sp-warning: var(--warning, #fb6340);
+    /* Янтарный, а не оранжево-красный: прежний запасной #fb6340 рядом с destructive
+     * читался как ошибка, и предупреждение выглядело поломкой. Тема, если она свой
+     * --warning объявляет, по-прежнему главнее. */
+    --sp-warning: var(--warning, #ffc107);
     --sp-info: var(--info, #11cdef);
     --sp-border: #3c3c3c;
     --sp-input: #3c3c3c;
