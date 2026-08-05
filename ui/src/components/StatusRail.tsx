@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Activity, Cpu, RotateCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
@@ -26,6 +26,19 @@ function verdict(live: Live) {
     return { text: 'Работает', tone: 'good' as const, why: '' }
 }
 
+/** «4 ч 12 мин» — то, как об этом говорят. Секунды показываем только первую минуту: дальше они
+ *  ничего не добавляют, а строку удлиняют. */
+function uptimeText(sec: number) {
+    if (!(sec > 0)) return null
+    if (sec < 60) return `${sec} с`
+    const m = Math.floor(sec / 60) % 60
+    const h = Math.floor(sec / 3600) % 24
+    const d = Math.floor(sec / 86400)
+    if (d) return `${d} д ${h} ч`
+    if (h) return `${h} ч ${m} мин`
+    return `${m} мин`
+}
+
 const DOT: Record<string, string> = {
     good: 'bg-sp-success',
     warn: 'bg-sp-warning',
@@ -41,12 +54,41 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
 
     const v = verdict(live)
     const outputs = Object.entries(live.status?.outputs || {})
+    /* Отклик спрашивается ПО ОДНОМУ выходу за раз и не по кругу: каждая проверка упирается в
+     * таймаут до шести секунд, и опрос десятка выходов каждые пять секунд держал бы роутер
+     * занятым проверками вместо работы. Поэтому один проход по списку при открытии страницы, а
+     * дальше — только по кнопке. */
+    const [pings, setPings] = useState<Record<string, { ms: number; state: string }>>({})
+    const [pinging, setPinging] = useState(false)
+    const asked = useRef(false)
     /* Активным считаем тот выход, через который трафик идёт СЕЙЧАС, а не первый в спеке:
      * при нескольких туннелях первый может быть выключен, и назвать его активным значило бы
      * показывать не то устройство, куда уходит трафик. */
     const active = outputs.find(([, o]) => o.kind !== 'direct' && o.up)?.[1]
     const tunnelDev = active?.device
     const tunnel = tunnelDev ? live.devs?.[tunnelDev] : undefined
+
+    async function probeAll() {
+        setPinging(true)
+        try {
+            for (const [name, o] of outputs) {
+                if (o.kind === 'direct') continue
+                const r = await rpc.outboundProbe(name).catch(() => null)
+                if (r) setPings((p) => ({ ...p, [name]: { ms: r.ms, state: r.state } }))
+            }
+        } finally {
+            setPinging(false)
+        }
+    }
+
+    /* Один раз, когда список выходов стал известен. Не в useEffect на каждый их приход: список
+     * обновляется каждые пять секунд вместе с состоянием, и проверка запускалась бы заново. */
+    useEffect(() => {
+        if (asked.current || outputs.length === 0) return
+        asked.current = true
+        void probeAll()
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [outputs.length])
 
     async function restart() {
         setBusy(true)
@@ -67,6 +109,16 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                     <h2 className="text-lg font-semibold">{v.text}</h2>
                 </div>
                 {v.why && <p className="mt-1 text-xs text-sp-muted-foreground">{v.why}</p>}
+                {/* Время работы — движка, а не роутера: применение настройки туннель не
+                    перезапускает, и человек спрашивает именно про процесс. */}
+                {live.net && uptimeText(live.net.uptime) && (
+                    <p className="mt-1 text-xs text-sp-muted-foreground">
+                        время работы {uptimeText(live.net.uptime)}
+                        {live.net.active_clients > 0 && (
+                            <> · устройств в сети {live.net.active_clients}</>
+                        )}
+                    </p>
+                )}
 
                 {eng && (
                     <div className="mt-3 flex items-start gap-2 rounded-md border border-sp-border p-2">
@@ -111,6 +163,20 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                         <dt className="text-sp-muted-foreground">Активный outbound</dt>
                         <dd className="truncate font-medium">{active?.name || '—'}</dd>
                     </div>
+                    {active && pings[active.name] && (
+                        <div className="flex items-baseline justify-between gap-2">
+                            <dt className="text-sp-muted-foreground">Отклик</dt>
+                            <dd
+                                className={`font-medium ${
+                                    pings[active.name].ms < 0 ? 'text-sp-destructive' : 'text-sp-success'
+                                }`}
+                            >
+                                {pings[active.name].ms < 0
+                                    ? pings[active.name].state
+                                    : `${pings[active.name].ms} мс`}
+                            </dd>
+                        </div>
+                    )}
                     {/* Задержка и внешний IP появятся, когда в бэкенде будет чем их взять:
                         показывать прочерк с обещанием честнее, чем рисовать поле, которое
                         всегда пусто. */}
@@ -139,8 +205,9 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                 </dl>
 
                 <div className="mt-3 flex gap-2">
-                    <Button variant="secondary" className="flex-1" onClick={onGoDiag}>
-                        <Activity className="mr-1 h-4 w-4" aria-hidden="true" /> Проверить
+                    <Button variant="secondary" className="flex-1" onClick={probeAll} disabled={pinging}>
+                        <Activity className="mr-1 h-4 w-4" aria-hidden="true" />
+                        {pinging ? 'Проверяем…' : 'Проверить'}
                     </Button>
                     <Button variant="secondary" className="flex-1" onClick={restart} disabled={busy}>
                         <RotateCw className="mr-1 h-4 w-4" aria-hidden="true" />
@@ -168,12 +235,24 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                                     aria-hidden="true"
                                 />
                                 <span className="min-w-0 flex-1 truncate">{name}</span>
-                                <span className="shrink-0 text-xs text-sp-muted-foreground">
+                                <span
+                                    className={`shrink-0 text-xs ${
+                                        pings[name] && pings[name].ms < 0
+                                            ? 'text-sp-destructive'
+                                            : pings[name]
+                                              ? 'text-sp-success'
+                                              : 'text-sp-muted-foreground'
+                                    }`}
+                                >
                                     {o.kind === 'direct'
                                         ? 'напрямую'
-                                        : o.up
-                                          ? o.device
-                                          : 'нет устройства'}
+                                        : pings[name]
+                                          ? pings[name].ms < 0
+                                              ? pings[name].state
+                                              : `${pings[name].ms} мс`
+                                          : o.up
+                                            ? o.device
+                                            : 'нет устройства'}
                                 </span>
                             </li>
                         ))}

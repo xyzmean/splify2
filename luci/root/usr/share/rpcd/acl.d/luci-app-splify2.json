@@ -22,7 +22,10 @@
           "diag",
           "engine_state",
           "ui_get",
-          "steer_versions"
+          "steer_versions",
+          "net_info",
+          "outbound_probe",
+          "leases"
         ]
       }
     },

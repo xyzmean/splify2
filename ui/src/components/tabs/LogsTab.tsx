@@ -100,9 +100,11 @@ export default function LogsTab({ live }: { live: Live }) {
                 <CardHeader>
                     <CardTitle>Куда пойдёт запрос</CardTitle>
                     <CardDescription>
-                        Отвечает по живому ядру, а не по настройке: спрашивается набор, который в ядре
-                        действительно лежит. Пока принимается только адрес — домены движок этой команде
-                        ещё не отдаёт.
+                        Отвечает по живому ядру, а не по настройке. Имя движок сначала спрашивает у
+                        своего резолвера и показывает, во что оно превратилось: у доменного правила это
+                        fake-IP, и с настоящим адресом сайта он не совпадает вовсе — по системному
+                        ответу понять, попадёт ли имя в набор, нельзя. Заодно это проверка самого
+                        резолвера: не ответил — значит и клиентам не отвечает.
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -111,7 +113,7 @@ export default function LogsTab({ live }: { live: Live }) {
                             value={q}
                             onChange={(e) => setQ(e.currentTarget.value)}
                             onKeyDown={(e) => e.key === 'Enter' && ask()}
-                            placeholder="142.250.185.78"
+                            placeholder="www.youtube.com или 142.250.185.78"
                             className="min-w-0 flex-1 rounded-md border border-sp-border bg-sp-background px-3 py-2 font-mono text-sm"
                         />
                         <Button onClick={ask} disabled={asking || !q.trim()}>
@@ -138,8 +140,8 @@ export default function LogsTab({ live }: { live: Live }) {
                         «работает» и «не влезло».
                     </CardDescription>
                 </CardHeader>
-                <CardContent>
-                    <table className="w-full text-sm">
+                <CardContent className="overflow-x-auto">
+                    <table className="w-full min-w-[34rem] text-sm">
                         <thead>
                             <tr className="text-left text-xs text-sp-muted-foreground">
                                 <th className="pb-2">Набор</th>
@@ -204,16 +206,33 @@ export default function LogsTab({ live }: { live: Live }) {
                 <CardHeader>
                     <CardTitle>Логи steer</CardTitle>
                     <CardDescription>
-                        Последние строки, дословно. Уровней (info / warn) движок пока не помечает, поэтому
-                        интерфейс их и не выдумывает: разбор его формулировок молча отвалился бы при первой
-                        же правке сообщения.
+                        Последние строки, дословно. Уровень берётся из пометки движка{' '}
+                        <code className="font-mono">steer[warn]</code> —{' '}
+                        это формат, а не проза: меняться будет текст, а не префикс, поэтому разбирать его
+                        можно. Строки без пометки — от более старого движка, они показаны как есть.
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
                     {live.engine?.log?.length ? (
-                        <pre className="max-h-72 overflow-auto rounded-md border border-sp-border bg-sp-muted p-3 text-[11px] leading-relaxed whitespace-pre-wrap">
-                            {live.engine.log.join('\n')}
-                        </pre>
+                        <div className="max-h-72 overflow-auto rounded-md border border-sp-border bg-sp-muted p-3 text-[11px] leading-relaxed">
+                            {live.engine.log.map((line, i) => {
+                                const m = /steer\[(warn|info)\]/.exec(line)
+                                return (
+                                    <div key={i} className="flex gap-2 whitespace-pre-wrap">
+                                        {m && (
+                                            <span
+                                                className={`shrink-0 font-mono ${
+                                                    m[1] === 'warn' ? 'text-sp-warning' : 'text-sp-muted-foreground'
+                                                }`}
+                                            >
+                                                {m[1]}
+                                            </span>
+                                        )}
+                                        <span className="min-w-0">{line}</span>
+                                    </div>
+                                )
+                            })}
+                        </div>
                     ) : (
                         <p className="py-4 text-center text-sm text-sp-muted-foreground">
                             Движок ничего не писал в журнал.

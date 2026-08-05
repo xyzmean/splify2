@@ -41,6 +41,8 @@ export interface Build {
 
 export interface Live {
     status: Status | null
+    /** Время работы движка в секундах и сколько устройств сейчас ходит в сеть. */
+    net: { uptime: number; active_clients: number } | null
     /** Что установлено: версия, вариант, архитектура. Спрашивается ОДИН раз, а не по кругу:
      *  ответ добывается запуском движка, и делать это каждые пять секунд на роутере с 64 МБ
      *  значит платить процессом за неменяющееся число. Перечитывается по refresh() — то есть
@@ -98,6 +100,7 @@ export function useLive(): Live {
     const [engine, setEngine] = useState<EngineState | null>(null)
     const [speed, setSpeed] = useState<Live['speed']>({ ch: {}, dev: {} })
     const [build, setBuild] = useState<Build | null>(null)
+    const [net, setNet] = useState<{ uptime: number; active_clients: number } | null>(null)
     const prev = useRef<{
         t: number
         ch: Record<string, { up: number; down: number }>
@@ -111,8 +114,8 @@ export function useLive(): Live {
         const load = async () => {
             /* allSettled, а не all: отказ одного источника не должен уносить остальные.
              * Проверок состояния нет у старого движка, и это не повод гасить экран. */
-            const [s, d, e, g] = await Promise.allSettled([
-                rpc.status(), rpc.devStats(), rpc.engineState(), rpc.diag(),
+            const [s, d, e, g, ni] = await Promise.allSettled([
+                rpc.status(), rpc.devStats(), rpc.engineState(), rpc.diag(), rpc.netInfo(),
             ])
             if (stop) return
             if (s.status === 'fulfilled') { setStatus(s.value); setError(null) }
@@ -122,6 +125,7 @@ export function useLive(): Live {
             if (e.status === 'fulfilled') setEngine(e.value)
             if (g.status === 'fulfilled') { setDiag(g.value); setDiagOld(false) }
             else setDiagOld(true)
+            if (ni.status === 'fulfilled') setNet(ni.value)
 
             const now = Date.now()
             const ch: Record<string, { up: number; down: number }> = {}
@@ -167,7 +171,7 @@ export function useLive(): Live {
     }, [nonce])
 
     return {
-        status, error, diag, diagOld, devs, engine, speed, build,
+        status, error, diag, diagOld, devs, engine, speed, build, net,
         refresh: () => setNonce((n) => n + 1),
     }
 }

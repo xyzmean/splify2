@@ -191,6 +191,9 @@ list)
     json_add_object sub_info; json_close_object
     json_add_object dev_stats; json_close_object
     json_add_object diag; json_close_object
+    json_add_object net_info; json_close_object
+    json_add_object outbound_probe; json_add_string output; json_close_object
+    json_add_object leases; json_close_object
     json_add_object engine_state; json_close_object
     json_add_object ui_get; json_close_object
     json_add_object ui_set; json_add_string state; json_close_object
@@ -637,6 +640,128 @@ splify2: туннель $o перезапущен — сменился узел 
             '{'*) printf '%s\n' "$out" ;;
             *) fail "движок не умеет diag — обновите steer" ;;
         esac
+        ;;
+
+    net_info)
+        # Что человек хочет знать о работе туннеля прямо сейчас, одним вызовом.
+        #
+        # Одним, а не тремя: каждый вызов ubus стоит запуска shell и разбора, а страница
+        # опрашивает состояние по кругу. Три метода вместо одного — это втрое больше процессов
+        # на роутере, у которого 64 МБ и одно ядро.
+        #
+        # ВНЕШНЕГО IP здесь нет, и это не забывчивость.
+        #
+        # Чтобы узнать адрес, которым нас видят снаружи, запрос обязан уйти ЧЕРЕЗ туннель. А
+        # правило маршрутизации у steer выбирает таблицу по МЕТКЕ пакета, не по адресу источника:
+        # привязка запроса к адресу туннельного устройства маршрут не переключает, пакет уходит
+        # обычным путём и показывает адрес провайдера — то есть отвечает на другой вопрос, причём
+        # убедительно. Нужен SO_BINDTODEVICE, которого нет ни у uclient-fetch, ни у busybox wget;
+        # curl на роутере тоже не всегда есть.
+        #
+        # Поэтому поля нет вовсе, а не «есть, но пустое»: пустое поле в интерфейсе человек читает
+        # как «не смогли узнать», хотя причина в том, что мы не умеем спросить. Появится, когда
+        # умение спрашивать появится у движка — у него дескриптор туннеля уже в руках.
+        json_init
+
+        # Время работы движка. procd отдаёт pid, а начало жизни процесса лежит в /proc: 22-е
+        # поле stat — тики с загрузки системы. Спрашиваем именно так, а не «когда применили»:
+        # применение туннель не перезапускает, и человек спрашивает про процесс.
+        up=0
+        pid="$(pgrep -f "$STEER vless" 2>/dev/null | head -1)"
+        [ -z "$pid" ] && pid="$(pgrep -f 'steer vless' 2>/dev/null | head -1)"
+        if [ -n "$pid" ] && [ -r "/proc/$pid/stat" ]; then
+            start="$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null)"
+            btime="$(awk '{print $1}' /proc/uptime 2>/dev/null | cut -d. -f1)"
+            hz=100                       # CONFIG_HZ на всех целях OpenWrt, где мы собираемся
+            [ -n "$start" ] && [ -n "$btime" ] && up=$((btime - start / hz))
+            [ "$up" -lt 0 ] && up=0
+        fi
+        json_add_int uptime "$up"
+
+        # Сколько устройств сейчас ходит В СЕТЬ — а не «через туннель», и это важная разница.
+        #
+        # Привязать соединение к выходу нечем: движок ставит метку ПАКЕТУ, а не соединению
+        # (ct mark он не пишет), поэтому в conntrack следа выхода нет. Считать здесь «клиентов
+        # туннеля» значило бы выдать за них всех, кто вообще что-то открыл, — число выглядело бы
+        # осмысленным и было бы неверным.
+        #
+        # Поэтому считаем то, что можно: разные адреса-источники из локальной сети в conntrack.
+        # Имя поля говорит именно это, и интерфейс подписывает его так же. Настоящий счёт по
+        # выходу появится, когда движок начнёт помечать соединение, — тогда сюда добавится ещё
+        # одно поле, а это останется значить прежнее.
+        active=0
+        lan="$(uci -q get network.lan.ipaddr | cut -d. -f1-3)"
+        if [ -r /proc/net/nf_conntrack ] && [ -n "$lan" ]; then
+            active="$(awk -v pfx="src=$lan." '
+                index($0, pfx) { if (match($0, /src=[0-9.]+/)) seen[substr($0, RSTART+4, RLENGTH-4)] = 1 }
+                END { n = 0; for (k in seen) n++; print n }' /proc/net/nf_conntrack 2>/dev/null)"
+            [ -z "$active" ] && active=0
+        fi
+        json_add_int active_clients "$active"
+        json_dump
+        ;;
+
+    outbound_probe)
+        # Отклик по ОДНОМУ выходу за вызов — по той же причине, что у vless_probe: проверка
+        # упирается в таймаут, и «проверить все» не уложилось бы в срок жизни вызова ubus.
+        #
+        # Два разных способа, потому что это два разных вопроса. У vless отклик мерит сам
+        # движок: ICMP через TUN не ходит вовсе, и ping показал бы «нет ответа» у исправного
+        # туннеля. У обычного устройства меряем ping через него.
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var output output
+        [ -n "$output" ] || fail "не указан выход"
+        kind=''
+        for o in $("$STEER" outputs --kind vless --spec "$SPEC" 2>/dev/null); do
+            [ "$o" = "$output" ] && kind=vless
+        done
+        json_init
+        json_add_string output "$output"
+        if [ "$kind" = vless ]; then
+            out="$("$STEER" vless-probe "$output" --node -1 --timeout 6 --spec "$SPEC" 2>/dev/null)"
+            ms="$(printf '%s' "$out" | sed -n 's/.*"ttfb_ms":[ ]*\([0-9]*\).*/\1/p')"
+            case "$ms" in
+                ''|*[!0-9]*) json_add_string state 'нет ответа'; json_add_int ms -1 ;;
+                *) json_add_string state ok; json_add_int ms "$ms" ;;
+            esac
+            json_add_string how 'через туннель: ICMP по нему не ходит, меряет движок'
+        else
+            dev="$("$STEER" status --spec "$SPEC" 2>/dev/null |
+                   sed -n "s/.*\"$output\":{[^}]*\"device\":\"\([^\"]*\)\".*/\1/p" | head -1)"
+            if [ -z "$dev" ]; then
+                json_add_string state 'нет устройства'; json_add_int ms -1
+            else
+                r="$(ping -c 1 -W 3 -I "$dev" 1.1.1.1 2>/dev/null | sed -n 's/.*time=\([0-9.]*\).*/\1/p' | head -1)"
+                case "$r" in
+                    '') json_add_string state 'нет ответа'; json_add_int ms -1 ;;
+                    *)  json_add_string state ok; json_add_int ms "${r%%.*}" ;;
+                esac
+            fi
+            json_add_string how 'ping через устройство выхода'
+        fi
+        json_dump
+        ;;
+
+    leases)
+        # Аренды DHCP — чтобы «кого касается» выбирали из имён устройств, а не набирали MAC
+        # руками. Опечатка в MAC не совпадёт ни с чем и не пожалуется: правило просто не будет
+        # действовать, и объяснить это человеку будет нечем.
+        json_init
+        json_add_array leases
+        while read -r _exp mac ip name _rest; do
+            [ -n "$mac" ] || continue
+            json_add_object
+            json_add_string mac "$mac"
+            json_add_string ip "$ip"
+            # «*» в файле аренд значит «имени не сообщил». Показывать звёздочку человеку
+            # незачем — пусть будет пусто, а интерфейс подставит адрес.
+            [ "$name" = '*' ] && name=''
+            json_add_string name "$name"
+            json_close_object
+        done < /tmp/dhcp.leases 2>/dev/null
+        json_close_array
+        json_dump
         ;;
 
     engine_state)

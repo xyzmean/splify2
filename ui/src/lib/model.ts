@@ -89,6 +89,13 @@ export type DomainMode = 'fakeip' | 'realip'
 
 export interface Channel {
     name: string
+    /** Выключенное правило лежит в спеке, но в правила ядра не превращается — движок его
+     *  пропускает. Поля нет — значит включено: спека, написанная до него, обязана значить то же.
+     *
+     *  Прежде интерфейс обходился без этого поля: вынимал канал из спеки и держал у себя. Работало,
+     *  но канал становился невидим движку — ни status, ни explain о нём не знали, и «почему сайт не
+     *  идёт» приходилось объяснять тем, чего в спеке нет. */
+    enabled?: boolean
     /** Who: subnets or addresses. Empty means the spec's from_default. */
     from?: string[]
     /** Arrays, like the engine: several lists feeding one channel is the normal case,

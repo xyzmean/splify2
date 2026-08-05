@@ -17,42 +17,13 @@ import RuleEditor, { pathFor, selectedIds, isDomains } from '@/components/tabs/R
  *  об одном, и человек не знал, какое победит. Каталог теперь только справка.
  */
 
-/** Выключенные правила.
+/** Выключение — поле спеки, а не память интерфейса.
  *
- *  Гасить правило, не удаляя, — то, чего просят чаще всего («отключу на вечер»), а поля
- *  `enabled` в спеке движка нет: он знает только `channels`, и всё, что там лежит, применяется.
- *
- *  Поэтому выключенное правило ВЫНИМАЕТСЯ из спеки и лежит в памяти интерфейса вместе со своим
- *  местом в порядке. Так оно и правда не действует — движок его не видит вовсе, — а порядок
- *  восстанавливается при включении. Когда в движке появится `enabled`, это уедет туда, и
- *  память останется пустой.
- *
- *  Альтернативой было держать его в спеке с признаком и учить движок пропускать — но тогда до
- *  появления такого движка правило продолжало бы работать, а выключатель показывал бы обратное.
- *  Врать выключателем нельзя. */
-interface Off {
-    at: number
-    ch: Channel
-}
-
-interface Memo {
-    v: 1
-    off?: Off[]
-    /** Память мастера прежних версий. Читаем и пишем обратно НЕ РАЗБИРАЯ: выбросив её, мы бы
-     *  сломали установки, где она ещё что-то значит. */
-    dests?: unknown
-}
-
-async function memoLoad(): Promise<Memo> {
-    try {
-        const r = await rpc.uiGet()
-        if (!r.state) return { v: 1 }
-        const m = JSON.parse(r.state) as Memo
-        return m && typeof m === 'object' ? { ...m, v: 1 } : { v: 1 }
-    } catch {
-        return { v: 1 }
-    }
-}
+ *  Раньше выключенное правило ВЫНИМАЛОСЬ из спеки и лежало в памяти интерфейса: движок про
+ *  `enabled` не знал, а держать правило в спеке с признаком было нельзя — оно продолжало бы
+ *  работать, и выключатель врал бы. Теперь движок это поле понимает и пропускает такое правило,
+ *  поэтому оно остаётся на своём месте в порядке, видно движку (status, explain) и не действует.
+ */
 
 function describe(ch: Channel, lists: ListEntry[]) {
     const ids = selectedIds(ch, lists)
@@ -89,7 +60,6 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
     const [spec, setSpec] = useState<Spec | null>(null)
     const [lists, setLists] = useState<ListEntry[]>([])
     const [local, setLocal] = useState<Record<string, { count: number; mtime: number }>>({})
-    const [memo, setMemo] = useState<Memo>({ v: 1 })
     const [open, setOpen] = useState<number | null>(null)
     const [dirty, setDirty] = useState(false)
     const [busy, setBusy] = useState(false)
@@ -98,7 +68,6 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
         rpc.specGet().then(setSpec).catch(() => setSpec(EMPTY_SPEC))
         rpc.manifest().then((m) => setLists(toLists(m).lists)).catch(() => setLists([]))
         rpc.localLists().then((d) => setLocal(d.files || {})).catch(() => setLocal({}))
-        void memoLoad().then(setMemo)
     }, [])
 
     function edit(next: Spec) {
@@ -161,30 +130,13 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
         setOpen(spec.channels.length)
     }
 
-    /** Выключить: вынуть из спеки и запомнить место. Включить: вернуть на место. */
-    async function toggle(i: number, on: boolean) {
+    /** Переключить правило. Одно поле спеки — и порядок, и видимость движку сохраняются. */
+    function toggle(i: number, on: boolean) {
         if (!spec) return
-        let next: Spec
-        let off: Off[]
-        if (on) {
-            const rec = (memo.off || [])[i]
-            if (!rec) return
-            off = (memo.off || []).filter((_, k) => k !== i)
-            const channels = spec.channels.slice()
-            channels.splice(Math.min(rec.at, channels.length), 0, rec.ch)
-            next = { ...spec, channels }
-        } else {
-            const ch = spec.channels[i]
-            off = [...(memo.off || []), { at: i, ch }]
-            next = { ...spec, channels: spec.channels.filter((_, k) => k !== i) }
-        }
-        const m = { ...memo, v: 1 as const, off }
-        setMemo(m)
-        edit(next)
-        // Память пишем сразу: она не часть спеки, и держать её до «Применить» значило бы
-        // потерять выключенное правило при перезагрузке страницы.
-        await rpc.uiSet(JSON.stringify(m)).catch(() => {})
-        setOpen(null)
+        edit({
+            ...spec,
+            channels: spec.channels.map((c, k) => (k === i ? { ...c, enabled: on } : c)),
+        })
     }
 
     async function save(andApply: boolean) {
@@ -225,7 +177,6 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
     if (!spec) return <div className="p-5 text-sm text-sp-muted-foreground">Загрузка…</div>
 
     const outputs = live.status?.outputs || {}
-    const off = memo.off || []
 
     if (open !== null && spec.channels[open]) {
         const ch = spec.channels[open]
@@ -274,8 +225,8 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
                 </Button>
             </div>
 
-            <div className="overflow-hidden rounded-md border border-sp-border bg-sp-card shadow-card">
-                <table className="w-full text-sm">
+            <div className="overflow-x-auto rounded-md border border-sp-border bg-sp-card shadow-card">
+                <table className="w-full min-w-[34rem] text-sm">
                     <thead>
                         <tr className="border-b border-sp-border text-left text-xs uppercase tracking-wide text-sp-muted-foreground">
                             <th className="px-3 py-2">Что перенаправляем</th>
@@ -287,19 +238,27 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
                     <tbody>
                         {spec.channels.map((ch, i) => {
                             const o = outputs[ch.out]
+                            const on = ch.enabled !== false
                             return (
-                                <tr key={`on-${i}`} className="border-b border-sp-border/50 last:border-b-0">
+                                <tr
+                                    key={`rule-${i}`}
+                                    /* Выключенное приглушено, но НА ВИДУ и на своём месте: спрятанное
+                                       правило человек считает удалённым и заводит второе такое же, а
+                                       уехавшее вниз меняет порядок, то есть приоритет. */
+                                    className={`border-b border-sp-border/50 last:border-b-0 ${on ? '' : 'opacity-50'}`}
+                                >
                                     <td className="px-3 py-2">
                                         <div className="flex items-start gap-3">
                                             <Switch
-                                                on
-                                                label={`Выключить правило ${ch.name}`}
-                                                onClick={() => void toggle(i, false)}
+                                                on={on}
+                                                label={on ? `Выключить правило ${ch.name}` : `Включить правило ${ch.name}`}
+                                                onClick={() => toggle(i, !on)}
                                             />
                                             <div className="min-w-0">
                                                 <div className="truncate font-medium">{ch.name}</div>
                                                 <div className="truncate text-xs text-sp-muted-foreground">
                                                     {describe(ch, lists)}
+                                                    {!on && ' · выключено'}
                                                 </div>
                                             </div>
                                         </div>
@@ -351,32 +310,7 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
                             )
                         })}
 
-                        {/* Выключенные — приглушённые, но НА ВИДУ: спрятанное правило человек
-                            считает удалённым и заводит второе такое же. */}
-                        {off.map((rec, i) => (
-                            <tr key={`off-${i}`} className="border-b border-sp-border/50 opacity-50 last:border-b-0">
-                                <td className="px-3 py-2">
-                                    <div className="flex items-start gap-3">
-                                        <Switch
-                                            on={false}
-                                            label={`Включить правило ${rec.ch.name}`}
-                                            onClick={() => void toggle(i, true)}
-                                        />
-                                        <div className="min-w-0">
-                                            <div className="truncate font-medium">{rec.ch.name}</div>
-                                            <div className="truncate text-xs text-sp-muted-foreground">
-                                                {describe(rec.ch, lists)} · выключено
-                                            </div>
-                                        </div>
-                                    </div>
-                                </td>
-                                <td className="px-3 py-2 text-sp-muted-foreground">{whoText(rec.ch)}</td>
-                                <td className="px-3 py-2 text-sp-muted-foreground">{rec.ch.out}</td>
-                                <td />
-                            </tr>
-                        ))}
-
-                        {spec.channels.length === 0 && off.length === 0 && (
+                        {spec.channels.length === 0 && (
                             <tr>
                                 <td colSpan={4} className="px-3 py-8 text-center text-sm text-sp-muted-foreground">
                                     Правил нет — весь трафик идёт напрямую.
@@ -426,9 +360,14 @@ function Switch({ on, label, onClick }: { on: boolean; label: string; onClick: (
                 on ? 'border-sp-primary bg-sp-primary' : 'border-sp-border bg-sp-muted'
             }`}
         >
+            {/* Цвет ползунка — от токенов, а не белый. На светлой теме дорожка выключенного
+                состояния сама светлая (#f4f5f7), и белый ползунок на ней исчезал: выключатель
+                выглядел пустой рамкой, по которой не понять, включено или нет. */}
             <span
-                className={`block h-4 w-4 rounded-full bg-white transition-transform ${
-                    on ? 'translate-x-4' : 'translate-x-0.5'
+                className={`block h-4 w-4 rounded-full transition-transform ${
+                    on
+                        ? 'translate-x-4 bg-sp-primary-foreground'
+                        : 'translate-x-0.5 bg-sp-muted-foreground'
                 }`}
             />
         </button>

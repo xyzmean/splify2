@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowLeft, Search, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { rpc } from '@/lib/rpc'
 import { type Channel, type ListEntry, type OutputStatus } from '@/lib/model'
 
 /** Редактор правила — на месте таблицы, а не в модальном окне.
@@ -50,6 +51,12 @@ export default function RuleEditor({
     ch, index, lists, local, outputs, clash, onChange, onClose, onDelete,
 }: Props) {
     const [q, setQ] = useState('')
+    /** Аренды DHCP — чтобы устройства выбирали по имени, а не набирали MAC руками. Опечатка в
+     *  MAC не совпадёт ни с чем и не пожалуется: правило просто не будет действовать. */
+    const [leases, setLeases] = useState<{ mac: string; ip: string; name: string }[]>([])
+    useEffect(() => {
+        rpc.leases().then((r) => setLeases(r.leases || [])).catch(() => setLeases([]))
+    }, [])
     const kind: 'prefixes' | 'domains' = isDomains(ch) ? 'domains' : 'prefixes'
     const chosen = selectedIds(ch, lists)
     const chosenEntries = lists.filter((l) => chosen.includes(l.id))
@@ -227,9 +234,45 @@ export default function RuleEditor({
                             </label>
                             {!!ch.from?.length && (
                                 <>
+                                    {/* Устройства из аренд DHCP. Адрес у устройства меняется — DHCP
+                                        выдаёт другой после перезагрузки, и правило начинает касаться
+                                        не того; MAC живёт, пока живёт устройство. Поэтому в правило
+                                        кладём MAC, а адрес показываем только чтобы узнать устройство. */}
+                                    {leases.length > 0 && (
+                                        <div className="max-h-32 overflow-y-auto rounded-md border border-sp-border">
+                                            {leases.map((l) => {
+                                                const on = (ch.from || []).includes(l.mac)
+                                                return (
+                                                    <label
+                                                        key={l.mac}
+                                                        className="flex items-center gap-2 border-b border-sp-border/50 px-2 py-1 text-sm last:border-b-0"
+                                                    >
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={on}
+                                                            onChange={() => {
+                                                                const cur = ch.from || []
+                                                                const next = on
+                                                                    ? cur.filter((x) => x !== l.mac)
+                                                                    : [...cur.filter((x) => x.includes(':')), l.mac]
+                                                                onChange({ ...ch, from: next.length ? next : [''] })
+                                                            }}
+                                                            className="shrink-0"
+                                                        />
+                                                        <span className="min-w-0 flex-1 truncate">
+                                                            {l.name || l.ip}
+                                                        </span>
+                                                        <span className="shrink-0 font-mono text-xs text-sp-muted-foreground">
+                                                            {l.mac}
+                                                        </span>
+                                                    </label>
+                                                )
+                                            })}
+                                        </div>
+                                    )}
                                     <input
                                         value={(ch.from || []).join(', ')}
-                                        placeholder="192.168.1.50, 192.168.1.0/24"
+                                        placeholder="192.168.1.50, 192.168.1.0/24 или MAC"
                                         onChange={(e) => {
                                             const v = e.currentTarget.value
                                                 .split(',')
@@ -239,12 +282,23 @@ export default function RuleEditor({
                                         }}
                                         className="w-full rounded-md border border-sp-border bg-sp-background px-2 py-1.5 font-mono text-sm"
                                     />
-                                    {/* MAC движок пока не понимает: «кого касается» это `ip saddr`.
-                                        Обещать выбор по MAC в интерфейсе раньше, чем он есть в
-                                        движке, значит нарисовать поле, которое молча не работает. */}
+                                    {/* Смешивать нельзя, и это не наша прихоть: nft не умеет «или»
+                                        внутри правила, поэтому движок такую спеку отвергает. Сказать
+                                        это здесь дешевле, чем получить отказ при сохранении. */}
                                     <p className="text-xs text-sp-muted-foreground">
-                                        Адреса и подсети. Выбор по MAC движок пока не умеет.
+                                        Либо адреса и подсети, либо MAC-адреса — вместе в одном правиле
+                                        нельзя. MAC виден только у соседа по сети: за вторым роутером в
+                                        пакете будет его MAC, и правило накроет всех, кто за ним.
                                     </p>
+                                    {(() => {
+                                        const macs = (ch.from || []).filter((x) => x.includes(':')).length
+                                        const mixed = macs > 0 && macs !== (ch.from || []).filter(Boolean).length
+                                        return mixed ? (
+                                            <p className="text-xs text-sp-destructive">
+                                                Здесь и адреса, и MAC — движок такое правило отвергнет.
+                                            </p>
+                                        ) : null
+                                    })()}
                                 </>
                             )}
                         </div>

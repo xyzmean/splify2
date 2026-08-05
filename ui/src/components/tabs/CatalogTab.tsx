@@ -134,8 +134,8 @@ export default function CatalogTab({ onUseInRule }: Props) {
                 </div>
             </div>
 
-            <div className="overflow-hidden rounded-md border border-sp-border bg-sp-card shadow-card">
-                <table className="w-full text-sm">
+            <div className="overflow-x-auto rounded-md border border-sp-border bg-sp-card shadow-card">
+                <table className="w-full min-w-[38rem] text-sm">
                     <thead>
                         <tr className="border-b border-sp-border text-left text-xs uppercase tracking-wide text-sp-muted-foreground">
                             <th className="px-3 py-2">Запись</th>
