@@ -477,8 +477,8 @@ splify2: туннель $o перезапущен — сменился узел 
         # --force-overwrite: расширенный и базовый пакеты владеют одним /usr/sbin/steer,
         # и без этого замена одного на другой упирается в «файл принадлежит другому пакету».
         # Удаляем предыдущие пакеты, чтобы избежать конфликтов (steer конфликтует со steer-extended)
-        apk del steer 2>/dev/null
-        apk del steer-extended 2>/dev/null
+        apk del steer >/dev/null 2>&1
+        apk del steer-extended >/dev/null 2>&1
         out="$(apk add --allow-untrusted --force-overwrite "$tmp" 2>&1)"
         rc=$?
         rm -f "$tmp"
