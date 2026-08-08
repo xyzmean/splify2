@@ -104,13 +104,36 @@
     line-height: 1.5;
     -webkit-text-size-adjust: 100%;
   }
-  .splify-react-root *,
-  .splify-react-root ::before,
-  .splify-react-root ::after {
+  /* Опять :where() вокруг класса, то есть специфичность 0-0-0 — ниже утилит.
+     Раньше этот сброс был 0-1-0 И НИЖЕ утилит в файле, поэтому `border-width: 0`
+     обнулял КАЖДУЮ утилиту border/border-b: рамки карточек и разделители строк в
+     списках просто не рисовались, а то, что всё-таки было видно в тёмной теме, —
+     это рамки самой темы. Заявка «граница по умолчанию нулевая» обязана быть
+     слабее, чем «у этого элемента граница есть». */
+  :where(.splify-react-root) *,
+  :where(.splify-react-root) ::before,
+  :where(.splify-react-root) ::after {
     box-sizing: border-box;
-    border-width: 0;
-    border-style: solid;
-    border-color: var(--sp-border);
+    border: 0 solid var(--sp-border);
+  }
+  /* Но 0-0-0 проигрывает и теме, а она рисует рамки по типам элементов, иногда
+     селектором длиннее наших утилит или с !important:
+       `.btn, button, select, input { border: 1px solid #dee2e6 }`,
+       `table > tbody > tr > td { border-top: 1px solid #252526 }` (0-0-3),
+       `table > tbody > tr > th { border-bottom: black 1px solid !important }`,
+       `.btn, button, select, input { border: 1px solid #3c3c3c !important }` (dark).
+     Гасим рамку там, где разметка её не просила: элементы со своей утилитой
+     border* исключены — у них ширина и цвет заданы намеренно. Так безрамочные
+     поля (поиск по каталогу — `bg-transparent` внутри уже обведённой строки)
+     перестают быть коробкой в коробке, а ячейки таблиц — получать чужие линии.
+
+     Список элементов ровно по чужим селекторам, ничего «на всякий случай»: цена
+     лишнего элемента здесь — что рамку, заданную утилитой ИЗДАЛЕКА (вида
+     `[&_tr]:border-b` на родителе, где у самого tr класса нет), правило погасит.
+     Поэтому рамку в разметке вешаем на сам элемент. */
+  .splify-react-root
+    :where(button, input, select, textarea, td, th):not([class*="border"]) {
+    border-width: 0 !important;
   }
   .splify-react-root h1,
   .splify-react-root h2,
@@ -128,6 +151,10 @@
   .splify-react-root h4 {
     font-size: inherit;
     font-weight: inherit;
+    /* Argon в тёмной теме красит сами заголовки: `h2 { background: #333 }`,
+       `h3 { background: #333333 }`. У нас заголовок — подпись внутри карточки, и
+       эта заливка превращала её в серую плашку во всю ширину секции. */
+    background: none;
   }
   .splify-react-root ol,
   .splify-react-root ul {
@@ -138,33 +165,85 @@
     color: inherit;
     text-decoration: inherit;
   }
-  /* :where() keeps these resets at .splify-react-root specificity (0-1-0) so
-     they lose ties against later utility classes — a plain `... button`
-     selector (0-1-1) silently beats every bg-* and text-* utility on buttons. */
-  .splify-react-root :where(button, input, select, textarea) {
+  /* Специфичность этих сбросов — РОВНО 0-0-1: класс спрятан внутри :where(), в
+     селекторе остаётся один тип элемента. Место у них одно возможное — между
+     темой и утилитами, и промахнуться нельзя ни в одну сторону.
+
+     Сверху тема: argon/cascade.css бьёт по `.btn, button, select, input`, то есть
+     тоже 0-0-1, и задаёт там `height: 2.5rem`, `padding: .5rem .75rem`,
+     `line-height: 1.5rem`. На равной специфичности выигрывает тот, кто ниже в
+     каскаде, а наш файл подключается в head ПОСЛЕ темы (см. home.js) — значит мы.
+
+     Снизу утилиты: `px-2`, `py-1`, `mt-1`, `text-xs`, `font-mono` — это 0-1-0, и
+     они обязаны выигрывать у сброса. Раньше селектор был
+     `.splify-react-root :where(button, input, …)`, то есть 0-1-0 И НИЖЕ утилит в
+     файле — сброс молча съедал их: `margin: 0` затирал `mt-1` у селектов,
+     `font: inherit` — `text-xs` и `font-mono` у полей. Выглядело это как «размер
+     шрифта и отступы не применились», хотя в разметке всё стояло. */
+  :where(.splify-react-root) button,
+  :where(.splify-react-root) input,
+  :where(.splify-react-root) select,
+  :where(.splify-react-root) textarea {
     font: inherit;
     color: inherit;
     margin: 0;
+    /* Ради этих трёх строк переписан селектор. Без них тема раздаёт нашим
+       контролам свои 40 пикселей высоты и внутренние отступы 8/12:
+         • у выключателя размер задан жёстко (h-5 w-9), поэтому чужие отступы
+           съедали внутреннюю коробку до 10×2 px, и ползунок — а он ровно 16×16 —
+           вылезал за правый край дорожки. Это и был «сломанный переключатель»;
+         • у полей и селектов вместо компактной строки выходила сорокапиксельная,
+           а `py-1` при height: 2.5rem вообще ни на что не влиял. */
+    padding: 0;
+    height: auto;
+    min-height: 0;
   }
-  .splify-react-root :where(button) {
+  :where(.splify-react-root) button {
     background: none;
     cursor: pointer;
   }
-  /* Checkboxes: Argon doesn't style these, but the browser default is inconsistent
-     across families and the box sits on the text baseline, not the center — hence
-     the visible "перекос" (skew). Pin the size, center it, and use the theme's
-     accent colour so a checked box matches the rest of the UI. */
-  .splify-react-root input[type="checkbox"] {
-    appearance: none;
-    -webkit-appearance: none;
-    width: 16px;
-    height: 16px;
+  /* Стрелку селекта тема рисует картинкой в фоне и освобождает ей место
+     `padding-right: 1.5rem`. Отступ у нас теперь свой (`px-2`), места под чужую
+     стрелку в нём нет — и она ложилась поверх текста. Возвращаем селекту
+     СОБСТВЕННУЮ отрисовку: браузер кладёт стрелку внутрь виджета сам и в
+     отступах не нуждается. */
+  :where(.splify-react-root) select {
+    appearance: auto;
+    -webkit-appearance: auto;
+    background-image: none;
+  }
+  /* Галочки и радио рисуем целиком сами, и здесь !important не украшение.
+     Тема не «немного другая» — она двигает и перекрашивает поверх нас, причём
+     через !important, так что порядком подключения тут не отделаться:
+       • argon/cascade.css: `label > input[type=checkbox] { top: .4rem; right: .2rem }`
+         — коробка уезжает на 6 пикселей вниз и на 3 влево от своей строки. Наш
+         селектор сильнее, но то, чего мы не объявили, тема объявляет за нас:
+         position: relative у нас был, а top/right — нет;
+       • argon/cascade.css: `input[type=checkbox] { width/height: 1rem !important }`
+         и `:checked { background-image: <галка.svg> !important }` — поверх нашей
+         галки ложилась вторая, чужая, и «отмечено» выглядело кашей;
+       • argon/dark.css: `select, input { background-color: transparent !important;
+         border: 1px solid #3c3c3c !important }` — отмеченная коробка теряла
+         акцентную заливку целиком, то есть отличить её от пустой было нельзя;
+       • bootstrap/cascade.css рисует и коробку, и галку своими ::before/::after.
+     Радио здесь же и по той же причине: своего оформления у него не было вовсе,
+     от темы ему достались height: 2.5rem и системный синий кружок мимо акцента. */
+  .splify-react-root input[type="checkbox"],
+  .splify-react-root input[type="radio"] {
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    width: 16px !important;
+    height: 16px !important;
     min-width: 16px;
-    border: 1.5px solid var(--sp-input, #ccc);
-    border-radius: 3px;
-    background: var(--sp-card);
+    padding: 0 !important;
+    border: 1.5px solid var(--sp-input, #ccc) !important;
+    background-color: var(--sp-card) !important;
+    background-image: none !important;
     cursor: pointer;
     position: relative;
+    /* Чужие смещения гасим явно — см. про top/right выше. */
+    top: 0;
+    right: 0;
     flex-shrink: 0;
     /* The row is a flex line, so the box centres on it — but Argon sets a
        line-height that leaves the default `vertical-align: baseline` sitting a
@@ -173,37 +252,52 @@
     vertical-align: middle;
     align-self: center;
     margin: 0;
-    transition: background 0.1s, border-color 0.1s;
+    transition: background-color 0.1s, border-color 0.1s;
   }
-  /* Тема LuCI рисует галочку СВОИМИ псевдоэлементами: bootstrap ставит
-     `input[type=checkbox]::before` с градиентной коробкой и `::after` с маской-галкой.
-     Пока они живы, поверх нашего оформления лежит чужое — коробка выходит двойной и
-     съезжает относительно текста. Гасим их, дальше рисуем сами. */
-  .splify-react-root input[type="checkbox"]::before {
+  .splify-react-root input[type="checkbox"] { border-radius: 3px; }
+  .splify-react-root input[type="radio"] { border-radius: 50%; }
+  /* Чужие псевдоэлементы гасим целиком, дальше рисуем свои. */
+  .splify-react-root input[type="checkbox"]::before,
+  .splify-react-root input[type="checkbox"]::after,
+  .splify-react-root input[type="radio"]::before,
+  .splify-react-root input[type="radio"]::after {
     content: none;
     display: none;
-  }
-  .splify-react-root input[type="checkbox"]::after {
-    content: none;
+    background: none;
     -webkit-mask-image: none;
     mask-image: none;
   }
-  .splify-react-root input[type="checkbox"]:checked {
-    background: var(--sp-primary, #5e72e4);
-    border-color: var(--sp-primary, #5e72e4);
+  .splify-react-root input[type="checkbox"]:checked,
+  .splify-react-root input[type="radio"]:checked {
+    background-color: var(--sp-primary, #5e72e4) !important;
+    border-color: var(--sp-primary, #5e72e4) !important;
   }
   .splify-react-root input[type="checkbox"]:checked::after {
     content: "";
+    display: block;
     position: absolute;
     left: 4px;
     top: 1px;
     width: 5px;
     height: 9px;
-    border: solid #fff;
+    border: solid var(--sp-primary-foreground, #fff);
     border-width: 0 2px 2px 0;
     transform: rotate(45deg);
   }
-  .splify-react-root input[type="checkbox"]:focus-visible {
+  .splify-react-root input[type="radio"]:checked::after {
+    content: "";
+    display: block;
+    position: absolute;
+    /* 16 минус две рамки по 1.5 — это 13; точка 7, значит по 3 с каждой стороны. */
+    left: 3px;
+    top: 3px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--sp-primary-foreground, #fff);
+  }
+  .splify-react-root input[type="checkbox"]:focus-visible,
+  .splify-react-root input[type="radio"]:focus-visible {
     outline: 2px solid var(--sp-primary, #5e72e4);
     outline-offset: 1px;
   }

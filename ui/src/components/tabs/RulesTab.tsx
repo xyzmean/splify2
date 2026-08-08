@@ -371,7 +371,11 @@ function Switch({ on, label, onClick }: { on: boolean; label: string; onClick: (
             aria-checked={on}
             aria-label={label}
             onClick={onClick}
-            className={`mt-0.5 h-5 w-9 shrink-0 rounded-full border transition-colors ${
+            /* p-0 и flex здесь — не для красоты: тема LuCI задаёт кнопкам свои
+               внутренние отступы, а у выключателя размер жёсткий, так что чужой
+               отступ выталкивал ползунок за край дорожки. Сброс есть и в index.css,
+               но контрол с фиксированной геометрией не должен на него полагаться. */
+            className={`mt-0.5 flex h-5 w-9 shrink-0 items-center p-0 rounded-full border transition-colors ${
                 on ? 'border-primary bg-primary' : 'border-border bg-muted'
             }`}
         >
