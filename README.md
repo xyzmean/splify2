@@ -1,137 +1,67 @@
-# splify2
+# splify2: Smart Routing & VPN UI for OpenWrt
 
-**Роутер сам решает, что пустить через VPN, а что оставить напрямую.** Отметили сервисы —
-YouTube, Telegram, Discord — и они работают на всех устройствах в доме. Без клиентов на
-телефоне, без «включить VPN» перед каждым видео, без замедления остального интернета.
+splify2 is a complete frontend and management layer for OpenWrt that allows your router to intelligently decide what traffic goes through a VPN and what remains direct. By simply selecting services (e.g., YouTube, Telegram, Discord), you can route them seamlessly for all devices in your home network—without requiring VPN clients on individual phones or PCs, and without slowing down your regular internet traffic.
 
-[![Telegram](https://img.shields.io/badge/Telegram-чат-2CA5E0?style=flat&logo=telegram)](https://t.me/ssplify)
-[![Поддержать](https://img.shields.io/badge/Поддержать-проект-f5365c?style=flat)](https://www.donationalerts.com/r/yo1nkxxd)
+[![Telegram](https://img.shields.io/badge/Telegram-chat-2CA5E0?style=flat&logo=telegram)](https://t.me/ssplify)
+[![Support Project](https://img.shields.io/badge/Support-project-f5365c?style=flat)](https://www.donationalerts.com/r/yo1nkxxd)
 
-## Установка в одну строку
+## Key Features
+
+- **Whole-Home Coverage:** Configure once on the router, and it works for all connected devices (phones, TVs, consoles, guests).
+- **Selective Routing:** Only selected services are routed through the VPN. Local banking, gaming, and regular browsing remain direct for full speed.
+- **High-Precision Domain Routing:** Routes traffic based on exact domain names, not just IP lists. This prevents massive IP blocks (like CDN IPs) from accidentally routing unrelated websites through your VPN.
+- **Multi-Tunnel Support:** Route different services through different VPNs (e.g., YouTube via Netherlands, Telegram via a personal WireGuard tunnel). Up to three distinct destinations are supported.
+- **Failover Capabilities:** Automatically switches to a backup server if the primary VPN fails. If all servers fail, traffic is blocked from leaking into the open internet.
+- **Automated Updates:** Categorized lists and services are automatically updated on a schedule from a central repository. No manual list management is required.
+- **Universal VPN Compatibility:** Supports direct VLESS/Reality subscription links, standalone `vless://` links, or existing WireGuard/AmneziaWG interfaces.
+
+## System Requirements
+
+- A router running **OpenWrt 24.10 or newer** (requires the `apk` package manager).
+- At least **1 MB** of free storage space.
+- One of the following:
+  - A VLESS/Reality subscription link.
+  - A standalone `vless://` link.
+  - A pre-configured WireGuard or AmneziaWG interface.
+
+## Installation
+
+Run the following command on your router to install splify2 automatically:
 
 ```sh
 sh -c "$(wget -qO- https://raw.githubusercontent.com/xyzmean/splify2/main/install.sh)"
 ```
 
-Скрипт определит роутер, поставит движок и интерфейс, включит службу. Дальше —
-**LuCI → Сервисы → splify2**.
+The script will detect your router's architecture, install the core routing engine (`steer`), set up the web interface, and enable the service. 
 
-Всё, что нужно от вас: ссылка на подписку VPN и галочки напротив сервисов.
+Once installed, navigate to **LuCI → Services → splify2** in your router's web interface to complete the setup.
 
-## Как это выглядит
+## Architecture & Responsibilities
 
-Первый экран — мастер. Два шага, и ни одного технического слова:
+splify2 acts as the control plane and user interface, but the actual packet routing is handled by the high-performance **[steer](https://github.com/xyzmean/steer)** engine.
 
-```
-● Работает · Нидерланды №2 · 57 мс
+- **splify2 (This Project):** Manages lists, UI, user preferences, and updates. It translates your choices into a configuration file for `steer`.
+- **steer:** A lightweight C engine that compiles the configuration into `nftables` rules, `fake-ip` DNS sets, and handles VLESS/Reality tunnels directly.
 
-1. Куда пускать
-   КУДА   подписка
-   [ Подписка или ссылка ✓ ]  [ Свой туннель ]
-     https:// или vless://       wireguard, amneziawg
-   [https://…  или  vless://…............]  [Подключить]
-                                            [+ Ещё направление]
+If the `steer` engine is not installed, the splify2 interface will prompt you to install it. You can choose between:
+- **Extended:** Includes built-in VLESS/Reality tunneling (recommended if you use subscription links).
+- **Base:** Only routing. Use this if you rely purely on existing WireGuard tunnels.
 
-2. Что пустить через VPN
-   [✓] YouTube    [✓] Telegram   [✓] Instagram
-   [ ] TikTok     [ ] Discord    [ ] Twitter / X
-   [ ] Не пускают из РФ            465 домен.
-   ▸ ХОСТИНГИ И CDN
+### Data Sources
+- Routing lists (IPs and Domains): [xyzmean/ru-bypass-ipsets](https://github.com/xyzmean/ru-bypass-ipsets)
+- Base domain lists: [itdoginfo/allow-domains](https://github.com/itdoginfo/allow-domains)
+- Core routing engine: [xyzmean/steer](https://github.com/xyzmean/steer)
 
-              [ Применить ]
-```
+## Development & Building
 
-С двумя направлениями к шагу 2 добавляется одна строка — «отмечаю в: 1. Нидерланды №2 /
-2. wg0», — и те же галочки распределяют сервисы между ними.
-
-Когда настройка перестаёт быть простой, интерфейс сам открывается в подробном виде: каналы,
-выходы, списки, состояние. Мастер остаётся в углу — подписку меняют чаще всего остального, и
-там это одно поле вместо трёх экранов.
-
-## Что вы получаете
-
-**Один раз на роутере — работает у всех.** Телефоны, телевизор, приставка, гости. Ничего не
-устанавливать на устройства, ничего не включать перед просмотром.
-
-**Полная скорость там, где VPN не нужен.** Через туннель идёт только отмеченное. Банк,
-госуслуги, локальные сервисы, игровые серверы — напрямую, без лишнего плеча и потери скорости.
-
-**Точность по доменам, а не по адресам.** «Пустить YouTube» продолжает работать, даже когда он
-отвечает с нового адреса. Списки адресов так не умеют — им приходится либо промахиваться, либо
-забирать заодно чужие сайты с того же адреса.
-
-**Не уводит лишнего.** Сервисы за общими CDN — а это половина интернета — покрываются
-доменами, а адреса Cloudflare и хостингов из списков вычищены. Иначе одна галочка тянула бы в
-туннель тысячи посторонних сайтов.
-
-**Свой VPN не обязателен, и подписка тоже.** Одно поле принимает и ссылку на подписку, и
-обычную `vless://` — например, одну, которую дал знакомый со своим сервером. Есть свой
-WireGuard или AmneziaWG — используйте его, интерфейс это умеет.
-
-**Несколько направлений сразу.** YouTube — через Нидерланды, Telegram — через свой WireGuard,
-остальное напрямую. До трёх направлений, и распределяются они теми же галочками: выбрали куда,
-отметили что.
-
-**Продолжает работать, когда сервер падает.** Несколько серверов в порядке предпочтения:
-первый живой побеждает, возврат наверх происходит сам. А если не отвечает ни один — трафик не
-утекает в открытый интернет молча, и вы об этом узнаёте.
-
-**Списки обновляются сами.** Категории и сервисы приезжают из общего каталога по расписанию;
-скачивать руками ничего не нужно.
-
-## Что нужно
-
-* Роутер с OpenWrt 24.10 или новее (нужен пакетный менеджер `apk`).
-* Одно из трёх: ссылка на подписку, одна ссылка `vless://` (например, от знакомого со своим
-  сервером) или уже настроенный туннель WireGuard/AmneziaWG.
-* Около мегабайта свободного места.
-
-Сервисы, готовые к выбору: YouTube, Telegram, Discord, Instagram и Facebook, WhatsApp,
-Twitter / X, TikTok, Roblox, HDRezka, Google AI, Google Meet, Google Play, Netflix — и
-категории целиком: «Закрыто из РФ», «Не пускают из РФ», новости, аниме, 18+.
-
-## Движок ставится из интерфейса
-
-Маршрутизацией занимается отдельная программа — [steer](https://github.com/xyzmean/steer).
-Если её нет, интерфейс это увидит и предложит поставить: выбор версии, выбор варианта и
-объяснение прямо на экране, а не в документации.
-
-Вариантов два, и разница одна:
-
-* **расширенный** — поднимает туннель VLESS/Reality сам. Вставили ссылку подписки, и всё.
-  Берите его, если своего туннеля ещё нет;
-* **базовый** — только маршрутизация, туннель ваш. Берите, если WireGuard уже работает.
-
-## Разделение ответственности
-
-steer решает, куда идёт трафик, и больше ничего: он не качает списки, не рисует интерфейс и не
-имеет мнения о том, зачем вам это. Мнение — здесь: какие списки включены, какой туннель
-основной, что показать человеку.
-
-Поэтому у splify2 нет своей модели маршрутизации — он редактирует конфигурацию движка
-напрямую, а состояние показывает дословно от него, включая предупреждения вроде «у туннеля нет
-NAT». Без последнего маршрут применяется, счётчик растёт, а сайты молчат.
-
-| | откуда |
-|---|---|
-| списки по сервисам: адреса и домены вместе | [xyzmean/ru-bypass-ipsets](https://github.com/xyzmean/ru-bypass-ipsets) |
-| исходные доменные списки | [itdoginfo/allow-domains](https://github.com/itdoginfo/allow-domains) |
-| маршрутизация, fake-IP, наборы, VLESS | [xyzmean/steer](https://github.com/xyzmean/steer) |
-
-## Разработка
+The UI is built using React and Tailwind CSS, styled to match the OpenWrt Argon theme.
 
 ```sh
-cd ui && npm install && npm run build
-./build.sh                 # пакет luci-app-splify2 (нужен docker)
+cd ui 
+npm install 
+npm run build
+cd ..
+./build.sh                 # Builds the luci-app-splify2 package (requires Docker)
 ```
 
-Интерфейс — React с Tailwind, стилистика Argon: палитра читает CSS-переменные темы, поэтому
-выбранный акцентный цвет и тёмная тема подхватываются сами.
-
-Сборка проверяет себя. `check:cn` сверяет свою реализацию `tw-merge` с настоящей, а
-`check-dist` роняет сборку, если один чанк оказался доступен по двум URL — в splify 1 это
-стоило намертво сломанной вкладки, потому что браузер загружал библиотеку дважды.
-
-Релиз выпускается кнопкой: **Actions → Релиз → Run workflow**, вводится только номер версии.
-
-Пакет один на все роутеры: архитектуры в нём нет, весь бинарный код — в движке.
+The resulting package is architecture-independent, as all binary components are contained within the `steer` engine. Releases are managed automatically via GitHub Actions.

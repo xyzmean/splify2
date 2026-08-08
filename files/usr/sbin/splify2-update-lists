@@ -25,10 +25,18 @@ log() { logger -t splify2-update "$*"; [ -t 1 ] && echo "$*"; }
 # Одновременно два прогона перезапишут друг другу файлы, и канал в этот момент увидит
 # полупустой список. Блокировка каталогом: mkdir атомарен и работает без flock.
 if ! mkdir "$LOCK" 2>/dev/null; then
-    log "обновление уже идёт, выходим"
-    exit 0
+    lock_pid=$(cat "$LOCK/pid" 2>/dev/null)
+    if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+        log "обновление уже идёт (PID $lock_pid), выходим"
+        exit 0
+    else
+        log "Снимаем зависший lock от старого процесса"
+        rm -rf "$LOCK"
+        mkdir "$LOCK" || exit 1
+    fi
 fi
-trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+echo $$ > "$LOCK/pid"
+trap 'rm -rf "$LOCK" 2>/dev/null' EXIT INT TERM
 
 manifest_url() {
     u="$(uci -q get splify2.main.manifest_url)"
@@ -71,14 +79,24 @@ used_files() {  # ip|domains
 
 # id в манифесте по имени файла: url собирается из base_url и поля file, а не из id —
 # доменные лежат в domains/<id>.lst, и угадывать путь нельзя.
-url_for() {  # BASENAME -> URL или пусто
+MANIFEST_MAP=/tmp/splify2-manifest.map
+
+parse_manifest() {
     base="$(jsonfilter -i "$MANIFEST" -e '@.base_url' 2>/dev/null)"
     [ -n "$base" ] || return 1
+    rm -f "$MANIFEST_MAP"
     for key in categories domain_lists; do
-        f="$(jsonfilter -i "$MANIFEST" -e "@.$key[*].file" 2>/dev/null |
-             while read -r p; do [ "$(basename "$p")" = "$1" ] && { echo "$p"; break; }; done)"
-        [ -n "$f" ] && { printf '%s/%s' "$base" "$f"; return 0; }
+        jsonfilter -i "$MANIFEST" -e "@.$key[*].file" 2>/dev/null |
+        while read -r p; do
+            echo "$(basename "$p") $base/$p" >> "$MANIFEST_MAP"
+        done
     done
+}
+
+url_for() {  # BASENAME -> URL или пусто
+    [ -f "$MANIFEST_MAP" ] || return 1
+    url="$(awk -v v="$1" '$1 == v { print $2; exit }' "$MANIFEST_MAP")"
+    [ -n "$url" ] && { printf '%s' "$url"; return 0; }
     return 1
 }
 
@@ -87,6 +105,7 @@ mkdir -p "$LISTS" "$(dirname "$STAMP")" "$(dirname "$MANIFEST")"
 # Манифест первым: без свежего манифеста новые списки не найти, а старые могут
 # указывать на переехавшие файлы.
 download "$(manifest_url)" "$MANIFEST" || log "манифест не обновился, работаем со старым"
+parse_manifest
 
 BUDGET="$(budget)"
 [ "$BUDGET" -gt 0 ] || log "мало свободной памяти — подгонка отключена, списки берём как есть"
@@ -100,7 +119,7 @@ for kind in ip domains; do
         name="$(basename "$path")"
         url="$(url_for "$name")" || { log "$name: нет в манифесте, пропущен"; continue; }
 
-        new=/tmp/splify2-list.$$
+        new="$(mktemp /tmp/splify2-list.XXXXXX)"
         if ! download "$url" "$new"; then
             log "$name: не скачался, оставлен прежний"
             echo failed >> "$LOCK/flags"
