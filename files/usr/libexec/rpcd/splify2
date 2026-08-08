@@ -439,9 +439,8 @@ splify2: туннель $o перезапущен — сменился узел 
         json_init
         json_add_string arch "$(pkg_arch)"
         json_add_array versions
-        wget -qO- --timeout=20 "https://api.github.com/repos/xyzmean/steer/releases?per_page=10" 2>/dev/null |
-            grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"v\?\([^"]*\)"/\1/' |
-            while read -r v; do
+        for v in $(wget -qO- --timeout=20 "https://api.github.com/repos/xyzmean/steer/releases?per_page=10" 2>/dev/null |
+            grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"v\?\([^"]*\)"/\1/'); do
                 [ -n "$v" ] && json_add_string "" "$v"
             done
         json_close_array
