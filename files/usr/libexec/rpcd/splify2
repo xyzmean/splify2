@@ -454,8 +454,9 @@ splify2: туннель $o перезапущен — сменился узел 
         # человека, зависящий от того, поднимает ли туннель сам движок, и угадывать за него
         # значит либо положить лишнее, либо не положить нужное и получить «выход vless не
         # работает» без объяснения.
-        ver="$(jsonfilter -s "$2" -e '@.version' 2>/dev/null)"
-        ext="$(jsonfilter -s "$2" -e '@.extended' 2>/dev/null)"
+        read -r input
+        ver="$(jsonfilter -s "$input" -e '@.version' 2>/dev/null)"
+        ext="$(jsonfilter -s "$input" -e '@.extended' 2>/dev/null)"
         arch="$(pkg_arch)"
         json_init
         case "$ver" in
