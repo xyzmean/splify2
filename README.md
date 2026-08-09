@@ -52,6 +52,10 @@ If the `steer` engine is not installed, the splify2 interface will prompt you to
 - Base domain lists: [itdoginfo/allow-domains](https://github.com/itdoginfo/allow-domains)
 - Core routing engine: [xyzmean/steer](https://github.com/xyzmean/steer)
 
+## Documentation
+
+- [rpcd-api.md](docs/rpcd-api.md): Contract for the `splify2` ubus/rpcd object — every method's input (JSON on stdin) and output, the error object shape, and the ACL grouping.
+
 ## Development & Building
 
 The UI is built using React and Tailwind CSS, styled to match the OpenWrt Argon theme.
