@@ -136,9 +136,11 @@ export default function OutboundsTab({ live }: { live: Live }) {
         if (!to || to === from) return
         if (!NAME_RE.test(to)) { notify('Имя: латиница, цифры, дефис или подчёркивание', 'warning'); return }
         if (spec.outputs[to]) { notify(`Выход «${to}» уже есть`, 'warning'); return }
-        // Rebuilt rather than mutated so the ORDER of outputs survives a rename — the
-        // engine assigns marks by first appearance, and a reshuffle would hand existing
-        // tunnels different marks.
+        // Rebuilt rather than mutated so the ORDER of outputs survives a rename. Marks
+        // are assigned BY NAME from a persisted registry (spec.c registry_assign), not
+        // by position — so a rename means the output gets a fresh mark, and the engine
+        // sweeps the old name's rule on the next apply. Order still matters for which
+        // free mark bit a NEW output picks up.
         const outputs: Record<string, Output> = {}
         for (const [k, v] of Object.entries(spec.outputs))
             if (k === from) outputs[to] = { ...v, name: to }
