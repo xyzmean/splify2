@@ -36,6 +36,37 @@ The script will detect your router's architecture, install the core routing engi
 
 Once installed, navigate to **LuCI → Services → splify2** in your router's web interface to complete the setup.
 
+## Uninstall
+
+Two packages are installed: the web interface (`luci-app-splify2`) and the engine — `steer`, or
+`steer-extended` if you chose the VLESS-capable build.
+
+```sh
+apk del luci-app-splify2
+apk del steer-extended 2>/dev/null; apk del steer 2>/dev/null
+```
+
+Kernel state needs no manual cleanup: the engine is stopped before the package is removed, and its
+`stop` deletes the `inet steer` nftables table and drops the `ip rule` / `ip route` entries it
+created.
+
+Configuration is deliberately left behind by the package manager. Remove it if you want nothing
+left:
+
+```sh
+rm -rf /etc/steer          # spec.json and downloaded lists
+rm -rf /etc/splify2        # list manifest
+rm -rf /var/lib/steer      # mark registry and fake-IP database
+rm -rf /var/lib/splify2    # last list update timestamp
+uci -q delete splify2 && uci commit splify2   # subscription settings, if any were set
+```
+
+Then restart `rpcd` (`/etc/init.d/rpcd restart`) so LuCI drops the menu entry. If a list-update cron
+job was added by a third-party installer, it is not ours to remove — check `crontab -l`.
+
+To verify nothing is left: `nft list table inet steer` should report that the table does not exist,
+and `ip rule show` should contain no `fwmark 0x...` lines from the engine.
+
 ## Architecture & Responsibilities
 
 splify2 acts as the control plane and user interface, but the actual packet routing is handled by the high-performance **[steer](https://github.com/xyzmean/steer)** engine.
