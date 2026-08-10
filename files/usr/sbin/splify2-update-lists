@@ -11,12 +11,16 @@
 # у них нет размера в элементах набора, набор заполняет резолвер по мере запросов.
 set -u
 
-STEER=/usr/sbin/steer
-SPEC=/etc/steer/spec.json
-LISTS=/etc/steer/lists
-MANIFEST=/etc/splify2/manifest.json
-STAMP=/var/lib/splify2/last-update
-LOCK=/var/lock/splify2-update.lock
+# Пути переопределяемы окружением — иначе скрипт невозможно проверить, не трогая
+# рабочую систему: всё, к чему он обращается, задано абсолютными путями. Значения по
+# умолчанию прежние, на роутере ничего не меняется; переменные выставляет только
+# tests/listsmatch.sh.
+STEER=${STEER:-/usr/sbin/steer}
+SPEC=${SPEC:-/etc/steer/spec.json}
+LISTS=${LISTS:-/etc/steer/lists}
+MANIFEST=${MANIFEST:-/etc/splify2/manifest.json}
+STAMP=${STAMP:-/var/lib/splify2/last-update}
+LOCK=${LOCK:-/var/lock/splify2-update.lock}
 
 log() { logger -t splify2-update "$*"; [ -t 1 ] && echo "$*"; }
 
@@ -77,8 +81,15 @@ used_files() {  # ip|domains
     fi
 }
 
-# id в манифесте по имени файла: url собирается из base_url и поля file, а не из id —
-# доменные лежат в domains/<id>.lst, и угадывать путь нельзя.
+# Ключ карты — путь У ИЗДАТЕЛЯ (`domains/news.lst`, `news.lst`), а не basename. По
+# basename два разных списка сливаются в один ключ: в манифесте ru-bypass-ipsets
+# `news.lst` и `hodca.lst` есть и среди адресных (`categories`), и среди доменных
+# (`domain_lists/domains/news.lst`). `categories` перебирается первым, `url_for` берёт
+# первое совпадение — и доменный список качался по адресу адресного. Дальше проверка
+# содержимого видела CIDR там, где ждала домены, и оставляла прежний файл: доменные
+# списки этих категорий не обновлялись вообще, а в журнале стояло «не похоже на
+# domains-записи», то есть обвинение издателя вместо своей ошибки. То же ключевание по
+# полному пути уже сделано в rpcd (`local_path`), здесь оно приводится в соответствие.
 MANIFEST_MAP=/tmp/splify2-manifest.map
 
 parse_manifest() {
@@ -88,12 +99,12 @@ parse_manifest() {
     for key in categories domain_lists; do
         jsonfilter -i "$MANIFEST" -e "@.$key[*].file" 2>/dev/null |
         while read -r p; do
-            echo "$(basename "$p") $base/$p" >> "$MANIFEST_MAP"
+            echo "$(echo "$p" | sed 's|^/*||') $base/$p" >> "$MANIFEST_MAP"
         done
     done
 }
 
-url_for() {  # BASENAME -> URL или пусто
+url_for() {  # ПУТЬ_У_ИЗДАТЕЛЯ -> URL или пусто
     [ -f "$MANIFEST_MAP" ] || return 1
     url="$(awk -v v="$1" '$1 == v { print $2; exit }' "$MANIFEST_MAP")"
     [ -n "$url" ] && { printf '%s' "$url"; return 0; }
@@ -116,8 +127,11 @@ failed=0
 for kind in ip domains; do
     used_files "$kind" | sort -u | while read -r path; do
         [ -n "$path" ] || continue
-        name="$(basename "$path")"
-        url="$(url_for "$name")" || { log "$name: нет в манифесте, пропущен"; continue; }
+        # Путь в спеке — это local_path из rpcd, то есть $LISTS плюс путь у издателя.
+        # Снимаем префикс и получаем ровно тот ключ, которым карта и построена.
+        rel="${path#$LISTS/}"
+        name="$(basename "$path")"      # только для сообщений в журнале
+        url="$(url_for "$rel")" || { log "$rel: нет в манифесте, пропущен"; continue; }
 
         new="$(mktemp /tmp/splify2-list.XXXXXX)"
         if ! download "$url" "$new"; then
