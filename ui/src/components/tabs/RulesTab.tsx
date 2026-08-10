@@ -161,17 +161,65 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
             for (const ch of spec.channels)
                 for (const f of [...(ch.match.prefixes_files || []), ...(ch.match.domains_files || [])])
                     needed.add(f)
+            /* Пути, которых после этого цикла НЕТ на роутере. Раньше сообщение обещало
+             * «правило будет без неё», а путь оставался в правиле — и apply падал ЦЕЛИКОМ
+             * на первом же отсутствующем файле (die в движке): один недоступный сервер
+             * издателя блокировал всю маршрутизацию, а человек видел «сбой» после
+             * сообщения, которое обещало обратное. Теперь сообщение и исход совпадают. */
+            const gone = new Set<string>()
             for (const sv of services)
                 for (const p of sv.parts)
                     if (needed.has(pathFor(p.file))) {
                         const r = await rpc.listFetch(p.id, p.kind)
                             .catch(() => ({ ok: false }) as { ok: boolean })
-                        if (!r.ok)
-                            notify(`${sv.name}: часть «${p.name}» не скачалась — правило будет без неё`,
+                        if (r.ok) continue
+                        if (local[p.file.replace(/^\/+/, '')]) {
+                            /* Файл уже лежит на роутере — движку есть что читать, теряем
+                             * только свежесть. Это не повод трогать правило. */
+                            notify(`${sv.name}: часть «${p.name}» не обновилась — останется прежняя копия`,
                                    'warning')
+                        } else {
+                            gone.add(pathFor(p.file))
+                            notify(`${sv.name}: часть «${p.name}» не скачалась — правило применится без неё`,
+                                   'warning')
+                        }
                     }
 
-            const res = await rpc.specSet(JSON.stringify(spec))
+            let toSave = spec
+            if (gone.size) {
+                toSave = {
+                    ...spec,
+                    channels: spec.channels.map((ch) => {
+                        const pf = (ch.match.prefixes_files || []).filter((f) => !gone.has(f))
+                        const df = (ch.match.domains_files || []).filter((f) => !gone.has(f))
+                        const lost = pf.length + df.length <
+                            (ch.match.prefixes_files?.length || 0) + (ch.match.domains_files?.length || 0)
+                        if (!lost) return ch
+                        /* Правило, у которого не осталось ни одного файла, не удаляем и не
+                         * оставляем пустым (пустое движок отвергает) — ВЫКЛЮЧАЕМ, сохранив
+                         * выбор. Выключенное правило движок пропускает вместе с его файлами,
+                         * а когда списки скачаются, человек включит его на прежнем месте. */
+                        if (!pf.length && !df.length && !ch.match.any) {
+                            notify(`«${ch.name}»: ни один список не скачался — правило выключено`,
+                                   'warning')
+                            return { ...ch, enabled: false }
+                        }
+                        return {
+                            ...ch,
+                            match: {
+                                ...ch.match,
+                                ...(pf.length ? { prefixes_files: pf } : { prefixes_files: undefined }),
+                                ...(df.length
+                                    ? { domains_files: df }
+                                    : { domains_files: undefined, mode: undefined }),
+                            },
+                        }
+                    }),
+                }
+                setSpec(toSave)
+            }
+
+            const res = await rpc.specSet(JSON.stringify(toSave))
             if (!res.ok) throw new Error(res.error || 'не удалось сохранить')
             setLocal((await rpc.localLists()).files || {})
             setDirty(false)
