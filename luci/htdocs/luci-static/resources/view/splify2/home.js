@@ -25,6 +25,15 @@ return view.extend({
 		window.luci_rpc = rpc;
 		window.ui = ui;
 
+		// Таймаут ubus-вызовов. У LuCI по умолчанию 20 секунд, а steer_install
+		// скачивает пакет с GitHub (до 60 секунд по своему таймауту), list_fetch —
+		// списки у издателя. XHR обрывался ПЕРВЫМ, интерфейс честно показывал
+		// «сбой» — а установка при этом доделывалась в фоне и завершалась успехом.
+		// Хуже сообщения об ошибке только ложное: после него переустанавливают
+		// то, что уже стоит. 120 секунд покрывают оба долгих вызова с запасом;
+		// выставленное администратором значение больше нашего не трогаем.
+		if (!(Number(L.env.rpctimeout) >= 120)) L.env.rpctimeout = 120;
+
 		var cssId = 'splify2-app-css-' + (buildId || 'dev');
 		if (!document.getElementById(cssId)) {
 			var old = document.querySelector('link[id^="splify2-app-css"]');
