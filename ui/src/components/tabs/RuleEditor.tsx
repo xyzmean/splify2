@@ -79,11 +79,16 @@ export default function RuleEditor({
         const doms = new Set(ch.match.domains_files || [])
         for (const f of sv.prefixes) on ? pref.delete(pathFor(f)) : pref.add(pathFor(f))
         for (const f of sv.domains) on ? doms.delete(pathFor(f)) : doms.add(pathFor(f))
+        /* match расширяется, а не пересоздаётся: правило с `any` (или любым полем,
+         * которого эта форма не знает) при щелчке по галочке теряло его молча —
+         * «весь трафик» превращался в «только выбранное» без единого слова (I-012). */
         onChange({
             ...ch,
             match: {
-                ...(pref.size ? { prefixes_files: [...pref] } : {}),
-                ...(doms.size ? { domains_files: [...doms], mode: ch.match.mode ?? 'fakeip' } : {}),
+                ...ch.match,
+                prefixes_files: pref.size ? [...pref] : undefined,
+                domains_files: doms.size ? [...doms] : undefined,
+                mode: doms.size ? (ch.match.mode ?? 'fakeip') : undefined,
             },
         })
     }

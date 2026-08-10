@@ -145,7 +145,10 @@ export const rpc = {
      *  и причина, и есть то, чего в status нет вовсе: пустой набор при непустом списке,
      *  отсутствующий редирект DNS, незапущенный резолвер, обход DNS браузером и утечка IPv6. */
     diag: declare<{
-        checks: { id: string; verdict: 'ok' | 'warn' | 'fail'; what: string; why: string }[]
+        /* `note` — четвёртый вердикт движка: совет, а не находка (I-015). Тип обязан
+         * его знать, иначе switch по вердикту с exhaustive-проверкой молча съест
+         * неизвестное значение — ровно так «советы» и красились тревожным цветом. */
+        checks: { id: string; verdict: 'ok' | 'note' | 'warn' | 'fail'; what: string; why: string }[]
         warn: number
         fail: number
     }>('diag'),

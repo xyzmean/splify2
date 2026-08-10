@@ -56,6 +56,14 @@ export default function OutboundsTab({ live }: { live: Live }) {
         if (!spec) return
         const taken = new Set(Object.values(spec.outputs).map((o) => o.device))
         const free = devices.find((d) => !taken.has(d.name))
+        /* Без свободного устройства выход создавать нечестно: спека с пустым devices
+         * отвергается движком при сохранении, и человек спорил бы с интерфейсом,
+         * который сам это предложил (I-020). Ранний отказ со словами — дешевле. */
+        if (!free) {
+            notify('Свободных туннельных устройств нет — поднимите туннель (wireguard, ' +
+                   'amneziawg) или освободите устройство у другого выхода', 'warning')
+            return
+        }
         let name = free?.name?.replace(/[^A-Za-z0-9_-]/g, '') || 'tunnel'
         let n = 2
         while (spec.outputs[name]) name = `${free?.name || 'tunnel'}${n++}`

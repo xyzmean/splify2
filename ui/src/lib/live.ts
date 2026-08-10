@@ -114,7 +114,15 @@ export function useLive(): Live {
 
     useEffect(() => {
         let stop = false
+        /* Перекрывающиеся опросы. Круг на медленном роутере может не уложиться в пять
+         * секунд, и тогда два load() гонялись бы за prev.current: скорость считалась бы
+         * из разницы снимков, снятых с неверным интервалом (I-013). Опоздавший круг не
+         * ставится в очередь — следующий тик всё равно принесёт свежее. */
+        let inflight = false
         const load = async () => {
+            if (inflight) return
+            inflight = true
+            try {
             /* allSettled, а не all: отказ одного источника не должен уносить остальные.
              * Проверок состояния нет у старого движка, и это не повод гасить экран. */
             const [s, d, e, g, ni] = await Promise.allSettled([
@@ -157,6 +165,9 @@ export function useLive(): Live {
                 setSpeed({ ch: chs, dev: devs2 })
             }
             prev.current = { t: now, ch, dev }
+            } finally {
+                inflight = false
+            }
         }
         void load()
         const id = setInterval(() => void load(), PERIOD_MS)
