@@ -46,7 +46,8 @@
           "steer_install",
           "engine_stop",
           "engine_start",
-          "splify2_install"
+          "splify2_install",
+          "list_put"
         ]
       }
     }

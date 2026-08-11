@@ -10,8 +10,6 @@ OUT=out
 PKG=build/pkg
 RES="$PKG/www/luci-static/resources/splify2"
 
-command -v docker >/dev/null 2>&1 || { echo "нужен docker (сборка пакета в alpine)"; exit 1; }
-
 echo "splify2 $VERSION"
 
 # Каждый метод rpcd обязан быть в ACL LuCI, иначе он работает из ssh и НЕ работает из
@@ -20,10 +18,14 @@ echo "splify2 $VERSION"
 # доступа — и если у вызова есть запасной путь (а у нас у половины есть), страница молча
 # показывает «нет данных». Так уже уехали в релиз dev_stats, ui_get/ui_set, diag,
 # engine_state и установка движка: семь методов, проверенных не на том слое.
+#
+# Цифра в имени в наборе символов не случайна: без неё `splify2_versions` резался до
+# `splify`, барьер искал в ACL несуществующее имя и валился на верных данных. Заметить
+# это удалось только когда проверка стала запускаться без docker.
 acl=luci/root/usr/share/rpcd/acl.d/luci-app-splify2.json
 missing=''
 for m in $(sed -n '/^list)/,/^    ;;/p' files/usr/libexec/rpcd/splify2 |
-           grep -o 'json_add_object [a-z_]*' | awk '{print $2}'); do
+           grep -o 'json_add_object [a-z0-9_]*' | awk '{print $2}'); do
     grep -q "\"$m\"" "$acl" || missing="$missing $m"
 done
 [ -z "$missing" ] || {
@@ -31,6 +33,11 @@ done
     echo "из браузера они получат отказ доступа, из ssh будут работать"
     exit 1
 }
+
+# Docker нужен только для упаковки, поэтому проверяется здесь, а не в шапке. Пока он
+# стоял первым, ни один барьер выше не запускался на машине без docker — то есть ровно
+# там, где правят rpcd и ACL, проверить их было нечем.
+command -v docker >/dev/null 2>&1 || { echo "нужен docker (сборка пакета в alpine)"; exit 1; }
 
 # Цвета в Tailwind называются БЕЗ приставки sp-: `bg-card`, `text-muted-foreground`,
 # `bg-success`. Приставка живёт только у CSS-переменных (--sp-card), из которых конфиг эти

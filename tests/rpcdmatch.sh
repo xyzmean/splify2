@@ -140,7 +140,23 @@ EOF
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/logger"
 printf '#!/bin/sh\nexit 1\n' > "$T/bin/uci"
 printf '#!/bin/sh\nexit 1\n' > "$T/bin/ubus"
-printf '#!/bin/sh\nexit 0\n' > "$T/bin/curl"
+# curl: им ходит download(), то есть и списки издателя, и «свой список по ссылке».
+# Протокол отдельный от wget: через wget идут пакеты и GitHub API, и смешивать их в
+# одном журнале значило бы проверять «что-то скачалось» вместо «скачалось это».
+cat > "$T/bin/curl" <<'EOF'
+#!/bin/sh
+out=""; url=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o) out="$2"; shift 2 ;;
+        http*) url="$1"; shift ;;
+        *) shift ;;
+    esac
+done
+echo "$url" >> "$SANDBOX/curl.log"
+[ -n "$out" ] && printf 'remote.example\n10.1.0.0/16\n' > "$out"
+exit 0
+EOF
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/steer"
 chmod +x "$T/bin"/*
 
@@ -198,10 +214,13 @@ v = d.get(sys.argv[1])
 print("" if v is None else json.dumps(v, ensure_ascii=False) if isinstance(v,(list,dict,bool)) else v)' "$1"
 }
 
-reset_logs() { rm -f "$T/apk.log" "$T/initd.log" "$T/wget.log" "$T/rpcd-initd.log" "$T/disabled"; : > "$T/apk.log"; : > "$T/initd.log"; }
+reset_logs() { rm -f "$T/apk.log" "$T/initd.log" "$T/wget.log" "$T/curl.log" "$T/rpcd-initd.log" "$T/disabled"; : > "$T/apk.log"; : > "$T/initd.log"; }
 
 # Только то, что init.d МЕНЯЕТ. Запросы состояния (enabled) в протоколе тоже есть — их
 # делает сам скрипт, чтобы отчитаться, — но к порядку действий они не относятся.
+custom_domains_path()  { printf '%s/lists/custom/domains/%s.lst' "$T" "$1"; }
+custom_prefixes_path() { printf '%s/lists/custom/%s.lst' "$T" "$1"; }
+
 initd_actions() { grep -v '^enabled$' "$T/initd.log" | awk '{printf "%s ", $1}' | sed 's/ $//'; }
 
 # ---- сам скрипт вообще запускается --------------------------------------------
@@ -345,6 +364,81 @@ check "версия не вида X.Y.Z отвергается до скачив
       "false" "$(printf '%s' "$out" | jget ok)"
 check "при отказе по версии ничего не качалось (R-042)" \
       "" "$(grep -c . "$T/wget.log" 2>/dev/null | sed 's/^0$//')"
+
+# ---- R-037: свои списки доменов и адресов -------------------------------------
+# Вопрос задан снаружи (splicicd#8): маршрутизировать можно только то, что опубликовал
+# издатель. Движок сопоставляет исключительно по файлам, а каталог рисуется из манифеста,
+# поэтому свой .lst в /etc/steer/lists был виден local_lists — и не предлагался ни одному
+# правилу.
+#
+# Три способа ввода по решению владельца: текстом, файлом (тем же методом по частям) и
+# по ссылке. Чужой текст на входе движка обязан быть проверен здесь: спека применится, а
+# канал молча останется пустым, если формат не тот.
+out="$(rpcd list_put '{"name":"мой","kind":"domains","text":"example.org"}')"
+check "имя не из латиницы, цифр и дефиса отвергается (R-037)" \
+      "false" "$(printf '%s' "$out" | jget ok)"
+
+out="$(rpcd list_put '{"name":"../../etc/passwd","kind":"domains","text":"example.org"}')"
+check "выйти из каталога списков именем нельзя (R-037)" \
+      "false" "$(printf '%s' "$out" | jget ok)"
+
+out="$(rpcd list_put '{"name":"mine","kind":"domains","text":"Example.ORG\nsub.example.net\n# коммент\n\nне домен!\n"}')"
+check "доменный список принят (R-037)" "true" "$(printf '%s' "$out" | jget ok)"
+check "домены приведены к нижнему регистру, мусор отброшен (R-037)" \
+      "example.org sub.example.net" "$(tr '\n' ' ' < "$T/lists/custom/domains/mine.lst" | sed 's/ $//')"
+check "сколько строк отброшено — сказано числом, а не молчанием (R-037)" \
+      "1" "$(printf '%s' "$out" | jget dropped)"
+
+out="$(rpcd list_put '{"name":"nets","kind":"prefixes","text":"10.0.0.0/8\n192.0.2.1\nexample.org\n"}')"
+check "адресный список принят (R-037)" "true" "$(printf '%s' "$out" | jget ok)"
+check "одиночный адрес дополняется до /32, домен отброшен (R-037)" \
+      "10.0.0.0/8 192.0.2.1/32" "$(tr '\n' ' ' < "$T/lists/custom/nets.lst" | sed 's/ $//')"
+
+# Дописывание по частям — то, чем загружается файл: ubus не резиновый, и большой список
+# приезжает несколькими вызовами.
+rpcd list_put '{"name":"mine","kind":"domains","text":"second.example\n","append":true}' >/dev/null
+check "append дописывает, а не затирает (R-037)" \
+      "example.org sub.example.net second.example" \
+      "$(tr '\n' ' ' < "$T/lists/custom/domains/mine.lst" | sed 's/ $//')"
+
+out="$(rpcd list_put '{"name":"mine","kind":"domains","text":"only.example\n"}')"
+check "без append список заменяется целиком (R-037)" \
+      "only.example" "$(tr '\n' ' ' < "$T/lists/custom/domains/mine.lst" | sed 's/ $//')"
+
+reset_logs
+out="$(rpcd list_put '{"name":"remote","kind":"domains","url":"https://example.invalid/my.lst"}')"
+check "по ссылке качает роутер (R-037)" \
+      "yes" "$(grep -q 'example.invalid/my.lst' "$T/curl.log" 2>/dev/null && echo yes || echo no)"
+check "скачанное по ссылке проходит ту же проверку формата (R-037)" \
+      "remote.example" "$(tr '\n' ' ' < "$T/lists/custom/domains/remote.lst" | sed 's/ $//')"
+
+out="$(rpcd list_put '{"name":"empty","kind":"prefixes","text":"вообще не список\n"}')"
+check "список, из которого не осталось ни строки, не создаётся (R-037)" \
+      "false" "$(printf '%s' "$out" | jget ok)"
+check "и файла после этого нет (R-037)" \
+      "нет" "$([ -f "$T/lists/custom/empty.lst" ] && echo есть || echo нет)"
+
+# Удалять свой список тоже надо уметь: list_remove искал файл только через манифест,
+# поэтому своего в нём нет и удалить его было нечем.
+out="$(rpcd list_remove '{"name":"nets"}')"
+check "свой список удаляется по имени (R-037)" "true" "$(printf '%s' "$out" | jget ok)"
+check "доменный и адресный с одним именем не схлопываются (R-037)" \
+      "разные" "$([ "$(custom_domains_path mine)" != "$(custom_prefixes_path mine)" ] && echo разные || echo одно)"
+check "файл действительно убран (R-037)" \
+      "нет" "$([ -f "$T/lists/custom/nets.lst" ] && echo есть || echo нет)"
+
+# Тот же запрет, что и для списков издателя: канал, указывающий на файл, после удаления
+# не скомпилируется.
+rpcd list_put '{"name":"used","kind":"prefixes","text":"10.0.0.0/8\n"}' >/dev/null
+python3 - "$T/etc/spec.json" "$T/lists/custom/used.lst" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d['channels'][0]['match']['prefixes_files'].append(sys.argv[2])
+json.dump(d, open(sys.argv[1], 'w'))
+PY
+out="$(rpcd list_remove '{"name":"used"}')"
+check "занятый каналом свой список не удаляется (R-037)" \
+      "false" "$(printf '%s' "$out" | jget ok)"
 
 # Метод, которого нет в списке методов, ubus не покажет вовсе.
 out="$(rpcd_list)"

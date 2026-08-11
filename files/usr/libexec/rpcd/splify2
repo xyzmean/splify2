@@ -252,6 +252,57 @@ pkg_install() {  # ФАЙЛ [ИМЯ_ДЛЯ_СНЯТИЯ...]
     return $?
 }
 
+# Свои списки лежат отдельным подкаталогом, а не вперемешку со списками издателя.
+#
+# Иначе их не отличить: local_lists отдаёт всё, что лежит на диске, и «мой файл» от
+# «файла из манифеста» отличался бы только тем, есть ли такое имя в манифесте — то есть
+# менялся бы сам по себе при обновлении манифеста.
+CUSTOM=custom
+# Предел размера. Не перестраховка: overlay на роутере из отчётов теста — 6.9 МБ, и
+# список, который туда не влезет, положит не только себя. Мегабайта хватает на ~70 тысяч
+# доменов, чего для ручного списка заведомо достаточно.
+LIST_MAX_BYTES=1048576
+
+# Путь своего списка. Доменные лежат в подкаталоге, адресные — рядом, как у издателя.
+custom_path() {  # ИМЯ ВИД
+    case "$2" in
+        domains) printf '%s/%s/domains/%s.lst' "$LISTS" "$CUSTOM" "$1" ;;
+        *)       printf '%s/%s/%s.lst'         "$LISTS" "$CUSTOM" "$1" ;;
+    esac
+}
+
+# Чужой текст на входе движка. Проверяется ЗДЕСЬ, а не в интерфейсе: интерфейс можно
+# обойти, а последствие непроверенного списка молчаливое — спека применится, nft отвергнет
+# набор, и канал останется пустым без единого слова о причине.
+#
+# Что делаем с почти-верным: одиночный адрес дополняем до /32 (человек пишет 1.2.3.4, имея
+# в виду именно его), домены приводим к нижнему регистру и снимаем ведущее «*.» — то есть
+# принимаем распространённые записи вместо того, чтобы отвергать их из принципа. Что
+# отбросили — считаем и говорим числом: молчаливая потеря строк здесь была бы худшим из
+# возможных поведений.
+sanitize_list() {  # ВИД ВХОД ВЫХОД ФАЙЛ_СЧЁТЧИКОВ
+    awk -v kind="$1" -v stat="$4" '
+    {
+        line = $0
+        sub(/\r$/, "", line)
+        sub(/#.*/, "", line)
+        gsub(/^[ \t]+|[ \t]+$/, "", line)
+        if (line == "") next
+        if (kind == "prefixes") {
+            if (line ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/)            { print line "/32"; ok++; next }
+            if (line ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/)    { print line;       ok++; next }
+            bad++; next
+        }
+        line = tolower(line)
+        sub(/^\*\./, "", line)
+        sub(/\.$/, "", line)
+        if (line ~ /^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$/ && line ~ /\./) { print line; ok++; next }
+        bad++
+    }
+    END { printf "%d %d\n", ok+0, bad+0 > stat }
+    ' "$2" > "$3"
+}
+
 # Включён ли автозапуск. Именно это, а не «работает ли», меняет кнопка «Остановить всё»:
 # без снятого автозапуска перезагрузка вернула бы движок, и человек, нажавший «остановить
 # всё», получил бы его обратно молча.
@@ -293,7 +344,13 @@ list)
     json_add_object list_fetch; json_add_string id; json_close_object
     json_add_object devices; json_close_object
     json_add_object local_lists; json_close_object
-    json_add_object list_remove; json_add_string id; json_close_object
+    json_add_object list_remove
+        json_add_string id; json_add_string kind; json_add_string name
+    json_close_object
+    json_add_object list_put
+        json_add_string name; json_add_string kind
+        json_add_string text; json_add_string url; json_add_boolean append
+    json_close_object
     json_add_object engine; json_close_object
     json_add_object sub_set; json_add_string url; json_close_object
     json_add_object sub_info; json_close_object
@@ -436,11 +493,106 @@ splify2: туннель $o перезапущен — сменился узел 
         json_dump
         ;;
 
+    list_put)
+        # Свой список: текстом, по ссылке или файлом.
+        #
+        # Вопрос пришёл снаружи: маршрутизировать можно было только то, что опубликовал
+        # издатель. Движок сопоставляет исключительно по файлам, а каталог рисуется из
+        # манифеста, поэтому свой .lst, положенный в /etc/steer/lists руками, был виден
+        # local_lists — и не предлагался ни одному правилу.
+        #
+        # Файл — тем же методом по частям (append), а не отдельным транспортом: ubus не
+        # резиновый, а cgi-io означал бы второй путь загрузки со своими правами и своей
+        # проверкой формата. Один вход — одна проверка.
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var name name
+        json_get_var kind kind
+        json_get_var text text
+        json_get_var url url
+        json_get_var append append
+        # Имя — часть пути на диске, поэтому проверяется до всего остального. Без этого
+        # «../../etc/passwd» было бы законным именем списка.
+        case "$name" in
+            ''|*[!A-Za-z0-9_-]*) fail "имя списка: латиница, цифры, дефис и подчёркивание" ;;
+        esac
+        case "$kind" in
+            domains|prefixes) ;;
+            *) fail "вид списка: domains (домены) или prefixes (подсети)" ;;
+        esac
+        raw="/tmp/splify2-put.$$"
+        rm -f "$raw" "$raw.clean" "$raw.stat"
+        if [ -n "$url" ]; then
+            case "$url" in
+                http://*|https://*) ;;
+                *) fail "ссылка должна начинаться с http:// или https://" ;;
+            esac
+            download "$url" "$raw" || fail "не скачалось: $url"
+        else
+            [ -n "$text" ] || fail "пустой список"
+            printf '%s\n' "$text" > "$raw"
+        fi
+        sz="$(wc -c < "$raw" 2>/dev/null || echo 0)"
+        if [ "$sz" -gt "$LIST_MAX_BYTES" ]; then
+            rm -f "$raw"
+            fail "список больше $((LIST_MAX_BYTES / 1024)) КБ — столько на роутер не кладём"
+        fi
+        sanitize_list "$kind" "$raw" "$raw.clean" "$raw.stat"
+        rm -f "$raw"
+        read -r kept dropped < "$raw.stat"
+        rm -f "$raw.stat"
+        if [ "${kept:-0}" -eq 0 ]; then
+            rm -f "$raw.clean"
+            fail "не разобрано ни одной строки: для $kind ждём $([ "$kind" = prefixes ] && echo 'подсети вида 10.0.0.0/8' || echo 'имена вида example.org')"
+        fi
+        # Доменные — в подкаталог, адресные — рядом: ровно та же раскладка, что у
+        # издателя. Вид списка обязан читаться из пути, иначе `mine.lst` доменный и
+        # `mine.lst` адресный неразличимы, а интерфейсу надо положить их в РАЗНЫЕ поля
+        # правила. На схлопывании двух списков в один проект уже обжигался (I-011).
+        dest="$(custom_path "$name" "$kind")"
+        mkdir -p "$(dirname "$dest")"
+        case "$append" in
+            1|true) cat "$raw.clean" >> "$dest" ;;
+            # Замена через mv, а не через «> файл»: оборванная запись поверх рабочего
+            # списка оставила бы канал маршрутизировать половину.
+            *)      mv "$raw.clean" "$dest" ;;
+        esac
+        rm -f "$raw.clean"
+        json_init
+        json_add_boolean ok 1
+        json_add_string path "$dest"
+        json_add_int count "$(grep -c . "$dest")"
+        json_add_int dropped "${dropped:-0}"
+        json_dump
+        ;;
+
     list_remove)
         read -r input
         json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
         json_get_var id id
         json_get_var kind kind
+        json_get_var name name
+        # Свой список ищется по имени, а не через манифест: в манифесте его нет и быть
+        # не может, поэтому прежний код удалить его не мог вовсе.
+        if [ -n "$name" ]; then
+            case "$name" in
+                *[!A-Za-z0-9_-]*) fail "имя списка: латиница, цифры, дефис и подчёркивание" ;;
+            esac
+            dest="$(custom_path "$name" "${kind:-}")"
+            # Вид могли не указать — тогда ищем оба, но удаляем ровно один: имя внутри
+            # своих списков уникально по виду, как и у издателя.
+            if [ ! -f "$dest" ]; then
+                dest="$(custom_path "$name" domains)"
+                [ -f "$dest" ] || dest="$(custom_path "$name" prefixes)"
+            fi
+            [ -f "$dest" ] || fail "своего списка $name нет"
+            if [ -s "$SPEC" ] && grep -q "$dest" "$SPEC"; then
+                fail "список используется каналом — сначала снимите галочку"
+            fi
+            rm -f "$dest"
+            json_init; json_add_boolean ok 1; json_dump
+            exit 0
+        fi
         [ -n "$id" ] || fail "не указан список"
         file="$(manifest_file "$id" "$kind")"
         [ -n "$file" ] || fail "списка $id нет в манифесте"

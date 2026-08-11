@@ -317,3 +317,38 @@ export const EMPTY_SPEC: Spec = {
     outputs: {},
     channels: [],
 }
+
+/** Свои списки как записи каталога.
+ *
+ *  Зачем это здесь, а рядом с toCatalog. Каталог рисуется из манифеста издателя, поэтому
+ *  свой .lst, лежащий на роутере, был виден local_lists — и не предлагался ни одному
+ *  правилу: редактор выбирает из ServiceEntry[], а собственного файла среди них нет.
+ *  Дешевле всего оказалось не менять редактор, а дать ему записи того же вида.
+ *
+ *  Вид списка читается из ПУТИ, как и у издателя: `custom/domains/x.lst` — доменный,
+ *  `custom/x.lst` — адресный. По имени файла их не различить, а класть их надо в разные
+ *  поля правила.
+ *
+ *  Префикс `custom:` в id — чтобы свой список с именем издательской категории не выдавал
+ *  себя за неё в selectedIds. */
+export function customServices(
+    local: Record<string, { count: number; mtime: number }>,
+): ServiceEntry[] {
+    const out: ServiceEntry[] = []
+    for (const [file, info] of Object.entries(local)) {
+        if (!file.startsWith('custom/')) continue
+        const domains = file.startsWith('custom/domains/')
+        const name = file.replace(/^custom\/(domains\/)?/, '').replace(/\.lst$/, '')
+        if (!name) continue
+        out.push({
+            id: `custom:${domains ? 'domains' : 'prefixes'}:${name}`,
+            name,
+            description: domains ? 'свой список доменов' : 'свой список подсетей',
+            prefixes: domains ? [] : [file],
+            domains: domains ? [file] : [],
+            count: info.count,
+            parts: [{ id: name, kind: domains ? 'domains' : 'prefixes', name, file, count: info.count }],
+        })
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+}

@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ArrowDown, ArrowUp, Pencil, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
-import { toCatalog, EMPTY_SPEC, type Channel, type ServiceEntry, type Spec } from '@/lib/model'
+import { toCatalog, customServices, EMPTY_SPEC, type Channel, type ServiceEntry, type Spec } from '@/lib/model'
 import { type Live } from '@/lib/live'
 import RuleEditor, { pathFor, selectedIds } from '@/components/tabs/RuleEditor'
 
@@ -64,8 +64,16 @@ interface Props {
 
 export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: Props) {
     const [spec, setSpec] = useState<Spec | null>(null)
-    const [services, setServices] = useState<ServiceEntry[]>([])
+    const [catalogServices, setServices] = useState<ServiceEntry[]>([])
     const [local, setLocal] = useState<Record<string, { count: number; mtime: number }>>({})
+    /* Каталог издателя плюс свои списки. Редактор правил выбирает из ServiceEntry[], и
+     * пока собственного файла среди них не было, он и не предлагался — при том что
+     * local_lists его видел. Дешевле оказалось не менять редактор, а дать ему записи
+     * того же вида (customServices). */
+    const services = useMemo(
+        () => [...catalogServices, ...customServices(local)],
+        [catalogServices, local],
+    )
     const [open, setOpen] = useState<number | null>(null)
     const [dirty, setDirty] = useState(false)
     const [busy, setBusy] = useState(false)

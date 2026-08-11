@@ -43,6 +43,9 @@ function declare<T>(method: string, params: string[] = []) {
     return (...args: unknown[]) => fn(...args) as Promise<T>
 }
 
+const listPutRaw = declare<unknown>('list_put', ['name', 'kind', 'text', 'url', 'append'])
+const listRemoveByName = declare<unknown>('list_remove', ['name', 'kind'])
+
 export const rpc = {
     /** Live engine state: outputs with up/nat, per-channel counters, warnings. */
     status: declare<Status>('status'),
@@ -79,6 +82,35 @@ export const rpc = {
      *  engine reads the file when it compiles, so removing it under a live channel
      *  turns the next apply into a failure. */
     listRemove: declare<{ ok: boolean; error?: string }>('list_remove', ['id', 'kind']),
+
+    /** Свой список: текстом, по ссылке или файлом по частям (append).
+     *
+     *  Один метод на все три способа намеренно. Загрузка через cgi-io была бы вторым
+     *  путём со своими правами и своей проверкой формата, а проверка здесь не
+     *  косметическая: непринятая строка — это молча пустой канал.
+     *
+     *  dropped — сколько строк не подошло по формату. Приходит всегда: молчаливая потеря
+     *  строк хуже отказа. */
+    listPut: (p: {
+        name: string
+        kind: 'domains' | 'prefixes'
+        text?: string
+        url?: string
+        append?: boolean
+    }) =>
+        listPutRaw(p.name, p.kind, p.text ?? '', p.url ?? '', p.append ? 1 : 0) as Promise<{
+            ok: boolean
+            error?: string
+            path?: string
+            count?: number
+            dropped?: number
+        }>,
+
+    /** Удалить СВОЙ список — по имени и виду, а не через манифест: в манифесте его нет и
+     *  быть не может, поэтому listRemove его найти не мог. Отказ при занятости каналом
+     *  тот же, что и у списков издателя. */
+    listRemoveCustom: (name: string, kind: 'domains' | 'prefixes') =>
+        listRemoveByName(name, kind) as Promise<{ ok: boolean; error?: string }>,
 
     /** Devices that could serve as an interface output — tunnels first. */
     devices: declare<{ devices: { name: string; up: boolean; kind: string }[] }>('devices'),

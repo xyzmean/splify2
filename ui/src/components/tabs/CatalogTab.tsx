@@ -3,6 +3,7 @@ import { Download, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
+import CustomLists from '@/components/CustomLists'
 import { toCatalog, type Catalog, type ServiceEntry, type Spec } from '@/lib/model'
 
 /** Каталог: что доступно, сколько записей, где используется. ТОЛЬКО справка.
@@ -105,6 +106,13 @@ export default function CatalogTab({ onUseInRule }: Props) {
 
     return (
         <div className="space-y-3">
+            {/* Свои списки — до каталога издателя, а не после: человек, который сюда
+                пришёл добавить своё, не должен для этого прокручивать сорок чужих
+                записей. */}
+            <CustomLists
+                local={local}
+                onChanged={async () => setLocal((await rpc.localLists()).files || {})}
+            />
             <div className="flex flex-wrap items-center gap-2">
                 <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-card px-2">
                     <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
