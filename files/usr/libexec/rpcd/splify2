@@ -27,6 +27,7 @@ MANIFEST="${MANIFEST:-/etc/splify2/manifest.json}"
 # PATH нельзя, а стенду нужны оба: через первый идёт вся установка движка, по второму
 # выбирается архитектура пакета.
 INITD="${INITD:-/etc/init.d/steer}"
+RPCD_INITD="${RPCD_INITD:-/etc/init.d/rpcd}"
 OPENWRT_RELEASE="${OPENWRT_RELEASE:-/etc/openwrt_release}"
 # Тот же источник, что и у файлов списков: base_url внутри манифеста указывает на
 # raw в main, и брать сам манифест из релиза значило бы, что он описывает одни файлы,
@@ -190,6 +191,67 @@ pkg_arch() {
     ( . "$OPENWRT_RELEASE"; printf '%s' "${DISTRIB_ARCH:-}" )
 }
 
+# Список версий из релизов GitHub, отобранный ровно тем же условием, каким установка
+# версию отвергает. Иначе тег с суффиксом («0.9.5-rc1», «nightly») доезжает до
+# выпадающего списка, встаёт первым — то есть помечается «свежая» — и получает отказ
+# собственного бэкенда при нажатии «Установить» (I-052).
+#
+# Спрашиваем у GitHub, а не держим список: зашитая версия означает, что интерфейс ставит
+# прошлое, и узнать об этом можно только заметив, что чего-то не хватает. Последние
+# десять — больше человеку не нужно, старые релизы остаются доступны по прямой ссылке.
+gh_versions() {  # ВЛАДЕЛЕЦ/РЕПОЗИТОРИЙ
+    for v in $(wget -qO- --timeout=20 "https://api.github.com/repos/$1/releases?per_page=10" 2>/dev/null |
+        grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"v\?\([^"]*\)"/\1/'); do
+            case "$v" in ''|*[!0-9.]*) continue ;; esac
+            json_add_string "" "$v"
+        done
+}
+
+# Установленная версия пакета по его имени.
+pkg_version() {  # ИМЯ_ПАКЕТА
+    apk list -I 2>/dev/null | sed -n "s/^$1-\([0-9][^ ]*\)-r.*/\1/p" | head -1
+}
+
+# Поставить скачанный пакет, не оставив роутер без того, что работало.
+#
+# Порядок здесь — не стиль, а разница между «установка не удалась» и «роутер больше не
+# маршрутизирует». `apk del` запускает pre-deinstall снимаемого пакета, а тот
+# останавливает и ОТКЛЮЧАЕТ сервис; stop_service движка сносит таблицу nft и вычищает
+# ip rule. Пока удаление стояло первым, любой отказ apk add — не та архитектура,
+# кончилось место, битый файл — оставлял роутер без движка, без правил и со снятым
+# автозапуском, то есть перезагрузка уже не спасала. И всё это в ответ на «обновить»,
+# то есть на действие, которое ничего ломать не собиралось (I-049).
+#
+# Поэтому сначала ставим. Обновление в пределах одного варианта — самый частый путь —
+# при этом вообще не проходит через удаление: apk заменяет пакет на месте.
+#
+# --force-overwrite нужен потому, что расширенный и базовый пакеты движка владеют одним
+# /usr/sbin/steer. Но конфликт ИМЁН пакетов (provides/conflicts) он не снимает — вот на
+# нём удаление и остаётся законным, уже вторым шагом.
+#
+# Возвращает код apk; заполняет PKG_OUT (вывод apk) и PKG_REMOVED (снимался ли пакет).
+pkg_install() {  # ФАЙЛ [ИМЯ_ДЛЯ_СНЯТИЯ...]
+    file="$1"; shift
+    PKG_OUT="$(apk add --allow-untrusted --force-overwrite "$file" 2>&1)"
+    rc=$?
+    PKG_REMOVED=0
+    [ "$rc" = 0 ] && return 0
+    # Шаблон намеренно узкий — только слово «конфликт». `unable to select packages` сюда
+    # не годится, хотя apk печатает его и при конфликте тоже: это его общий текст на
+    # любую неудовлетворимую зависимость, включая «нет nftables». Снимать по нему
+    # рабочий пакет значило бы вернуть ровно ту поломку, ради которой порядок и
+    # переставлен.
+    case "$PKG_OUT" in
+        *conflict*|*Conflict*|*КОНФЛИКТ*|*конфликт*) ;;
+        *) return "$rc" ;;
+    esac
+    [ "$#" -gt 0 ] || return "$rc"
+    for n in "$@"; do apk del "$n" >/dev/null 2>&1; done
+    PKG_REMOVED=1
+    PKG_OUT="$(apk add --allow-untrusted --force-overwrite "$file" 2>&1)"
+    return $?
+}
+
 # Включён ли автозапуск. Именно это, а не «работает ли», меняет кнопка «Остановить всё»:
 # без снятого автозапуска перезагрузка вернула бы движок, и человек, нажавший «остановить
 # всё», получил бы его обратно молча.
@@ -249,6 +311,8 @@ list)
     json_close_object
     json_add_object engine_stop; json_close_object
     json_add_object engine_start; json_close_object
+    json_add_object splify2_versions; json_close_object
+    json_add_object splify2_install; json_add_string version; json_close_object
     json_add_object steer_versions; json_close_object
     json_add_object steer_install
         json_add_string version; json_add_boolean extended
@@ -528,24 +592,73 @@ splify2: туннель $o перезапущен — сменился узел 
 
     steer_versions)
         # Какие версии движка можно поставить.
-        #
-        # Спрашиваем у GitHub, а не держим список: зашитая версия означает, что интерфейс
-        # ставит прошлое, и узнать об этом можно только заметив, что чего-то не хватает.
-        # Отдаём последние десять — больше человеку не нужно, а старые релизы всё равно
-        # остаются доступными по прямой ссылке.
         json_init
         json_add_string arch "$(pkg_arch)"
         json_add_array versions
-        for v in $(wget -qO- --timeout=20 "https://api.github.com/repos/xyzmean/steer/releases?per_page=10" 2>/dev/null |
-            grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"v\?\([^"]*\)"/\1/'); do
-                # Отбор ровно тем же условием, каким steer_install отвергает версию.
-                # Иначе тег с суффиксом (`0.9.5-rc1`, `nightly`) доезжает до выпадающего
-                # списка, встаёт первым — то есть помечается «свежая» — и отвергается
-                # собственным же бэкендом при нажатии «Установить».
-                case "$v" in ''|*[!0-9.]*) continue ;; esac
-                json_add_string "" "$v"
-            done
+        gh_versions xyzmean/steer
         json_close_array
+        json_dump
+        ;;
+
+    splify2_versions)
+        # Какие версии САМОГО интерфейса можно поставить.
+        #
+        # Зачем это вообще нужно. Ни один из пакетов проекта не лежит в feeds OpenWrt,
+        # поэтому `apk upgrade` их не видит и обновить интерфейс можно было только по
+        # ssh — при том что движок из интерфейса ставится с первого дня. Асимметрия
+        # заметная: обновлять умели то, что реже меняется.
+        json_init
+        json_add_string current "$(pkg_version luci-app-splify2)"
+        json_add_array versions
+        gh_versions xyzmean/splify2
+        json_close_array
+        json_dump
+        ;;
+
+    splify2_install)
+        # Скачать и поставить интерфейс выбранной версии.
+        #
+        # Пакет один и он noarch: интерфейс — это собранный бандл и shell-скрипты, под
+        # архитектуру здесь ничего не собирается. Поэтому ни выбора варианта, ни
+        # pkg_arch тут нет, и единственный отказ до сети — по виду версии.
+        read -r input
+        ver="$(jsonfilter -s "$input" -e '@.version' 2>/dev/null)"
+        json_init
+        case "$ver" in
+            ''|*[!0-9.]*) json_add_boolean ok 0; json_add_string error "версия не в виде X.Y.Z"; json_dump; exit 0 ;;
+        esac
+        name="luci-app-splify2-${ver}-1_noarch.apk"
+        url="https://github.com/xyzmean/splify2/releases/download/v${ver}/${name}"
+        tmp="/tmp/${name}"
+        rm -f "$tmp"
+        if ! wget -qO "$tmp" --timeout=60 "$url" 2>/dev/null; then
+            rm -f "$tmp"
+            json_add_boolean ok 0
+            json_add_string error "не скачалось: $name (нет такой версии?)"
+            json_dump; exit 0
+        fi
+        pkg_install "$tmp" luci-app-splify2
+        rc=$?
+        rm -f "$tmp"
+        if [ "$rc" != 0 ]; then
+            json_add_boolean ok 0
+            json_add_string error "$PKG_OUT"
+            json_add_boolean removed "$PKG_REMOVED"
+            json_dump; exit 0
+        fi
+        # Перезапуск rpcd — обязательная часть, а не любезность: список методов ubus и
+        # ACL читаются им при старте, поэтому без перезапуска новая версия интерфейса
+        # обращается к методам, которых работающий rpcd ещё не знает. Выглядит это как
+        # «обновился и всё сломалось».
+        #
+        # В фоне и с задержкой, потому что этот процесс — сам rpcd: перезапусти его
+        # сейчас, и ответ, который мы вот-вот напечатаем, до браузера не доедет.
+        ( sleep 2; "$RPCD_INITD" restart >/dev/null 2>&1 ) &
+        json_add_boolean ok 1
+        json_add_string installed "$name"
+        # Страницу придётся перезагрузить: бандл у браузера в кеше, а его версия
+        # читается из build-id.txt при загрузке документа (см. home.js).
+        json_add_boolean reload_needed 1
         json_dump
         ;;
 
@@ -576,42 +689,16 @@ splify2: туннель $o перезапущен — сменился узел 
             json_add_string error "не скачалось: $name (нет такой версии для $arch?)"
             json_dump; exit 0
         fi
-        # Порядок здесь — не стиль, а разница между «установка не удалась» и «роутер
-        # больше не маршрутизирует».
+        # Порядок apk и разбор конфликта — в pkg_install: он же обслуживает установку
+        # самого интерфейса, и две копии этой логики означали бы два разных ответа на
+        # вопрос «что делать, когда apk отказал».
         #
-        # `apk del` запускает pre-deinstall снимаемого пакета, а тот останавливает и
-        # ОТКЛЮЧАЕТ сервис; stop_service движка сносит таблицу nft и вычищает ip rule.
-        # Пока удаление стояло первым, любой отказ apk add — не та архитектура, кончилось
-        # место, битый файл — оставлял роутер без движка, без правил и со снятым
-        # автозапуском, то есть перезагрузка уже не спасала. И всё это в ответ на
-        # «обновить», то есть на действие, которое ничего ломать не собиралось.
-        #
-        # Поэтому сначала ставим. Обновление в пределах одного варианта (самый частый
-        # путь) при этом вообще не проходит через удаление, и окна без маршрутизации не
-        # возникает: apk заменяет пакет на месте.
-        #
-        # --force-overwrite нужен потому, что расширенный и базовый пакеты владеют одним
-        # /usr/sbin/steer. Но конфликт ИМЁН пакетов (provides/conflicts) он не снимает —
-        # вот на нём удаление и остаётся законным, уже вторым шагом.
-        out="$(apk add --allow-untrusted --force-overwrite "$tmp" 2>&1)"
+        # Снимаем оба имени: расширенный и базовый пакеты владеют одним /usr/sbin/steer
+        # и объявлены конфликтующими, поэтому смена варианта иначе не проходит.
+        pkg_install "$tmp" steer steer-extended
         rc=$?
-        removed=0
-        if [ "$rc" != 0 ]; then
-            # Шаблон намеренно узкий — только слово «конфликт». `unable to select
-            # packages` сюда не годится, хотя apk печатает его и при конфликте тоже: это
-            # его общий текст на любую неудовлетворимую зависимость, включая «нет
-            # nftables». Снимать по нему рабочий движок значило бы вернуть ровно ту
-            # поломку, ради которой порядок и переставлен.
-            case "$out" in
-                *conflict*|*Conflict*|*КОНФЛИКТ*|*конфликт*)
-                    apk del steer >/dev/null 2>&1
-                    apk del steer-extended >/dev/null 2>&1
-                    removed=1
-                    out="$(apk add --allow-untrusted --force-overwrite "$tmp" 2>&1)"
-                    rc=$?
-                    ;;
-            esac
-        fi
+        out="$PKG_OUT"
+        removed="$PKG_REMOVED"
         rm -f "$tmp"
         if [ "$rc" != 0 ]; then
             json_add_boolean ok 0

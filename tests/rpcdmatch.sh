@@ -48,7 +48,10 @@ case "$1" in
         [ -n "${APK_ADD_OUT:-}" ] && echo "$APK_ADD_OUT" >&2
         exit "${APK_ADD_RC:-0}"
         ;;
-    list) echo "steer-extended-0.9.5-r1 aarch64_cortex-a53 {steer-extended}" ;;
+    list)
+        echo "steer-extended-0.9.5-r1 aarch64_cortex-a53 {steer-extended}"
+        echo "luci-app-splify2-0.7.6-r1 all {luci-app-splify2}"
+        ;;
     --print-arch) echo "aarch64" ;;
 esac
 exit 0
@@ -66,6 +69,12 @@ case "$1" in
     disable) : > "$SANDBOX/disabled" ;;
     enabled) [ -f "$SANDBOX/disabled" ] && exit 1; exit "${ENGINE_ENABLED:-0}" ;;
 esac
+exit 0
+EOF
+
+cat > "$T/bin/initd-rpcd" <<'EOF'
+#!/bin/sh
+echo "$1" >> "$SANDBOX/rpcd-initd.log"
 exit 0
 EOF
 
@@ -165,6 +174,7 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         SUB="$T/etc/sub.txt" \
         MANIFEST="$T/etc/manifest.json" \
         INITD="$T/bin/initd-steer" \
+        RPCD_INITD="$T/bin/initd-rpcd" \
         OPENWRT_RELEASE="${OPENWRT_RELEASE_FIXTURE:-$T/etc/openwrt_release}" \
         VLESS_DIRTY="$T/var/vless-dirty" \
         APK_ADD_RC="${APK_ADD_RC:-0}" \
@@ -188,7 +198,7 @@ v = d.get(sys.argv[1])
 print("" if v is None else json.dumps(v, ensure_ascii=False) if isinstance(v,(list,dict,bool)) else v)' "$1"
 }
 
-reset_logs() { rm -f "$T/apk.log" "$T/initd.log" "$T/wget.log" "$T/disabled"; : > "$T/apk.log"; : > "$T/initd.log"; }
+reset_logs() { rm -f "$T/apk.log" "$T/initd.log" "$T/wget.log" "$T/rpcd-initd.log" "$T/disabled"; : > "$T/apk.log"; : > "$T/initd.log"; }
 
 # Только то, что init.d МЕНЯЕТ. Запросы состояния (enabled) в протоколе тоже есть — их
 # делает сам скрипт, чтобы отчитаться, — но к порядку действий они не относятся.
@@ -303,6 +313,38 @@ check "engine сообщает, включён ли автозапуск (R-017)
 out="$(ENGINE_ENABLED=1 rpcd engine)"
 check "engine видит снятый автозапуск (R-017)" \
       "false" "$(printf '%s' "$out" | jget enabled)"
+
+# ---- R-042: интерфейс должен уметь обновлять сам себя --------------------------
+# Движок из интерфейса ставится с первого дня, а сам интерфейс — нет: его обновляли
+# только руками через ssh. Пакетов нет в feeds, поэтому «apk upgrade» их не видит, и
+# другого пути, кроме как сходить в релизы самому, не существует.
+reset_logs
+out="$(rpcd splify2_versions)"
+check "версии интерфейса берутся из релизов splify2 (R-042)" \
+      "yes" "$(grep -c 'api.github.com/repos/xyzmean/splify2' "$T/wget.log" >/dev/null 2>&1 && grep -q 'xyzmean/splify2' "$T/wget.log" && echo yes || echo no)"
+check "теги не вида X.Y.Z отсеиваются и здесь (R-042)" \
+      '["0.9.6", "0.9.4"]' "$(printf '%s' "$out" | jget versions)"
+check "установленная версия названа, чтобы было с чем сравнить (R-042)" \
+      "0.7.6" "$(printf '%s' "$out" | jget current)"
+
+reset_logs
+out="$(rpcd splify2_install '{"version":"0.7.7"}')"
+check "качается noarch-пакет интерфейса (R-042)" \
+      "https://github.com/xyzmean/splify2/releases/download/v0.7.7/luci-app-splify2-0.7.7-1_noarch.apk" \
+      "$(grep 'luci-app-splify2' "$T/wget.log" | head -1)"
+check "установка интерфейса идёт тем же порядком: add первым (R-042)" \
+      "add" "$(awk 'NR==1{print $1}' "$T/apk.log")"
+check "после установки rpcd перезапускается, иначе новый ACL не подхватится (R-042)" \
+      "yes" "$(grep -q restart "$T/rpcd-initd.log" 2>/dev/null && echo yes || echo no)"
+check "установка интерфейса отчитывается положительно (R-042)" \
+      "true" "$(printf '%s' "$out" | jget ok)"
+
+reset_logs
+out="$(rpcd splify2_install '{"version":"нет-такой"}')"
+check "версия не вида X.Y.Z отвергается до скачивания (R-042)" \
+      "false" "$(printf '%s' "$out" | jget ok)"
+check "при отказе по версии ничего не качалось (R-042)" \
+      "" "$(grep -c . "$T/wget.log" 2>/dev/null | sed 's/^0$//')"
 
 # Метод, которого нет в списке методов, ubus не покажет вовсе.
 out="$(rpcd_list)"

@@ -25,7 +25,8 @@
           "steer_versions",
           "net_info",
           "outbound_probe",
-          "leases"
+          "leases",
+          "splify2_versions"
         ]
       }
     },
@@ -44,7 +45,8 @@
           "ui_set",
           "steer_install",
           "engine_stop",
-          "engine_start"
+          "engine_start",
+          "splify2_install"
         ]
       }
     }

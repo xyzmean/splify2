@@ -30,6 +30,17 @@ export function cmpVersion(a: string, b: string): number {
     return 0
 }
 
+/** Что стоит и что можно поставить — про сам интерфейс.
+ *
+ *  Живёт здесь, рядом с версиями движка, а не в компоненте: lib не должен зависеть от
+ *  components даже типом, иначе граница между слоями держится только на привычке. */
+export interface SelfUpdateInfo {
+    /** Что стоит сейчас. Пусто, если пакет поставлен руками мимо apk. */
+    current: string
+    /** Релизы от новых к старым, уже отобранные бэкендом до вида X.Y.Z. */
+    versions: string[]
+}
+
 export interface EngineAction {
     /** Подпись кнопки. */
     label: string

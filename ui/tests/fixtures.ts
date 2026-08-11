@@ -10,6 +10,7 @@ export function live(patch: Partial<Live> = {}): Live {
         net: null,
         build: null,
         releases: null,
+        selfUpdate: null,
         error: null,
         diag: null,
         diagOld: false,

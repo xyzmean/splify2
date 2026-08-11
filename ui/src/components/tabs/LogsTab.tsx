@@ -3,6 +3,7 @@ import { Check, Info, Search, TriangleAlert, XCircle } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import EngineCard from '@/components/EngineCard'
+import SelfUpdateCard from '@/components/SelfUpdateCard'
 import { rpc } from '@/lib/rpc'
 import { human, type Live } from '@/lib/live'
 
@@ -261,6 +262,7 @@ export default function LogsTab({ live }: { live: Live }) {
             </Card>
 
             <EngineCard engine={live.build} releases={live.releases} onInstalled={live.refresh} />
+            <SelfUpdateCard info={live.selfUpdate} onInstalled={live.refresh} />
         </div>
     )
 }

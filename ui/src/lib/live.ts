@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { rpc } from './rpc'
-import { type Releases } from './engine'
+import { type Releases, type SelfUpdateInfo } from './engine'
 import { type Status } from './model'
 
 /** Живые данные экрана — ОДИН опрос на всё.
@@ -61,6 +61,8 @@ export interface Live {
     /** Что можно поставить: архитектура пакетов и релизы от новых к старым. Спрашивается
      *  так же редко, как build, и по той же причине — запрос уходит наружу. */
     releases: Releases | null
+    /** Версии самого интерфейса. Спрашивается там же и так же редко, как releases. */
+    selfUpdate: SelfUpdateInfo | null
     /** Ошибка движка. Отдельно от `status === null`, потому что «ещё не пришло» и «не
      *  отвечает» требуют разного: первое — подождать, второе — показать причину. */
     error: string | null
@@ -114,6 +116,7 @@ export function useLive(): Live {
     const [speed, setSpeed] = useState<Live['speed']>({ ch: {}, dev: {} })
     const [build, setBuild] = useState<Build | null>(null)
     const [releases, setReleases] = useState<Releases | null>(null)
+    const [selfUpdate, setSelfUpdate] = useState<SelfUpdateInfo | null>(null)
     const [net, setNet] = useState<{ uptime: number; active_clients: number } | null>(null)
     const prev = useRef<{
         t: number
@@ -207,11 +210,14 @@ export function useLive(): Live {
         rpc.steerVersions()
             .then((r) => { if (!stop) setReleases(r) })
             .catch(() => { if (!stop) setReleases(null) })
+        rpc.splify2Versions()
+            .then((r) => { if (!stop) setSelfUpdate(r) })
+            .catch(() => { if (!stop) setSelfUpdate(null) })
         return () => { stop = true }
     }, [nonce])
 
     return {
-        status, error, diag, diagOld, devs, engine, speed, build, net, releases,
+        status, error, diag, diagOld, devs, engine, speed, build, net, releases, selfUpdate,
         refresh: () => setNonce((n) => n + 1),
     }
 }
