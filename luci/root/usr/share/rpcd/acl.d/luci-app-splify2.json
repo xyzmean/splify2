@@ -42,7 +42,9 @@
           "list_remove",
           "sub_set",
           "ui_set",
-          "steer_install"
+          "steer_install",
+          "engine_stop",
+          "engine_start"
         ]
       }
     }

@@ -3,6 +3,8 @@ import { AlertTriangle, Activity, Check, Cpu } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
+import { useConfirm } from '@/components/ui/confirm'
+import { engineAction } from '@/lib/engine'
 import { human, type Live } from '@/lib/live'
 
 /** Закреплённое состояние: то, что верно независимо от того, что человек делает справа.
@@ -52,6 +54,8 @@ const DOT: Record<string, string> = {
 
 export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: () => void }) {
     const [busy, setBusy] = useState(false)
+    const [toggling, setToggling] = useState(false)
+    const [ask, confirmDialog] = useConfirm()
     /* Сведения о сборке — из общего опроса: свой запрос здесь запускал бы движок ещё раз, и на
      * роутере с 64 МБ это процесс ради неменяющегося числа. */
     const eng = live.build
@@ -104,6 +108,37 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [outputs.length])
 
+    /** Остановить всё или вернуть обратно.
+     *
+     *  Подтверждение обязательно и только на остановке: она снимает маршрутизацию у всех, кто
+     *  сейчас в сети, и вдобавок автозапуск, то есть перезагрузкой не чинится. Запуск ничего
+     *  не ломает и спрашивать не о чем. */
+    async function toggleEngine() {
+        const stopping = eng?.enabled !== false
+        if (stopping) {
+            const ok = await ask({
+                title: 'Остановить всё?',
+                body:
+                    'Маршрутизация снимется целиком: движок остановится, правила из ядра уйдут. ' +
+                    'Автозапуск тоже снимется, поэтому перезагрузка роутера ничего не вернёт — ' +
+                    'включать придётся этой же кнопкой.',
+                confirmLabel: 'Остановить',
+            })
+            if (!ok) return
+        }
+        setToggling(true)
+        try {
+            const r = stopping ? await rpc.engineStop() : await rpc.engineStart()
+            notify(stopping ? 'Движок остановлен' : r.running ? 'Движок запущен' : 'Движок включён, но не поднялся',
+                   stopping || r.running ? 'info' : 'warning')
+            live.refresh()
+        } catch (e) {
+            notify(String(e instanceof Error ? e.message : e), 'error')
+        } finally {
+            setToggling(false)
+        }
+    }
+
     async function restart() {
         setBusy(true)
         try {
@@ -117,6 +152,7 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
 
     return (
         <aside className="space-y-3">
+            {confirmDialog}
             <div className="rounded-md border border-border bg-card p-4 shadow-card">
                 <div className="flex items-center gap-2">
                     <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${DOT[v.tone]}`} aria-hidden="true" />
@@ -167,7 +203,10 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                             onClick={onGoDiag}
                             className="shrink-0 text-xs text-primary underline decoration-dotted"
                         >
-                            {eng.present ? 'Обновить' : 'Установить'}
+                            {/* Подпись считает engineAction, а не эта строка: то же самое
+                                действие названо ещё и в карточке движка, и пока слово
+                                выбиралось здесь, два места об одной операции расходились. */}
+                            {engineAction(eng, live.releases).label}
                         </button>
                     </div>
                 )}
@@ -231,6 +270,30 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                         {busy ? 'Применяем…' : 'Применить'}
                     </Button>
                 </div>
+
+                {/* Тумблер «остановить всё». Просьба из публичного теста была дословно про
+                    одну кнопку, поэтому она здесь, рядом с состоянием, а не спрятана во
+                    вкладке настроек: её ищут тогда же, когда смотрят «работает ли».
+
+                    Показывается только при установленном движке — останавливать нечего,
+                    пока его нет, а кнопка в никуда хуже отсутствующей. */}
+                {eng?.present && (
+                    <div className="mt-2">
+                        <Button
+                            variant={eng.enabled === false ? 'secondary' : 'destructive'}
+                            className="w-full"
+                            onClick={toggleEngine}
+                            disabled={toggling}
+                        >
+                            {toggling ? 'Секунду…' : eng.enabled === false ? 'Запустить' : 'Остановить всё'}
+                        </Button>
+                        {eng.enabled === false && (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                                автозапуск снят: перезагрузка движок не вернёт
+                            </p>
+                        )}
+                    </div>
+                )}
             </div>
 
             {outputs.length > 0 && (

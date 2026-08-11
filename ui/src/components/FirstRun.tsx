@@ -40,7 +40,7 @@ export default function FirstRun({ live }: { live: Live }) {
                     </ul>
                 </div>
 
-                <EngineCard engine={live.build} onInstalled={live.refresh} />
+                <EngineCard engine={live.build} releases={live.releases} onInstalled={live.refresh} />
 
                 <p className="text-xs text-muted-foreground">
                     Пакет можно поставить и руками:{' '}

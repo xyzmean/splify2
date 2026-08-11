@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
+import { engineAction, type Releases } from '@/lib/engine'
 import { t } from '@/lib/i18n'
 
 // Установка движка из интерфейса.
@@ -20,24 +21,23 @@ import { t } from '@/lib/i18n'
 interface Props {
     /** Что сейчас установлено. null — ещё не спросили. */
     engine: { present: boolean; vless: boolean; arch?: string; version?: string } | null
+    /** Что можно поставить. Приходит сверху, а не запрашивается здесь: тот же ответ нужен
+     *  левой колонке, чтобы её кнопка не обещала обновление, которого нет (I-038). */
+    releases: Releases | null
     onInstalled: () => void
 }
 
-export default function EngineCard({ engine, onInstalled }: Props) {
-    const [versions, setVersions] = useState<string[] | null>(null)
+export default function EngineCard({ engine, releases, onInstalled }: Props) {
+    const versions = releases?.versions ?? null
     const [ver, setVer] = useState('')
     const [ext, setExt] = useState(true)
     const [busy, setBusy] = useState(false)
+    const action = engineAction(engine, releases)
 
+    // Первая в списке — самая свежая: релизы отдаются от новых к старым.
     useEffect(() => {
-        rpc.steerVersions()
-            .then((r) => {
-                setVersions(r.versions || [])
-                // Первая в списке — самая свежая: релизы отдаются от новых к старым.
-                if (r.versions?.length) setVer(r.versions[0])
-            })
-            .catch(() => setVersions([]))
-    }, [])
+        if (versions?.length) setVer((v) => v || versions[0])
+    }, [versions])
 
     async function install() {
         if (!ver) { notify(t('Выберите версию'), 'warning'); return }
@@ -45,7 +45,18 @@ export default function EngineCard({ engine, onInstalled }: Props) {
         try {
             const r = await rpc.steerInstall(ver, ext)
             if (!r.ok) throw new Error(r.error || t('не установилось'))
-            notify(`${t('Движок установлен')}: ${r.installed}`)
+            // Пакет встал — это ещё не «работает». apk остановил сервис, а поднять его
+            // обратно должен был restart, и rpcd отдельно сообщает, получилось ли. Пока
+            // это поле не показывали, неподнявшийся движок отчитывался тем же зелёным
+            // «Движок установлен» — при уже снесённой таблице nft (I-053).
+            if (r.restarted === false) {
+                notify(
+                    `${t('Пакет установлен')}: ${r.installed}. ${t('Движок при этом не запустился — маршрутизации сейчас нет. Посмотрите журнал.')}`,
+                    'warning',
+                )
+            } else {
+                notify(`${t('Движок установлен')}: ${r.installed}`)
+            }
             onInstalled()
         } catch (e) {
             notify(String(e instanceof Error ? e.message : e), 'error')
@@ -77,9 +88,20 @@ export default function EngineCard({ engine, onInstalled }: Props) {
                     </p>
                 )}
                 {!engine?.present && (
-                    <p className="text-sm">
-                        {t('Без него маршрутизировать нечем: splify2 только показывает и настраивает, а решает, куда идёт трафик, движок.')}
-                    </p>
+                    <>
+                        <p className="text-sm">
+                            {t('Без него маршрутизировать нечем: splify2 только показывает и настраивает, а решает, куда идёт трафик, движок.')}
+                        </p>
+                        {/* Архитектура — именно здесь, где движка ещё нет. Это единственное
+                            состояние, в котором её не показывает никто (у метода engine в
+                            нём ранний выход без поля arch), и ровно то, где от неё зависит,
+                            скачается ли пакет: релиз собран под шесть целей (I-051). */}
+                        {releases?.arch && (
+                            <p className="font-mono text-xs text-muted-foreground">
+                                {t('Архитектура пакетов')}: {releases.arch}
+                            </p>
+                        )}
+                    </>
                 )}
                 {engine?.present && !engine.vless && (
                     <p className="text-sm">
@@ -150,7 +172,7 @@ export default function EngineCard({ engine, onInstalled }: Props) {
                     </select>
                     <Button onClick={install} disabled={busy || !ver}>
                         {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                        {engine?.present ? t('Переустановить') : t('Установить')}
+                        {t(action.label)}
                     </Button>
                 </div>
 

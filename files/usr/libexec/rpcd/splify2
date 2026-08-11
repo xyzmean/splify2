@@ -6,16 +6,28 @@
 # держать в согласии с контрактом. Поэтому status/explain отдаются дословно, а spec
 # только читается и записывается — с обязательной проверкой компилятором перед тем,
 # как файл встанет на место.
-. /usr/share/libubox/jshn.sh
 
-STEER=/usr/sbin/steer
-SPEC=/etc/steer/spec.json
-LISTS=/etc/steer/lists
+# JSHN_SH — единственный шов, заведённый исключительно ради стенда. Остальные пути ниже
+# переопределяемы по той же причине, но у них есть и второе применение (второй роутер,
+# нестандартный префикс); у этого — нет. rpcd запускает объект с чистым окружением, так
+# что на роутере ветка `:-` не выбирается никогда. Без шва tests/rpcdmatch.sh не может
+# запустить настоящий скрипт: libubox на машине разработчика нет, а подменить путь,
+# зашитый в `.`, нечем.
+. "${JSHN_SH:-/usr/share/libubox/jshn.sh}"
+
+STEER="${STEER:-/usr/sbin/steer}"
+SPEC="${SPEC:-/etc/steer/spec.json}"
+LISTS="${LISTS:-/etc/steer/lists}"
 # Подписка VLESS. Один файл на роутер, а не по файлу на выход: узлы в подписке уже
 # перечислены списком, и выход выбирает из них номером. Два выхода на одну подписку — это
 # два узла одного провайдера, и держать для этого две копии файла было бы странно.
-SUB=/etc/steer/sub.txt
-MANIFEST=/etc/splify2/manifest.json
+SUB="${SUB:-/etc/steer/sub.txt}"
+MANIFEST="${MANIFEST:-/etc/splify2/manifest.json}"
+# Сервис и файл описания системы — абсолютные пути, поэтому подменить их заглушкой в
+# PATH нельзя, а стенду нужны оба: через первый идёт вся установка движка, по второму
+# выбирается архитектура пакета.
+INITD="${INITD:-/etc/init.d/steer}"
+OPENWRT_RELEASE="${OPENWRT_RELEASE:-/etc/openwrt_release}"
 # Тот же источник, что и у файлов списков: base_url внутри манифеста указывает на
 # raw в main, и брать сам манифест из релиза значило бы, что он описывает одни файлы,
 # а скачиваются другие. Расхождение проявилось бы как "список есть в интерфейсе, но
@@ -102,7 +114,7 @@ ZONE=steer_vless
 #
 # Через файл, а не переменную: spec_set и apply — два отдельных вызова rpcd, то есть два
 # процесса, и между ними ничего не переживает, кроме диска.
-VLESS_DIRTY=/var/run/splify2-vless-dirty
+VLESS_DIRTY="${VLESS_DIRTY:-/var/run/splify2-vless-dirty}"
 
 # Отпечаток того, от чего зависит выбор узла. Меняется он — надо перезапустить клиента,
 # не меняется — трогать туннель нельзя: перезапуск роняет все соединения через него, а
@@ -168,9 +180,43 @@ ensure_vless_zone() {  # список устройств
 # по первому имя файла собирается неверно, и скачивание молча не находит релиз. Верный
 # источник — DISTRIB_ARCH из /etc/openwrt_release, то же значение, что показывает
 # `apk list -I` в колонке архитектуры.
+# Фолбэка на `apk --print-arch` здесь СОЗНАТЕЛЬНО нет, хотя он напрашивается. Он отдаёт
+# `aarch64`, а в релизе нет ни одного файла с таким именем: имя собирается неверно,
+# скачивание не находит пакет и отвечает «нет такой версии для aarch64» — то есть винит
+# издателя в том, чего не делал. Пустой ответ честнее: и steer_versions, и steer_install
+# на нём говорят «не определилась архитектура», и это правда.
 pkg_arch() {
-    [ -f /etc/openwrt_release ] || { apk --print-arch 2>/dev/null; return; }
-    ( . /etc/openwrt_release; printf '%s' "${DISTRIB_ARCH:-$(apk --print-arch 2>/dev/null)}" )
+    [ -f "$OPENWRT_RELEASE" ] || return 0
+    ( . "$OPENWRT_RELEASE"; printf '%s' "${DISTRIB_ARCH:-}" )
+}
+
+# Включён ли автозапуск. Именно это, а не «работает ли», меняет кнопка «Остановить всё»:
+# без снятого автозапуска перезагрузка вернула бы движок, и человек, нажавший «остановить
+# всё», получил бы его обратно молча.
+engine_enabled() {
+    "$INITD" enabled >/dev/null 2>&1 && printf 1 || printf 0
+}
+
+# Работает ли хоть один экземпляр. Спрашивается у procd, а не по наличию процесса:
+# у движка их несколько (сам steer и клиенты vless), и «жив ли процесс с таким именем»
+# на это не отвечает.
+#
+# ВНИМАНИЕ: внутри json_load, поэтому вызывать только ДО json_init своего ответа — тот же
+# порядок, что уже соблюдает engine_state.
+engine_running() {
+    r=0
+    state="$(ubus call service list '{"name":"steer","verbose":true}' 2>/dev/null)"
+    if [ -n "$state" ] && json_load "$state" 2>/dev/null &&
+       json_select steer 2>/dev/null && json_select instances 2>/dev/null; then
+        json_get_keys inames
+        for nm in $inames; do
+            json_select "$nm" 2>/dev/null || continue
+            json_get_var run running
+            [ "$run" = 1 ] && r=1
+            json_select ..
+        done
+    fi
+    printf '%s' "$r"
 }
 
 case "$1" in
@@ -201,6 +247,8 @@ list)
     json_add_object vless_probe
         json_add_string output; json_add_int node
     json_close_object
+    json_add_object engine_stop; json_close_object
+    json_add_object engine_start; json_close_object
     json_add_object steer_versions; json_close_object
     json_add_object steer_install
         json_add_string version; json_add_boolean extended
@@ -273,7 +321,7 @@ splify2: туннель $o перезапущен — сменился узел 
         # при старте, поэтому после apply он ещё матчит прежние домены. Без этого
         # выбранный в интерфейсе список молча не работает — правила новые, а резолвер
         # старый. Экземпляр перезапускается без снятия правил, маршрутизация не мигает.
-        [ "$rc" -eq 0 ] && /etc/init.d/steer reload_dnsd >/dev/null 2>&1
+        [ "$rc" -eq 0 ] && "$INITD" reload_dnsd >/dev/null 2>&1
         # Вывод движка отдаётся целиком, включая предупреждения: он знает то, чего
         # интерфейс знать не может — например, что у туннеля нет NAT и трафик в него
         # уедет без возврата.
@@ -411,10 +459,16 @@ splify2: туннель $o перезапущен — сменился узел 
         # Сначала — есть ли движок вообще. Без этой проверки отсутствие steer выглядело бы
         # как «VLESS поддержан»: сообщение «команда не найдена» тоже не содержит слова
         # steer-extended, и признак по отсутствию сработал бы наоборот.
+        # Состояние сервиса добывается ДО json_init: engine_running разбирает ответ ubus
+        # через json_load, а он затирает документ, который мы бы в этот момент собирали.
+        svc_enabled="$(engine_enabled)"
+        svc_running="$(engine_running)"
         if [ ! -x "$STEER" ]; then
             json_init
             json_add_boolean present 0
             json_add_boolean vless 0
+            json_add_boolean enabled "$svc_enabled"
+            json_add_boolean running "$svc_running"
             json_dump
             exit 0
         fi
@@ -424,8 +478,51 @@ splify2: туннель $o перезапущен — сменился узел 
         json_init
         json_add_boolean present 1
         json_add_boolean vless "$vless"
+        # Автозапуск и работа — разные вещи, и тумблеру нужны обе. Движок могли
+        # остановить из консоли между двумя открытиями страницы, поэтому подпись обязана
+        # читать состояние, а не помнить своё.
+        json_add_boolean enabled "$svc_enabled"
+        json_add_boolean running "$svc_running"
         json_add_string arch "$(pkg_arch)"
         json_add_string version "$(apk list -I 2>/dev/null | sed -n 's/^steer\(-extended\)\{0,1\}-\([0-9][^ ]*\)-r.*/\2/p' | head -1)"
+        json_dump
+        ;;
+
+    engine_stop)
+        # «Остановить всё» — одно действие вместо консоли.
+        #
+        # Просьба из публичного теста звучала дословно так: «жизненно необходима кнопка
+        # Остановить, причём всё — и сервис, и движок». До неё вернуть роутер в состояние
+        # «как будто не установлено» можно было только по ssh.
+        #
+        # disable, а не только stop. Разница не косметическая: без него перезагрузка
+        # поднимает движок обратно, и человек, нажавший «остановить всё», получает его
+        # снова — молча и без объяснения, почему кнопка «не сработала». Именно поэтому
+        # обратное действие обязано быть рядом: снятый автозапуск сам не вернётся.
+        #
+        # Правила из ядра убирать отдельно не нужно: stop_service движка сносит таблицу
+        # nft и вычищает ip rule сам.
+        "$INITD" stop >/dev/null 2>&1
+        "$INITD" disable >/dev/null 2>&1
+        en="$(engine_enabled)"; run="$(engine_running)"
+        json_init
+        json_add_boolean ok 1
+        json_add_boolean enabled "$en"
+        json_add_boolean running "$run"
+        json_dump
+        ;;
+
+    engine_start)
+        # Обратная половина тумблера. enable перед start, а не после: иначе состояние
+        # «работает, но после перезагрузки не поднимется» существует между двумя
+        # вызовами, и увидеть его можно ровно в тот момент, когда роутер перезагрузили.
+        "$INITD" enable >/dev/null 2>&1
+        "$INITD" start >/dev/null 2>&1
+        en="$(engine_enabled)"; run="$(engine_running)"
+        json_init
+        json_add_boolean ok 1
+        json_add_boolean enabled "$en"
+        json_add_boolean running "$run"
         json_dump
         ;;
 
@@ -441,7 +538,12 @@ splify2: туннель $o перезапущен — сменился узел 
         json_add_array versions
         for v in $(wget -qO- --timeout=20 "https://api.github.com/repos/xyzmean/steer/releases?per_page=10" 2>/dev/null |
             grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"v\?\([^"]*\)"/\1/'); do
-                [ -n "$v" ] && json_add_string "" "$v"
+                # Отбор ровно тем же условием, каким steer_install отвергает версию.
+                # Иначе тег с суффиксом (`0.9.5-rc1`, `nightly`) доезжает до выпадающего
+                # списка, встаёт первым — то есть помечается «свежая» — и отвергается
+                # собственным же бэкендом при нажатии «Установить».
+                case "$v" in ''|*[!0-9.]*) continue ;; esac
+                json_add_string "" "$v"
             done
         json_close_array
         json_dump
@@ -474,29 +576,67 @@ splify2: туннель $o перезапущен — сменился узел 
             json_add_string error "не скачалось: $name (нет такой версии для $arch?)"
             json_dump; exit 0
         fi
-        # --force-overwrite: расширенный и базовый пакеты владеют одним /usr/sbin/steer,
-        # и без этого замена одного на другой упирается в «файл принадлежит другому пакету».
-        # Удаляем предыдущие пакеты, чтобы избежать конфликтов (steer конфликтует со steer-extended)
-        apk del steer >/dev/null 2>&1
-        apk del steer-extended >/dev/null 2>&1
+        # Порядок здесь — не стиль, а разница между «установка не удалась» и «роутер
+        # больше не маршрутизирует».
+        #
+        # `apk del` запускает pre-deinstall снимаемого пакета, а тот останавливает и
+        # ОТКЛЮЧАЕТ сервис; stop_service движка сносит таблицу nft и вычищает ip rule.
+        # Пока удаление стояло первым, любой отказ apk add — не та архитектура, кончилось
+        # место, битый файл — оставлял роутер без движка, без правил и со снятым
+        # автозапуском, то есть перезагрузка уже не спасала. И всё это в ответ на
+        # «обновить», то есть на действие, которое ничего ломать не собиралось.
+        #
+        # Поэтому сначала ставим. Обновление в пределах одного варианта (самый частый
+        # путь) при этом вообще не проходит через удаление, и окна без маршрутизации не
+        # возникает: apk заменяет пакет на месте.
+        #
+        # --force-overwrite нужен потому, что расширенный и базовый пакеты владеют одним
+        # /usr/sbin/steer. Но конфликт ИМЁН пакетов (provides/conflicts) он не снимает —
+        # вот на нём удаление и остаётся законным, уже вторым шагом.
         out="$(apk add --allow-untrusted --force-overwrite "$tmp" 2>&1)"
         rc=$?
+        removed=0
+        if [ "$rc" != 0 ]; then
+            # Шаблон намеренно узкий — только слово «конфликт». `unable to select
+            # packages` сюда не годится, хотя apk печатает его и при конфликте тоже: это
+            # его общий текст на любую неудовлетворимую зависимость, включая «нет
+            # nftables». Снимать по нему рабочий движок значило бы вернуть ровно ту
+            # поломку, ради которой порядок и переставлен.
+            case "$out" in
+                *conflict*|*Conflict*|*КОНФЛИКТ*|*конфликт*)
+                    apk del steer >/dev/null 2>&1
+                    apk del steer-extended >/dev/null 2>&1
+                    removed=1
+                    out="$(apk add --allow-untrusted --force-overwrite "$tmp" 2>&1)"
+                    rc=$?
+                    ;;
+            esac
+        fi
         rm -f "$tmp"
         if [ "$rc" != 0 ]; then
             json_add_boolean ok 0
-            json_add_string error "$out"
+            # Про снятый пакет обязан сказать ответ, а не журнал: человек видит только
+            # его, а в stderr apk про снос нет ни слова. Молчание здесь означало бы, что
+            # роутер стоит без движка, а сообщение говорит только «не удалось поставить».
+            if [ "$removed" = 1 ]; then
+                json_add_string error "$out
+Прежний движок при этом снят: маршрутизации сейчас нет. Поставьте любую версию заново или перезагрузите роутер после установки."
+            else
+                json_add_string error "$out"
+            fi
+            json_add_boolean removed "$removed"
             json_dump; exit 0
         fi
-        /etc/init.d/steer enable >/dev/null 2>&1 || true
-        # Переинициализация — обязательная часть установки, а не любезность. apk del
-        # выше запускает pre-deinstall старого пакета, а тот останавливает сервис и
-        # СНОСИТ таблицу nft вместе с ip rule: без restart роутер после «обновить
-        # движок» оставался без маршрутизации до ручного вмешательства или перезагрузки,
-        # и выглядело это как «переустановил — всё сломалось». restart применяет спеку,
+        "$INITD" enable >/dev/null 2>&1 || true
+        # Переинициализация — обязательная часть установки, а не любезность. Замена
+        # пакета останавливает сервис (а на ветке с удалением pre-deinstall ещё и сносит
+        # таблицу nft вместе с ip rule): без restart роутер после «обновить движок»
+        # оставался без маршрутизации до ручного вмешательства или перезагрузки, и
+        # выглядело это как «переустановил — всё сломалось». restart применяет спеку,
         # поднимает резолвер и туннели vless — то же, что происходит при загрузке.
         restarted=0
         if [ -f "$SPEC" ]; then
-            /etc/init.d/steer restart >/dev/null 2>&1 && restarted=1
+            "$INITD" restart >/dev/null 2>&1 && restarted=1
         fi
         json_add_boolean ok 1
         json_add_string installed "$name"

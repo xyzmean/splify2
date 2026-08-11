@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { rpc } from './rpc'
+import { type Releases } from './engine'
 import { type Status } from './model'
 
 /** Живые данные экрана — ОДИН опрос на всё.
@@ -40,6 +41,12 @@ export interface Build {
     vless: boolean
     arch?: string
     version?: string
+    /** Поднимется ли движок после перезагрузки. Именно это снимает «Остановить всё», и
+     *  именно поэтому подпись тумблера читает состояние, а не помнит своё: между двумя
+     *  открытиями страницы движок могли остановить из консоли. */
+    enabled?: boolean
+    /** Работает ли хоть один экземпляр прямо сейчас. */
+    running?: boolean
 }
 
 export interface Live {
@@ -51,6 +58,9 @@ export interface Live {
      *  значит платить процессом за неменяющееся число. Перечитывается по refresh() — то есть
      *  после установки, когда оно и меняется. */
     build: Build | null
+    /** Что можно поставить: архитектура пакетов и релизы от новых к старым. Спрашивается
+     *  так же редко, как build, и по той же причине — запрос уходит наружу. */
+    releases: Releases | null
     /** Ошибка движка. Отдельно от `status === null`, потому что «ещё не пришло» и «не
      *  отвечает» требуют разного: первое — подождать, второе — показать причину. */
     error: string | null
@@ -103,6 +113,7 @@ export function useLive(): Live {
     const [engine, setEngine] = useState<EngineState | null>(null)
     const [speed, setSpeed] = useState<Live['speed']>({ ch: {}, dev: {} })
     const [build, setBuild] = useState<Build | null>(null)
+    const [releases, setReleases] = useState<Releases | null>(null)
     const [net, setNet] = useState<{ uptime: number; active_clients: number } | null>(null)
     const prev = useRef<{
         t: number
@@ -184,8 +195,23 @@ export function useLive(): Live {
         return () => { stop = true }
     }, [nonce])
 
+    /* Список релизов — тоже раз на круг обновления, а не в пятисекундном опросе: запрос
+     * уходит на GitHub с двадцатисекундным таймаутом, и держать его в общем цикле значило
+     * бы ходить в интернет двенадцать раз в минуту с роутера.
+     *
+     * Здесь, а не в карточке движка, потому что ответ нужен ДВУМ местам сразу: карточке —
+     * чтобы заполнить список версий, левой колонке — чтобы подпись кнопки перестала обещать
+     * обновление, которого нет (I-038). Пока запрос жил в карточке, колонка о нём не знала. */
+    useEffect(() => {
+        let stop = false
+        rpc.steerVersions()
+            .then((r) => { if (!stop) setReleases(r) })
+            .catch(() => { if (!stop) setReleases(null) })
+        return () => { stop = true }
+    }, [nonce])
+
     return {
-        status, error, diag, diagOld, devs, engine, speed, build, net,
+        status, error, diag, diagOld, devs, engine, speed, build, net, releases,
         refresh: () => setNonce((n) => n + 1),
     }
 }

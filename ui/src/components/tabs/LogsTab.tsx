@@ -260,7 +260,7 @@ export default function LogsTab({ live }: { live: Live }) {
                 </CardContent>
             </Card>
 
-            <EngineCard engine={live.build} onInstalled={live.refresh} />
+            <EngineCard engine={live.build} releases={live.releases} onInstalled={live.refresh} />
         </div>
     )
 }
