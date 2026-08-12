@@ -70,10 +70,28 @@ export default function CatalogTab({ onUseInRule }: Props) {
 
     async function removeService(sv: ServiceEntry) {
         setBusy(sv.id)
+        let bad = 0
+        let last = ''
         try {
-            for (const p of sv.parts) await rpc.listRemove(p.id, p.kind).catch(() => {})
+            /* Ответ читаем так же, как fetchService выше: fail() в rpcd завершается кодом 0
+             * и отдаёт {ok:false, error} — «список используется каналом, сначала снимите
+             * галочку». Раньше цикл глотал его и печатал успех безусловно (I-042). */
+            for (const p of sv.parts) {
+                const r = await rpc.listRemove(p.id, p.kind).catch(
+                    () => ({ ok: false }) as { ok: boolean; error?: string },
+                )
+                if (!r.ok) {
+                    bad++
+                    if (r.error) last = r.error
+                }
+            }
             setLocal((await rpc.localLists()).files || {})
-            notify(`${sv.name}: удалён с роутера`)
+            if (bad)
+                notify(
+                    last || `${sv.name}: не удалось удалить (частей ${bad} из ${sv.parts.length})`,
+                    'warning',
+                )
+            else notify(`${sv.name}: удалён с роутера`)
         } finally {
             setBusy(null)
         }
