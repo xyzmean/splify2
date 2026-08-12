@@ -318,6 +318,57 @@ export const EMPTY_SPEC: Spec = {
     channels: [],
 }
 
+/** Оба написания списочных полей `match` — как их публикует контракт v1
+ *  (steer/docs/contract-v1.md:43-44): единственная форма есть сокращение для списка из
+ *  одного элемента, и движок реализует обе (spec.c:271-281). */
+const FILE_FORMS = [
+    ['prefixes_file', 'prefixes_files'],
+    ['domains_file', 'domains_files'],
+] as const
+
+/** Привести `match` каждого канала к множественной форме — один раз, на входе.
+ *
+ *  Зачем. Интерфейс читал только множественную форму во ВСЕХ четырёх местах, где смотрит
+ *  на `match` (selectedIds, pick, RulesTab, CatalogTab), поэтому правило, написанное по
+ *  документированной короткой форме, было для него правилом без списков. Хуже того, оно
+ *  таким не оставалось: спред `{...ch.match}` в `pick()` уносил короткий ключ обратно в
+ *  файл рядом с длинным, и дальше маршрут списка решался порядком ключей в документе
+ *  (I-041).
+ *
+ *  Почему здесь, а не в каждом потребителе: потребителей четыре, и пятый забыли бы. Цена
+ *  выбрана осознанно и владельцем (splicicd#7, вариант «б») — ниже по течению единственной
+ *  формы больше нет, а значит контрольная плоскость переписывает написание в файле
+ *  владельца при первом же сохранении. Обратная сторона того же свойства: спека после
+ *  round-trip несёт ОДНО написание вместо двух, то есть перестаёт зависеть от порядка
+ *  ключей.
+ *
+ *  Кто побеждает при обоих написаниях сразу — решается так же, как у движка: разбор
+ *  последовательный, поэтому берёт верх ключ, стоящий в документе ПОЗЖЕ. Правило
+ *  «множественная форма всегда сильнее» разошлось бы с движком ровно на тех спеках, где
+ *  этот вопрос вообще возникает. */
+export function normalizeSpec(spec: Spec): Spec {
+    if (!spec || !Array.isArray(spec.channels)) return spec
+    return { ...spec, channels: spec.channels.map(foldFileForms) }
+}
+
+function foldFileForms(ch: Channel): Channel {
+    const raw = ch?.match as Record<string, unknown> | undefined
+    if (!raw || typeof raw !== 'object') return ch
+    const keys = Object.keys(raw)
+    if (!FILE_FORMS.some(([one]) => keys.includes(one))) return ch
+    const match: Record<string, unknown> = { ...raw }
+    for (const [one, many] of FILE_FORMS) {
+        if (!(one in match)) continue
+        const single = match[one]
+        delete match[one]
+        /* Не строка — не путь: движок такое значение тоже не примет, js_str откажет
+         * (spec.c:58) и поле останется незаполненным. */
+        if (typeof single !== 'string') continue
+        if (keys.lastIndexOf(one) > keys.lastIndexOf(many)) match[many] = [single]
+    }
+    return { ...ch, match: match as Channel['match'] }
+}
+
 /** Свои списки как записи каталога.
  *
  *  Зачем это здесь, а рядом с toCatalog. Каталог рисуется из манифеста издателя, поэтому

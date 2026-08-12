@@ -6,6 +6,7 @@
 // thing to keep in sync with the engine's contract.
 
 import {
+    normalizeSpec,
     toCatalog,
     type RawManifest,
     type Spec,
@@ -43,6 +44,7 @@ function declare<T>(method: string, params: string[] = []) {
     return (...args: unknown[]) => fn(...args) as Promise<T>
 }
 
+const specGetRaw = declare<Spec>('spec_get')
 const listPutRaw = declare<unknown>('list_put', ['name', 'kind', 'text', 'url', 'append'])
 const listRemoveByName = declare<unknown>('list_remove', ['name', 'kind'])
 
@@ -53,7 +55,9 @@ export const rpc = {
     /** The spec as stored. The UI edits a copy and writes it back whole: a partial
      *  update would need the backend to understand channel ordering, and ordering is
      *  precisely what must not be reinterpreted on the way through. */
-    specGet: declare<Spec>('spec_get'),
+    /** Единственный вход спеки в интерфейс — поэтому и приведение написаний стоит здесь,
+     *  а не в четырёх потребителях `match` по отдельности (I-041, splicicd#7). */
+    specGet: () => specGetRaw().then(normalizeSpec),
     specSet: declare<{ ok: boolean; error?: string }>('spec_set', ['spec']),
 
     /** Compile and install. Separate from spec_set so the UI can save a draft
