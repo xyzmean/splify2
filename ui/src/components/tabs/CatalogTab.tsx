@@ -27,7 +27,17 @@ export default function CatalogTab({ onUseInRule }: Props) {
     const [manifest, setManifest] = useState<Catalog | null>(null)
     const [spec, setSpec] = useState<Spec | null>(null)
     const [local, setLocal] = useState<Record<string, { count: number; mtime: number }>>({})
-    const [busy, setBusy] = useState<string | null>(null)
+    // Занятость держится по id записи, а не одним слотом на всю таблицу: части
+    // сервиса качаются/снимаются независимо, и работа над одной записью не должна
+    // разблокировать незаконченную над другой (I-043).
+    const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set())
+    const mark = (id: string) => setBusy((b) => new Set(b).add(id))
+    const unmark = (id: string) =>
+        setBusy((b) => {
+            const n = new Set(b)
+            n.delete(id)
+            return n
+        })
     const [q, setQ] = useState('')
     const [only, setOnly] = useState<'all' | 'used'>('all')
 
@@ -53,7 +63,7 @@ export default function CatalogTab({ onUseInRule }: Props) {
     /* Загрузка и удаление — по ВСЕМ частям сервиса. Части качаются по отдельности (у издателя
      * это разные файлы), но человек попросил сервис, и отчитываться надо о нём. */
     async function fetchService(sv: ServiceEntry) {
-        setBusy(sv.id)
+        mark(sv.id)
         let bad = 0
         try {
             for (const p of sv.parts) {
@@ -64,12 +74,12 @@ export default function CatalogTab({ onUseInRule }: Props) {
             if (bad) notify(`${sv.name}: не загрузилось частей — ${bad} из ${sv.parts.length}`, 'warning')
             else notify(`${sv.name}: загружено`)
         } finally {
-            setBusy(null)
+            unmark(sv.id)
         }
     }
 
     async function removeService(sv: ServiceEntry) {
-        setBusy(sv.id)
+        mark(sv.id)
         let bad = 0
         let last = ''
         try {
@@ -93,7 +103,7 @@ export default function CatalogTab({ onUseInRule }: Props) {
                 )
             else notify(`${sv.name}: удалён с роутера`)
         } finally {
-            setBusy(null)
+            unmark(sv.id)
         }
     }
 
@@ -226,7 +236,7 @@ export default function CatalogTab({ onUseInRule }: Props) {
                                             <Button
                                                 variant="secondary"
                                                 size="sm"
-                                                disabled={busy === sv.id}
+                                                disabled={busy.has(sv.id)}
                                                 onClick={() => fetchService(sv)}
                                             >
                                                 {have.length ? (
@@ -234,14 +244,14 @@ export default function CatalogTab({ onUseInRule }: Props) {
                                                 ) : (
                                                     <Download className="mr-1 h-4 w-4" aria-hidden="true" />
                                                 )}
-                                                {busy === sv.id ? 'Загрузка…' : have.length ? 'Обновить' : 'Загрузить'}
+                                                {busy.has(sv.id) ? 'Загрузка…' : have.length ? 'Обновить' : 'Загрузить'}
                                             </Button>
                                             {have.length > 0 && (
                                                 <Button
                                                     variant="ghost"
                                                     size="icon"
                                                     aria-label={`Удалить ${sv.name} с роутера`}
-                                                    disabled={busy === sv.id}
+                                                    disabled={busy.has(sv.id)}
                                                     onClick={() => removeService(sv)}
                                                 >
                                                     <Trash2 className="h-4 w-4" aria-hidden="true" />

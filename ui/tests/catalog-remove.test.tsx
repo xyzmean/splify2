@@ -41,3 +41,41 @@ describe('каталог: удаление отчитывается по отв�
         expect(screen.queryByText(/удал[её]н с роутера/)).not.toBeInTheDocument()
     })
 })
+
+const MANIFEST2 = {
+    version: '1',
+    base_url: 'https://x/',
+    categories: [
+        { id: 'aaa', name_ru: 'AAA', file: 'aaa.lst', count: 1 },
+        { id: 'bbb', name_ru: 'BBB', file: 'bbb.lst', count: 1 },
+    ],
+}
+
+describe('каталог: занятость — по строке, а не на всю таблицу (I-043, R-033)', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks()
+        vi.spyOn(rpc, 'manifest').mockResolvedValue(MANIFEST2 as never)
+        vi.spyOn(rpc, 'specGet').mockResolvedValue({ channels: [] } as never)
+        vi.spyOn(rpc, 'localLists').mockResolvedValue(
+            { files: { 'aaa.lst': { count: 1, mtime: 1 }, 'bbb.lst': { count: 1, mtime: 1 } } } as never,
+        )
+    })
+
+    it('операция над одной записью не разблокирует незаконченную над другой', async () => {
+        // list_remove обеих записей не завершается — обе операции «в полёте».
+        vi.spyOn(rpc, 'listRemove').mockReturnValue(new Promise(() => {}))
+        render(<CatalogTab onUseInRule={() => {}} />)
+        const delA = await screen.findByLabelText(/Удалить AAA с роутера/)
+        const delB = await screen.findByLabelText(/Удалить BBB с роутера/)
+
+        fireEvent.click(delA)
+        await waitFor(() => expect(delA).toBeDisabled())
+
+        fireEvent.click(delB)
+        await waitFor(() => expect(delB).toBeDisabled())
+
+        // С одиночным слотом busy начало работы над B стирало отметку A и
+        // включало её кнопку, пока её собственный вызов ещё висит.
+        expect(delA).toBeDisabled()
+    })
+})
