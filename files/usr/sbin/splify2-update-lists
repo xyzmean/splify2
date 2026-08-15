@@ -91,22 +91,55 @@ used_files() {  # ip|domains
 # domains-записи», то есть обвинение издателя вместо своей ошибки. То же ключевание по
 # полному пути уже сделано в rpcd (`local_path`), здесь оно приводится в соответствие.
 MANIFEST_MAP=/tmp/splify2-manifest.map
+# Карта переименований издателя: СТАРОЕ_ИМЯ НОВОЕ_ИМЯ.
+MANIFEST_ALIAS=/tmp/splify2-manifest.alias
 
 parse_manifest() {
     base="$(jsonfilter -i "$MANIFEST" -e '@.base_url' 2>/dev/null)"
     [ -n "$base" ] || return 1
-    rm -f "$MANIFEST_MAP"
+    rm -f "$MANIFEST_MAP" "$MANIFEST_ALIAS"
     for key in categories domain_lists; do
         jsonfilter -i "$MANIFEST" -e "@.$key[*].file" 2>/dev/null |
         while read -r p; do
             echo "$(echo "$p" | sed 's|^/*||') $base/$p" >> "$MANIFEST_MAP"
         done
     done
+    # Переименования читаются двумя проходами и склеиваются построчно: jsonfilter отдаёт
+    # по одному значению на строку и не умеет доставать пару полей одним выражением.
+    jsonfilter -i "$MANIFEST" -e '@.aliases[*].from' 2>/dev/null > "$MANIFEST_ALIAS.from"
+    jsonfilter -i "$MANIFEST" -e '@.aliases[*].to' 2>/dev/null > "$MANIFEST_ALIAS.to"
+    if [ -s "$MANIFEST_ALIAS.from" ]; then
+        # awk, а не paste: paste есть не в каждой сборке busybox, а awk есть везде —
+        # на нём же построена вся остальная разборка карты.
+        awk 'NR==FNR { a[FNR] = $0; next } { print a[FNR], $0 }' \
+            "$MANIFEST_ALIAS.from" "$MANIFEST_ALIAS.to" > "$MANIFEST_ALIAS"
+    fi
+    rm -f "$MANIFEST_ALIAS.from" "$MANIFEST_ALIAS.to"
 }
 
-url_for() {  # ПУТЬ_У_ИЗДАТЕЛЯ -> URL или пусто
+alias_for() {  # СТАРОЕ_ИМЯ -> НОВОЕ_ИМЯ или пусто
+    [ -f "$MANIFEST_ALIAS" ] || return 1
+    new="$(awk -v v="$1" '$1 == v { print $2; exit }' "$MANIFEST_ALIAS")"
+    [ -n "$new" ] && { printf '%s' "$new"; return 0; }
+    return 1
+}
+
+# ПУТЬ_У_ИЗДАТЕЛЯ -> URL или пусто.
+#
+# Если прямого совпадения нет, путь ищется среди переименованных. Это не удобство, а
+# защита от тихого отказа: издатель схлопнул семнадцать списков в два, и без разрешения
+# имён каждый уже настроенный канал получил бы «нет в манифесте, пропущен» — список
+# остался бы лежать последней скачанной копией и перестал обновляться НАВСЕГДА, без
+# признака ошибки. Человек видит рабочий канал со списком, которому полгода.
+#
+# Содержимое кладётся по СТАРОМУ пути (см. вызов): спека продолжает работать как есть,
+# правки настроек от человека не требуется, а в журнале переименование названо вслух.
+url_for() {
     [ -f "$MANIFEST_MAP" ] || return 1
     url="$(awk -v v="$1" '$1 == v { print $2; exit }' "$MANIFEST_MAP")"
+    [ -n "$url" ] && { printf '%s' "$url"; return 0; }
+    new="$(alias_for "$1")" || return 1
+    url="$(awk -v v="$new" '$1 == v { print $2; exit }' "$MANIFEST_MAP")"
     [ -n "$url" ] && { printf '%s' "$url"; return 0; }
     return 1
 }
@@ -132,6 +165,9 @@ for kind in ip domains; do
         rel="${path#$LISTS/}"
         name="$(basename "$path")"      # только для сообщений в журнале
         url="$(url_for "$rel")" || { log "$rel: нет в манифесте, пропущен"; continue; }
+        # Переименование называется вслух: список продолжит обновляться по прежнему пути,
+        # но человек должен знать, что у издателя он теперь называется иначе.
+        renamed="$(alias_for "$rel")" && log "$rel: издатель переименовал в $renamed, обновляем по прежнему пути"
 
         new="$(mktemp /tmp/splify2-list.XXXXXX)"
         if ! download "$url" "$new"; then

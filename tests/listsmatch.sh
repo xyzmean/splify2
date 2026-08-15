@@ -61,6 +61,10 @@ elif expr in ('@.categories[*].file', '@.domain_lists[*].file'):
     key = 'categories' if 'categories' in expr else 'domain_lists'
     for e in d.get(key, []):
         print(e['file'])
+elif expr in ('@.aliases[*].from', '@.aliases[*].to'):
+    field = expr.rsplit('.', 1)[1]
+    for e in d.get('aliases', []):
+        print(e[field])
 elif expr.endswith('prefixes_files[*]') or expr.endswith('domains_files[*]'):
     field = 'prefixes_files' if 'prefixes' in expr else 'domains_files'
     for ch in d.get('channels', []):
@@ -105,7 +109,22 @@ esac
 exit 0
 EOF
 
-printf '#!/bin/sh\nexit 0\n' > "$T/bin/logger"
+# logger: журнал скрипта уходит в syslog, а в stdout — только при терминале
+# (`[ -t 1 ]` в log()). Под стендом терминала нет, поэтому всё, что скрипт говорит
+# человеку, видно ТОЛЬКО здесь. Раньше заглушка молча возвращала 0, и любая проверка
+# журнала проходила на пустоте — то есть не проверяла ничего.
+cat > "$T/bin/logger" <<EOF
+#!/bin/sh
+while [ \$# -gt 0 ]; do
+    case "\$1" in
+        -t) shift 2 ;;
+        *) break ;;
+    esac
+done
+echo "\$*" >> "$T/syslog"
+exit 0
+EOF
+: > "$T/syslog"
 printf '#!/bin/sh\nexit 1\n' > "$T/bin/uci"          # manifest_url не задан — берётся дефолтный
 chmod +x "$T/bin"/*
 
@@ -114,23 +133,29 @@ chmod +x "$T/bin"/*
 cat > "$T/manifest.src" <<EOF
 {
   "base_url": "https://example.invalid/lists",
-  "categories":   [ { "id": "news", "file": "news.lst" } ],
-  "domain_lists": [ { "id": "news", "file": "domains/news.lst" } ]
+  "categories":   [ { "id": "news", "file": "news.lst" },
+                    { "id": "rkn",  "file": "rkn.lst" } ],
+  "domain_lists": [ { "id": "news", "file": "domains/news.lst" } ],
+  "aliases":      [ { "from": "rkn_other.lst", "to": "rkn.lst" } ]
 }
 EOF
 
+# Спека ссылается на rkn_other.lst — имя, которого у издателя больше нет. Ровно тот
+# случай, ради которого заведены aliases: без них список молча замирает навсегда.
 cat > "$T/etc/spec.json" <<EOF
 {
   "schema": 1,
   "channels": [
     { "name": "c1", "match": { "prefixes_files": ["$T/lists/news.lst"],
-                               "domains_files":  ["$T/lists/domains/news.lst"] } }
+                               "domains_files":  ["$T/lists/domains/news.lst"] } },
+    { "name": "c2", "match": { "prefixes_files": ["$T/lists/rkn_other.lst"] } }
   ]
 }
 EOF
 
 printf '0.0.0.0/32\n'  > "$T/lists/news.lst"
 printf 'old.example\n' > "$T/lists/domains/news.lst"
+printf '0.0.0.0/32\n'  > "$T/lists/rkn_other.lst"
 
 # ---- прогон ------------------------------------------------------------------
 SANDBOX="$T" \
@@ -159,7 +184,24 @@ check "адресный файл содержит CIDR" \
       "10.0.0.0/8" "$(head -1 "$T/lists/news.lst")"
 
 check "в журнале нет обвинения издателя в непохожем содержимом" \
-      "" "$(grep -o 'не похожи на [a-z]*-записи' "$T/out" 2>/dev/null | head -1)"
+      "" "$(grep -o 'не похожи на [a-z]*-записи' "$T/syslog" 2>/dev/null | head -1)"
+
+# ---- переименование списка у издателя ----------------------------------------
+# Издатель схлопнул семнадцать списков в два. Настроенная спека ссылается на старое имя;
+# без разрешения алиасов скрипт написал бы «нет в манифесте, пропущен», и список остался
+# бы лежать прежней копией НАВСЕГДА, без признака ошибки.
+check "переименованный список скачан по новому адресу" \
+      "https://example.invalid/lists/rkn.lst" \
+      "$(grep -x 'https://example.invalid/lists/rkn.lst' "$T/requested" 2>/dev/null | head -1)"
+
+check "содержимое легло по прежнему пути — спека продолжает работать" \
+      "10.0.0.0/8" "$(head -1 "$T/lists/rkn_other.lst" 2>/dev/null)"
+
+check "переименование названо в журнале вслух" \
+      "yes" "$(grep -q 'переименовал в rkn.lst' "$T/syslog" && echo yes || echo no)"
+
+check "пропуска по причине «нет в манифесте» не было" \
+      "" "$(grep -o 'rkn_other.lst: нет в манифесте' "$T/syslog" 2>/dev/null | head -1)"
 
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo 'ЕСТЬ ПРОВАЛЫ')"
 [ "$fails" -eq 0 ]
