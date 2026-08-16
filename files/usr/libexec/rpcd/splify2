@@ -70,8 +70,30 @@ manifest_file() {  # ID ВИД
 # `basename` схлопывал `hodca.lst` и `domains/hodca.lst` в один локальный файл, и они
 # затирали друг друга. То же правило продублировано в интерфейсе (pathFor) — разойдясь,
 # они дадут «список скачан, а канал его не находит».
+#
+# ПУТЬ ПРИХОДИТ ИЗ ИНТЕРНЕТА, и проверяется он здесь, в единственном месте, где
+# собирается. Поле `file` берётся из манифеста издателя (адрес которого вдобавок
+# переопределяется через uci), а срезание ведущих слэшей от `..` не спасает: `file` вида
+# `../../../etc/crontabs/root` давал запись файла ОТ ROOT куда угодно, содержимым с того
+# же издателя, — крон, rc.local, сам этот скрипт. Тем же путём list_remove удалял любой
+# файл: проверка «занят каналом» сравнивала уже подменённый путь.
+#
+# Для СВОИХ списков эта мысль додумана давно (см. list_put: «без этого ../../etc/passwd
+# было бы законным именем»), а для чужих — нет, хотя чужой источник доверия заслуживает
+# меньше. Правило одно на оба случая: имя может состоять только из безопасных символов,
+# и ни одна его часть не может быть «..».
+# Возвращает НЕНУЛЕВОЙ код на негодном пути, а не зовёт fail сама, и это важно: её
+# вызывают в подстановке `$( )`, то есть в подоболочке, где exit из fail завершил бы
+# только подоболочку. Ответ об ошибке ушёл бы в переменную вместо клиента, а скрипт
+# спокойно продолжил бы работу с этой строкой как с путём. Поэтому решение принимает
+# вызывающий: `dest="$(local_path "$f")" || fail ...`.
 local_path() {  # ПУТЬ_У_ИЗДАТЕЛЯ
-    printf '%s/%s' "$LISTS" "$(echo "$1" | sed 's|^/*||')"
+    rel="$(echo "$1" | sed 's|^/*||')"
+    case "$rel" in
+        ''|.|..|*/../*|*/..|../*|*//*) return 1 ;;
+        *[!A-Za-z0-9_./-]*)            return 1 ;;
+    esac
+    printf '%s/%s' "$LISTS" "$rel"
 }
 
 manifest_url() {
@@ -154,6 +176,13 @@ obfs_names() {  # ФАЙЛ_СПЕКИ
     "$STEER" outputs --obfs --spec "$1" 2>/dev/null | tr '\n' ' '
 }
 
+# То же для vless, и по той же причине, что у обфускации: смена узла лечится сигналом
+# живому экземпляру, а появление НОВОГО выхода — нет, потому что экземпляра ещё нет.
+vless_names() {  # ФАЙЛ_СПЕКИ
+    [ -s "$1" ] || return 0
+    "$STEER" outputs --kind vless --spec "$1" 2>/dev/null | tr '\n' ' '
+}
+
 zone_index() {
     uci show firewall 2>/dev/null | sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.name='$ZONE'$/\1/p" | head -1
 }
@@ -230,9 +259,35 @@ gh_versions() {  # ВЛАДЕЛЕЦ/РЕПОЗИТОРИЙ
         done
 }
 
+# Какой менеджер пакетов на этом роутере.
+#
+# Определяется, а не предполагается: релизы обоих проектов теперь содержат и .apk, и
+# .ipk, установщик ставит через тот, что есть, — и бэкенд обязан уметь ровно то же.
+# Иначе на OpenWrt 23.05 карточка движка показывала бы пустую версию, «Установить»
+# возвращало бы пустое сообщение об ошибке (apk нет, rc 127, вывод пуст), а
+# самообновление интерфейса не работало бы вовсе.
+#
+# Единожды на запуск скрипта: ниже это спрашивают трижды.
+if command -v apk >/dev/null 2>&1; then PM=apk
+elif command -v opkg >/dev/null 2>&1; then PM=opkg
+else PM=none
+fi
+
+# Расширение файла пакета для этого менеджера и суффикс архитектуры у пакета без
+# бинарного кода: apk называет такой noarch, opkg — all.
+pkg_ext()    { if [ "$PM" = apk ]; then echo apk; else echo ipk; fi; }
+pkg_noarch() { if [ "$PM" = apk ]; then echo noarch.apk; else echo all.ipk; fi; }
+
 # Установленная версия пакета по его имени.
+#
+# Форматы вывода разные: `apk list -I` печатает «имя-1.2.3-r1 ...», `opkg list-installed`
+# — «имя - 1.2.3-1». Разбирается каждый своим выражением, а не одним «на всякий случай»:
+# общее выражение здесь молча выдавало бы пустоту на одном из двух.
 pkg_version() {  # ИМЯ_ПАКЕТА
-    apk list -I 2>/dev/null | sed -n "s/^$1-\([0-9][^ ]*\)-r.*/\1/p" | head -1
+    case "$PM" in
+        apk)  apk list -I 2>/dev/null | sed -n "s/^$1-\([0-9][^ ]*\)-r.*/\1/p" | head -1 ;;
+        opkg) opkg list-installed 2>/dev/null | sed -n "s/^$1 - \([0-9][^ ]*\)/\1/p" | head -1 ;;
+    esac
 }
 
 # Поставить скачанный пакет, не оставив роутер без того, что работало.
@@ -253,9 +308,26 @@ pkg_version() {  # ИМЯ_ПАКЕТА
 # нём удаление и остаётся законным, уже вторым шагом.
 #
 # Возвращает код apk; заполняет PKG_OUT (вывод apk) и PKG_REMOVED (снимался ли пакет).
+# Поставить локальный файл тем менеджером, который есть. --force-overwrite понимают оба
+# и нужен обоим (см. выше про общий /usr/sbin/steer); --allow-untrusted — только apk:
+# у opkg проверки подписи для локального файла нет вовсе, и такого флага он не знает.
+pkg_add_file() {  # ФАЙЛ
+    if [ "$PM" = apk ]; then
+        apk add --allow-untrusted --force-overwrite "$1" 2>&1
+    else
+        opkg install --force-overwrite "$1" 2>&1
+    fi
+}
+
+pkg_del() {  # ИМЯ
+    if [ "$PM" = apk ]; then apk del "$1" >/dev/null 2>&1
+    else opkg remove "$1" >/dev/null 2>&1
+    fi
+}
+
 pkg_install() {  # ФАЙЛ [ИМЯ_ДЛЯ_СНЯТИЯ...]
     file="$1"; shift
-    PKG_OUT="$(apk add --allow-untrusted --force-overwrite "$file" 2>&1)"
+    PKG_OUT="$(pkg_add_file "$file")"
     rc=$?
     PKG_REMOVED=0
     [ "$rc" = 0 ] && return 0
@@ -269,9 +341,9 @@ pkg_install() {  # ФАЙЛ [ИМЯ_ДЛЯ_СНЯТИЯ...]
         *) return "$rc" ;;
     esac
     [ "$#" -gt 0 ] || return "$rc"
-    for n in "$@"; do apk del "$n" >/dev/null 2>&1; done
+    for n in "$@"; do pkg_del "$n"; done
     PKG_REMOVED=1
-    PKG_OUT="$(apk add --allow-untrusted --force-overwrite "$file" 2>&1)"
+    PKG_OUT="$(pkg_add_file "$file")"
     return $?
 }
 
@@ -305,6 +377,17 @@ custom_path() {  # ИМЯ ВИД
 # возможных поведений.
 sanitize_list() {  # ВИД ВХОД ВЫХОД ФАЙЛ_СЧЁТЧИКОВ
     awk -v kind="$1" -v stat="$4" '
+    # Октет 0..255 и длина префикса 0..32 — то, чего не выражает регулярное выражение.
+    function ip_ok(a,   p, i) {
+        split(a, p, ".")
+        for (i = 1; i <= 4; i++) if (p[i] + 0 > 255 || p[i] == "" || length(p[i]) > 3) return 0
+        return 1
+    }
+    function cidr_ok(a,   q) {
+        split(a, q, "/")
+        if (!ip_ok(q[1])) return 0
+        return (q[2] + 0 <= 32 && q[2] != "" && length(q[2]) <= 2)
+    }
     {
         line = $0
         sub(/\r$/, "", line)
@@ -312,8 +395,13 @@ sanitize_list() {  # ВИД ВХОД ВЫХОД ФАЙЛ_СЧЁТЧИКОВ
         gsub(/^[ \t]+|[ \t]+$/, "", line)
         if (line == "") next
         if (kind == "prefixes") {
-            if (line ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/)            { print line "/32"; ok++; next }
-            if (line ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/)    { print line;       ok++; next }
+            # Проверяются и ДИАПАЗОНЫ значений, а не только форма. Раньше «10.0.0.256» и
+            # «192.168.0.0/40» проходили как верные, движок их тоже пропускает (он смотрит
+            # только на цифры, точки и слэши), и отвергал их уже nft — целиком весь
+            # ruleset одной транзакцией, сообщением про синтаксис nft. Человек при этом
+            # видел «Список «x»: строк 12» и не знал, какая строка виновата.
+            if (line ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/)         { if (ip_ok(line))       { print line "/32"; ok++; next } bad++; next }
+            if (line ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/) { if (cidr_ok(line))     { print line;       ok++; next } bad++; next }
             bad++; next
         }
         line = tolower(line)
@@ -364,7 +452,14 @@ list)
     json_add_object apply; json_close_object
     json_add_object explain; json_add_string address; json_close_object
     json_add_object lists; json_close_object
-    json_add_object list_fetch; json_add_string id; json_close_object
+    # kind объявлен обязательно, хотя реализация его читала и раньше: rpcd отсекает
+    # поля, которых нет в сигнатуре, и без него доменный запрос уходил бы в фолбэк
+    # manifest_file, где адресные категории проверяются ПЕРВЫМИ. У издателя `news` и
+    # `hodca` есть в обоих пространствах имён, так что доменный запрос скачивал бы
+    # адресный файл в news.lst — при том что правило ждёт domains/news.lst. Ответ при
+    # этом ok, а падает потом apply, далеко от причины. Это дословно I-011, для
+    # list_remove ниже сигнатуру расширили, а здесь забыли.
+    json_add_object list_fetch; json_add_string id; json_add_string kind; json_close_object
     json_add_object devices; json_close_object
     json_add_object local_lists; json_close_object
     json_add_object list_remove
@@ -417,8 +512,16 @@ call)
         json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
         json_get_var spec spec
         [ -n "$spec" ] || fail "пустая спецификация"
-        tmp=/tmp/splify2-spec.$$
-        printf '%s' "$spec" > "$tmp"
+        # Временный файл РЯДОМ с целевым, а не в /tmp, и это не мелочь. /tmp на OpenWrt —
+        # tmpfs, а спека лежит на overlay; mv между разными файловыми системами busybox
+        # делает копированием с удалением, а не rename(). Значит подмена НЕ атомарна:
+        # обрыв на середине (кончился overlay — а он 6,9 МБ) оставлял на месте рабочей
+        # спеки обрубок, и интерфейс при этом отвечал «Сохранено». Внутри одной ФС mv —
+        # это rename, то есть либо старый файл, либо новый, третьего не бывает.
+        # Ровно так уже сделано в download() выше, по той же причине.
+        mkdir -p "$(dirname "$SPEC")"
+        tmp="$SPEC.new.$$"
+        printf '%s' "$spec" > "$tmp" || { rm -f "$tmp"; fail "не удалось записать спецификацию — кончилось место?"; }
         # Компилятор — единственный судья: он же будет это применять. Проверка до
         # записи означает, что на диске не окажется спеки, которую движок отвергнет
         # при следующей загрузке.
@@ -437,9 +540,18 @@ call)
         obfs_after="$(obfs_fingerprint "$tmp")"
         obfs_before_n="$(obfs_names "$SPEC")"
         obfs_after_n="$(obfs_names "$tmp")"
-        mkdir -p "$(dirname "$SPEC")"
-        mv "$tmp" "$SPEC"
-        [ "$before" = "$after" ] || : > "$VLESS_DIRTY"
+        vless_before_n="$(vless_names "$SPEC")"
+        vless_after_n="$(vless_names "$tmp")"
+        # Код возврата mv проверяется: без этого «Сохранено» печаталось независимо от
+        # того, легла спека на диск или нет.
+        mv "$tmp" "$SPEC" || { rm -f "$tmp"; fail "не удалось заменить спецификацию"; }
+        # Признак пишется СЛОВОМ, как у обфускации, а не пустым файлом: экземпляру,
+        # которого ещё нет, сигналить некому — см. развёрнутое объяснение в ветке apply.
+        if [ "$vless_before_n" != "$vless_after_n" ]; then
+            echo instances > "$VLESS_DIRTY"
+        elif [ "$before" != "$after" ]; then
+            echo params > "$VLESS_DIRTY"
+        fi
         if [ "$obfs_before" != "$obfs_after" ]; then
             if [ "$obfs_before_n" != "$obfs_after_n" ]; then
                 echo instances > "$OBFS_DIRTY"
@@ -464,16 +576,39 @@ $out"
         # изменилось именно это, иначе правка любого списка роняла бы соединения через
         # туннель и меняла выходной адрес.
         if [ -f "$VLESS_DIRTY" ]; then
-            for o in $("$STEER" outputs --kind vless --spec "$SPEC" 2>/dev/null); do
-                # Через ubus, а не procd_send_signal: тот живёт в /lib/functions/procd.sh,
-                # которого в rpcd-скрипте нет. Сигнал именно ЭТОМУ экземпляру — резолвер и
-                # сторож перезапускать незачем, а '*' однажды уже убивал туннель при каждом
-                # сохранении.
-                ubus call service signal \
-                    "{\"name\":\"steer\",\"instance\":\"vless_$o\",\"signal\":15}" 2>/dev/null
+            # Два случая с разной ценой — ровно как у обфускации ниже, и раньше здесь был
+            # только второй:
+            #
+            #   instances — набор выходов vless изменился (выход появился, исчез или его
+            #               переименовали, а имя экземпляра это `vless_<выход>`).
+            #               Экземпляра для нового выхода ещё НЕТ, и сигнал уходит в
+            #               никуда. `start` на работающем сервисе заставляет procd
+            #               сверить описанные экземпляры с запущенными и завести разницу.
+            #   params    — сменился узел или подписка у существующего выхода: хватит
+            #               сигнала живому экземпляру.
+            #
+            # Прежде спасал побочный эффект: reload_dnsd ниже при отсутствии экземпляра
+            # dnsd делает start всего сервиса. То есть новый туннель поднимался, ТОЛЬКО
+            # если в спеке нет доменных каналов, — а они есть в самой обычной
+            # конфигурации этого продукта. С ними экземпляр dnsd существует, start не
+            # случается, и туннель не появлялся до перезагрузки роутера, выглядя
+            # настроенным. Для обфускации этот же сценарий давно назван недопустимым.
+            if [ "$(cat "$VLESS_DIRTY" 2>/dev/null)" = instances ]; then
+                "$INITD" start >/dev/null 2>&1
                 out="$out
+splify2: набор туннелей изменился — экземпляры пересобраны"
+            else
+                for o in $("$STEER" outputs --kind vless --spec "$SPEC" 2>/dev/null); do
+                    # Через ubus, а не procd_send_signal: тот живёт в
+                    # /lib/functions/procd.sh, которого в rpcd-скрипте нет. Сигнал именно
+                    # ЭТОМУ экземпляру — резолвер и сторож перезапускать незачем, а '*'
+                    # однажды уже убивал туннель при каждом сохранении.
+                    ubus call service signal \
+                        "{\"name\":\"steer\",\"instance\":\"vless_$o\",\"signal\":15}" 2>/dev/null
+                    out="$out
 splify2: туннель $o перезапущен — сменился узел или подписка"
-            done
+                done
+            fi
             rm -f "$VLESS_DIRTY"
         fi
         # Обфускаторы. Два разных случая с разной ценой:
@@ -545,7 +680,7 @@ splify2: обфускатор $o перезапущен — сменился с�
         file="$(manifest_file "$id" "$kind")"
         [ -n "$file" ] || fail "списка $id нет в манифесте"
         [ -n "$base" ] || fail "в манифесте нет base_url"
-        dest="$(local_path "$file")"
+        dest="$(local_path "$file")" || fail "издатель прислал недопустимый путь списка: $file"
         mkdir -p "$(dirname "$dest")"
         download "$base/$file" "$dest" || fail "список не скачался"
         json_init
@@ -613,11 +748,34 @@ splify2: обфускатор $o перезапущен — сменился с�
         # правила. На схлопывании двух списков в один проект уже обжигался (I-011).
         dest="$(custom_path "$name" "$kind")"
         mkdir -p "$(dirname "$dest")"
+        # Предел считается по ИТОГОВОМУ файлу, а не по одной порции.
+        #
+        # Проверка выше смотрит только на то, что пришло этим вызовом, а интерфейс грузит
+        # файл кусками по тысяче строк с append, и число кусков ничем не ограничено. То
+        # есть предел, заведённый ради overlay в 6,9 МБ, обходился самым обычным способом
+        # им пользоваться: выбрал файл на 40 МБ — сорок вызовов по мегабайту, ни один не
+        # превысил предел, а флеш забит, и дальше не пишется ни спека, ни конфиг, ни
+        # журнал, причём без единого слова о причине.
+        if [ "$append" = 1 ] || [ "$append" = true ]; then
+            have="$(wc -c < "$dest" 2>/dev/null || echo 0)"
+            add="$(wc -c < "$raw.clean" 2>/dev/null || echo 0)"
+            if [ "$((have + add))" -gt "$LIST_MAX_BYTES" ]; then
+                rm -f "$raw.clean"
+                fail "список «$name» дорос бы до $(( (have + add) / 1024 )) КБ, а предел $((LIST_MAX_BYTES / 1024)) КБ — столько на роутер не кладём"
+            fi
+        fi
         case "$append" in
-            1|true) cat "$raw.clean" >> "$dest" ;;
+            1|true) cat "$raw.clean" >> "$dest" || { rm -f "$raw.clean"; fail "не дописалось — кончилось место?"; } ;;
             # Замена через mv, а не через «> файл»: оборванная запись поверх рабочего
             # списка оставила бы канал маршрутизировать половину.
-            *)      mv "$raw.clean" "$dest" ;;
+            #
+            # Но сам mv атомарен только ВНУТРИ одной файловой системы, а $raw лежит в
+            # /tmp (tmpfs), тогда как списки — на overlay. Между ФС busybox копирует, то
+            # есть обрыв оставляет ровно тот обрубок, от которого mv и должен был спасти.
+            # Поэтому сначала переносим рядом с целью, и только потом переименовываем.
+            *)      mv "$raw.clean" "$dest.new.$$" &&
+                    mv "$dest.new.$$" "$dest" ||
+                    { rm -f "$raw.clean" "$dest.new.$$"; fail "не записалось — кончилось место?"; } ;;
         esac
         rm -f "$raw.clean"
         json_init
@@ -658,7 +816,7 @@ splify2: обфускатор $o перезапущен — сменился с�
         [ -n "$id" ] || fail "не указан список"
         file="$(manifest_file "$id" "$kind")"
         [ -n "$file" ] || fail "списка $id нет в манифесте"
-        dest="$(local_path "$file")"
+        dest="$(local_path "$file")" || fail "издатель прислал недопустимый путь списка: $file"
         # Канал, указывающий на файл, после удаления не скомпилируется: движок читает
         # список при сборке правил и падает на отсутствующем. Поэтому удаление
         # ОТКАЗЫВАЕТСЯ, пока список кем-то используется, вместо того чтобы оставить
@@ -762,7 +920,10 @@ splify2: обфускатор $o перезапущен — сменился с�
         json_add_boolean enabled "$svc_enabled"
         json_add_boolean running "$svc_running"
         json_add_string arch "$(pkg_arch)"
-        json_add_string version "$(apk list -I 2>/dev/null | sed -n 's/^steer\(-extended\)\{0,1\}-\([0-9][^ ]*\)-r.*/\2/p' | head -1)"
+        # Версия любого из двух вариантов пакета. Через pkg_version, а не своим разбором
+        # `apk list`: на opkg-роутере тот отдавал пустоту, и карточка движка показывала
+        # установленный движок без версии.
+        json_add_string version "$(v="$(pkg_version steer-extended)"; [ -n "$v" ] || v="$(pkg_version steer)"; printf '%s' "$v")"
         json_dump
         ;;
 
@@ -841,7 +1002,7 @@ splify2: обфускатор $o перезапущен — сменился с�
         case "$ver" in
             ''|*[!0-9.]*) json_add_boolean ok 0; json_add_string error "версия не в виде X.Y.Z"; json_dump; exit 0 ;;
         esac
-        name="luci-app-splify2-${ver}-1_noarch.apk"
+        name="luci-app-splify2-${ver}-1_$(pkg_noarch)"
         url="https://github.com/xyzmean/splify2/releases/download/v${ver}/${name}"
         tmp="/tmp/${name}"
         rm -f "$tmp"
@@ -893,7 +1054,10 @@ splify2: обфускатор $o перезапущен — сменился с�
         esac
         [ -n "$arch" ] || { json_add_boolean ok 0; json_add_string error "не определилась архитектура"; json_dump; exit 0; }
 
-        case "$ext" in 1|true) name="steer-extended-${ver}-1_${arch}.apk" ;; *) name="steer-${ver}-1_${arch}.apk" ;; esac
+        case "$ext" in
+            1|true) name="steer-extended-${ver}-1_${arch}.$(pkg_ext)" ;;
+            *)      name="steer-${ver}-1_${arch}.$(pkg_ext)" ;;
+        esac
         url="https://github.com/xyzmean/steer/releases/download/v${ver}/${name}"
         tmp="/tmp/${name}"
         rm -f "$tmp"

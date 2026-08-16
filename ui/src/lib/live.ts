@@ -143,18 +143,40 @@ export function useLive(): Live {
                 rpc.status(), rpc.devStats(), rpc.engineState(), rpc.diag(), rpc.netInfo(),
             ])
             if (stop) return
-            if (s.status === 'fulfilled') { setStatus(s.value); setError(null) }
-            else setError(String(s.reason instanceof Error ? s.reason.message : s.reason))
-            const devices = d.status === 'fulfilled' ? d.value.devices || {} : null
+            /* Беда приезжает УСПЕШНЫМ промисом. Бэкенд по контракту (docs/rpcd-api.md)
+             * отвечает на любую ошибку объектом {ok:false, error} и кодом возврата нуль,
+             * поэтому промис резолвится, и проверка одного лишь status === 'rejected'
+             * такую беду не замечает вовсе.
+             *
+             * Цена была ровно обратной задуманному: движок не отвечает (спека битая,
+             * файла списка нет, движок откатили) → status отдаёт {ok:false,...} →
+             * setError(null) и объект ошибки в состоянии → StatusRail печатает «Работает»
+             * зелёной точкой, а заголовок диагностики — «Всё в порядке». Ветка «Проверка
+             * состояния недоступна», написанная ровно под этот случай, была недостижима.
+             * В самом бэкенде про это сказано прямо: «честная ошибка, а не пустой объект,
+             * который интерфейс покажет как „всё в порядке“». */
+            const failure = (v: unknown): string | null => {
+                if (!v || typeof v !== 'object') return null
+                const o = v as { ok?: unknown; error?: unknown }
+                if (o.ok === false || o.ok === 0)
+                    return typeof o.error === 'string' && o.error ? o.error : 'бэкенд вернул ошибку'
+                return null
+            }
+            const rejected = (r: { reason?: unknown }): string =>
+                String(r.reason instanceof Error ? r.reason.message : r.reason)
+
+            if (s.status === 'fulfilled' && !failure(s.value)) { setStatus(s.value); setError(null) }
+            else setError(s.status === 'fulfilled' ? failure(s.value)! : rejected(s))
+            const devices = d.status === 'fulfilled' && !failure(d.value) ? d.value.devices || {} : null
             if (devices) setDevs(devices)
-            if (e.status === 'fulfilled') setEngine(e.value)
-            if (g.status === 'fulfilled') { setDiag(g.value); setDiagOld(false) }
+            if (e.status === 'fulfilled' && !failure(e.value)) setEngine(e.value)
+            if (g.status === 'fulfilled' && !failure(g.value)) { setDiag(g.value); setDiagOld(false) }
             else setDiagOld(true)
-            if (ni.status === 'fulfilled') setNet(ni.value)
+            if (ni.status === 'fulfilled' && !failure(ni.value)) setNet(ni.value)
 
             const now = Date.now()
             const ch: Record<string, { up: number; down: number }> = {}
-            if (s.status === 'fulfilled')
+            if (s.status === 'fulfilled' && !failure(s.value))
                 for (const c of s.value.channels || [])
                     ch[c.name] = { up: c.bytes ?? 0, down: c.down_bytes ?? 0 }
             const dev: Record<string, { rx: number; tx: number }> = {}

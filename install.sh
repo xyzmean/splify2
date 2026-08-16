@@ -23,8 +23,51 @@ info() { printf '  %s\n' "$*"; }
 die()  { printf '\033[1;31mОшибка:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ---- окружение ---------------------------------------------------------------
-command -v apk >/dev/null 2>&1 || die "нужен apk: это OpenWrt 24.10+ (на старых opkg — ставьте пакеты вручную)"
+#
+# Менеджер пакетов определяется, а не предполагается. Раньше здесь стоял отказ «нужен apk:
+# это OpenWrt 24.10+, на старых opkg ставьте вручную» — то есть установка одной строкой не
+# работала на 23.05 и 22.03 вовсе, а именно они стоят на слабых роутерах, которые никто не
+# обновит. Теперь релизы содержат оба формата, и выбор делается здесь.
+#
+# Дальше по скрипту менеджер вызывается через три обёртки — pm_installed, pm_add,
+# pm_suffix, — а не проверкой «если apk» в каждом месте: пять таких проверок означали бы
+# пятое место, где про opkg забыли.
+if command -v apk >/dev/null 2>&1; then
+    PM=apk
+elif command -v opkg >/dev/null 2>&1; then
+    PM=opkg
+else
+    die "не нашёл ни apk, ни opkg — это точно OpenWrt?"
+fi
 command -v wget >/dev/null 2>&1 || die "нужен wget"
+
+# Список установленного. Имена пакетов в обоих менеджерах одни и те же.
+# Полноценный if, а не `[ ... ] && A || B`: у той идиомы A, вернувшая ненулевой код,
+# запускает ещё и B — то есть пустой список установленного у apk дёрнул бы opkg, которого
+# на этой системе нет.
+pm_installed() {
+    if [ "$PM" = apk ]; then apk list -I 2>/dev/null
+    else opkg list-installed 2>/dev/null
+    fi
+}
+
+# Установка локального файла. --allow-untrusted нужен ТОЛЬКО apk: пакеты не подписаны
+# ключом репозитория OpenWrt, они лежат в GitHub Releases, а opkg подпись локального
+# файла не проверяет вовсе и такого флага не знает. --force-overwrite нужен обоим:
+# интерфейс кладёт файлы в /www/luci-static, и при переустановке поверх прежней версии
+# менеджер видит там чужие с его точки зрения файлы.
+pm_add() {
+    if [ "$PM" = apk ]; then
+        apk add --allow-untrusted --force-overwrite "$1" >/dev/null
+    else
+        opkg install --force-overwrite "$1" >/dev/null
+    fi
+}
+
+# Расширение файла пакета и суффикс архитектуры у пакета без бинарного кода: apk называет
+# такой noarch, opkg — all. Перепутать их значит скачать несуществующий файл.
+pm_suffix() { if [ "$PM" = apk ]; then echo "noarch.apk"; else echo "all.ipk"; fi; }
+pm_ext()    { if [ "$PM" = apk ]; then echo "apk"; else echo "ipk"; fi; }
 
 # Архитектура ПАКЕТОВ, а не процессора: `apk --print-arch` отдаёт `aarch64`, а пакеты
 # OpenWrt называются `aarch64_cortex-a53`. По первому имя файла собирается неверно, и
@@ -32,7 +75,9 @@ command -v wget >/dev/null 2>&1 || die "нужен wget"
 if [ -f /etc/openwrt_release ]; then
     ARCH="$( . /etc/openwrt_release; printf '%s' "${DISTRIB_ARCH:-}" )"
 fi
-[ -n "${ARCH:-}" ] || ARCH="$(apk --print-arch 2>/dev/null || true)"
+# Запасной путь — только для apk: у opkg своего «print-arch» нет, а DISTRIB_ARCH выше
+# есть на обеих ветках OpenWrt, так что сюда доходят лишь совсем странные системы.
+[ -n "${ARCH:-}" ] || [ "$PM" != apk ] || ARCH="$(apk --print-arch 2>/dev/null || true)"
 [ -n "$ARCH" ] || die "не удалось определить архитектуру пакетов"
 
 mkdir -p "$TMP"
@@ -44,9 +89,9 @@ info "архитектура: $ARCH"
 # ---- какой движок стоит сейчас ------------------------------------------------
 have_steer=no
 have_ext=no
-if apk list -I 2>/dev/null | grep -q '^steer-extended'; then
+if pm_installed | grep -q '^steer-extended'; then
     have_steer=yes; have_ext=yes
-elif apk list -I 2>/dev/null | grep -q '^steer'; then
+elif pm_installed | grep -q '^steer'; then
     have_steer=yes
 fi
 
@@ -95,29 +140,27 @@ if [ "$have_steer" = no ]; then
     SV="$(latest "$REPO_STEER")"
     [ -n "$SV" ] || die "не удалось узнать версию движка (нет релизов?)"
     if [ "$WANT_EXT" = yes ]; then
-        PKG="steer-extended-${SV}-1_${ARCH}.apk"
+        PKG="steer-extended-${SV}-1_${ARCH}.$(pm_ext)"
     else
-        PKG="steer-${SV}-1_${ARCH}.apk"
+        PKG="steer-${SV}-1_${ARCH}.$(pm_ext)"
     fi
     say ""
     say "Движок steer $SV"
     info "$PKG"
     fetch "$(dl_url "$REPO_STEER" "$SV" "$PKG")" "$TMP/$PKG"
-    apk add --allow-untrusted "$TMP/$PKG" >/dev/null || die "движок не установился"
+    pm_add "$TMP/$PKG" || die "движок не установился"
     info "установлен"
 fi
 
 # ---- интерфейс ----------------------------------------------------------------
 UV="$(latest "$REPO_UI")"
 [ -n "$UV" ] || die "не удалось узнать версию интерфейса (нет релизов?)"
-UI_PKG="luci-app-splify2-${UV}-1_noarch.apk"
+UI_PKG="luci-app-splify2-${UV}-1_$(pm_suffix)"
 say ""
 say "Интерфейс splify2 $UV"
 info "$UI_PKG"
 fetch "$(dl_url "$REPO_UI" "$UV" "$UI_PKG")" "$TMP/$UI_PKG"
-# --force-overwrite: интерфейс кладёт файлы в /www/luci-static, где при переустановке
-# поверх прежней версии apk видит чужие с его точки зрения файлы.
-apk add --allow-untrusted --force-overwrite "$TMP/$UI_PKG" >/dev/null || die "интерфейс не установился"
+pm_add "$TMP/$UI_PKG" || die "интерфейс не установился"
 info "установлен"
 
 # ---- запуск -------------------------------------------------------------------

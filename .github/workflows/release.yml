@@ -68,8 +68,13 @@ jobs:
         run: |
           set -eu
           ls -la out/
+          # Оба формата обязательны. Пропустить один легко — сборка от этого не падает,
+          # просто половина роутеров (OpenWrt 23.05 и старше, там opkg) остаётся без
+          # пакета, и узнаётся это от людей, а не от барьера.
           test -f "out/luci-app-splify2-${VERSION}-1_noarch.apk" || {
             echo "::error::пакет luci-app-splify2-${VERSION}-1_noarch.apk не найден"; exit 1; }
+          test -f "out/luci-app-splify2-${VERSION}-1_all.ipk" || {
+            echo "::error::пакет luci-app-splify2-${VERSION}-1_all.ipk не найден"; exit 1; }
 
       - name: Зафиксировать версию в репозитории
         run: |
@@ -90,6 +95,7 @@ jobs:
           prerelease: ${{ inputs.prerelease }}
           files: |
             out/luci-app-splify2-${{ env.VERSION }}-1_noarch.apk
+            out/luci-app-splify2-${{ env.VERSION }}-1_all.ipk
             install.sh
           body: |
             Интерфейс и управление для [steer](https://github.com/xyzmean/steer).
@@ -101,3 +107,12 @@ jobs:
             ```
 
             Пакет один на все роутеры: архитектуры здесь нет, весь бинарный код в движке.
+            Форматов два: `.apk` для OpenWrt 24.10 и новее, `.ipk` для 23.05, 22.03 и
+            всего, что осталось на opkg. Содержимое одинаковое.
+
+            ```sh
+            # OpenWrt 24.10+
+            apk add --allow-untrusted ./luci-app-splify2-${{ env.VERSION }}-1_noarch.apk
+            # OpenWrt 23.05 и старше
+            opkg install ./luci-app-splify2-${{ env.VERSION }}-1_all.ipk
+            ```

@@ -454,5 +454,100 @@ check "оба метода разрешены в ACL на запись (R-017)" 
 w = json.load(open(sys.argv[1]))["luci-app-splify2"]["write"]["ubus"]["splify2"]
 print("yes" if "engine_stop" in w and "engine_start" in w else "no")' "$acl")"
 
+# ---- путь из манифеста издателя не выходит за каталог списков -----------------
+#
+# Поле `file` приходит из интернета (манифест издателя, адрес которого вдобавок
+# переопределяется через uci), а local_path снимала только ведущие слэши. `..` проходил
+# насквозь: `file` вида `../../../etc/crontabs/root` давал запись файла ОТ ROOT куда
+# угодно — крон, rc.local, сам этот скрипт, — содержимым с того же издателя. Тем же путём
+# list_remove удалял любой файл.
+#
+# Для СВОИХ списков эта мысль додумана давно (list_put проверяет имя), для чужих не была.
+cat > "$T/etc/manifest.json" <<'EOF'
+{
+  "base_url": "https://example.invalid/lists",
+  "categories":   [ { "id": "evil", "file": "../../../trav-probe/cron.txt" },
+                    { "id": "hack", "file": "a/../../b.lst" },
+                    { "id": "shell", "file": "x;id>/tmp/p.lst" },
+                    { "id": "news", "file": "news.lst" } ],
+  "domain_lists": [ { "id": "news", "file": "domains/news.lst" } ]
+}
+EOF
+rm -rf /tmp/trav-probe
+for id in evil hack shell; do
+    out="$(rpcd list_fetch "{\"id\":\"$id\",\"kind\":\"prefixes\"}")"
+    check "list_fetch отвергает путь «$id» из манифеста" \
+          "no" "$(printf '%s' "$out" | grep -q '"ok":true' && echo yes || echo no)"
+done
+check "ни один файл вне каталога списков не создан" "no" \
+      "$([ -e /tmp/trav-probe ] && echo yes || echo no)"
+
+# То же для удаления: раньше проверка «занят каналом» сравнивала уже подменённый путь.
+out="$(rpcd list_remove '{"id":"evil","kind":"prefixes"}')"
+check "list_remove отвергает путь с .. из манифеста" \
+      "no" "$(printf '%s' "$out" | grep -q '"ok":true' && echo yes || echo no)"
+
+# Законные пути обязаны продолжать работать — иначе заслон стоил бы больше, чем спас.
+check "обычный путь манифеста по-прежнему принимается" "yes" \
+      "$(rpcd list_fetch '{"id":"news","kind":"domains"}' | grep -q '"path"' && echo yes || echo no)"
+
+# ---- предел размера не обходится дописыванием по частям ------------------------
+#
+# LIST_MAX_BYTES проверялся для каждого вызова отдельно, а интерфейс грузит файл кусками
+# по тысяче строк с append. Число кусков не ограничено ничем, то есть предел, заведённый
+# ради overlay в 6,9 МБ, обходился самым обычным способом им пользоваться.
+big="$(awk 'BEGIN { while (i++ < 30000) print "10.0." int(i/256) "." (i%256) "/32" }')"
+rpcd list_put "$(printf '{"name":"grow","kind":"prefixes","text":"%s"}' "$(printf '%s' "$big" | tr '\n' '@' | sed 's/@/\\n/g')")" >/dev/null
+first="$(wc -c < "$T/lists/custom/grow.lst" 2>/dev/null || echo 0)"
+i=0
+while [ "$i" -lt 8 ]; do
+    rpcd list_put "$(printf '{"name":"grow","kind":"prefixes","append":true,"text":"%s"}' "$(printf '%s' "$big" | tr '\n' '@' | sed 's/@/\\n/g')")" >/dev/null
+    i=$((i + 1))
+done
+grown="$(wc -c < "$T/lists/custom/grow.lst" 2>/dev/null || echo 0)"
+check "дописывание не переваливает за предел размера" "yes" \
+      "$([ "$grown" -le 1048576 ] && echo yes || echo no)"
+check "и первая порция при этом легла" "yes" \
+      "$([ "$first" -gt 0 ] && echo yes || echo no)"
+
+# ---- свой список: диапазоны октетов и длина префикса ---------------------------
+# Форма проверялась, значения — нет: 10.0.0.256 и 192.168.0.0/40 проходили как верные.
+# Движок их тоже пропускает, а отвергал уже nft — целиком весь ruleset одной транзакцией,
+# сообщением про синтаксис nft, по которому не понять, какая строка виновата.
+rpcd list_put '{"name":"ranges","kind":"prefixes","text":"10.0.0.1\n10.0.0.256\n300.1.1.1\n192.168.0.0/24\n192.168.0.0/40"}' >/dev/null
+check "негодные октеты и длина префикса отброшены" "10.0.0.1/32
+192.168.0.0/24" "$(cat "$T/lists/custom/ranges.lst" 2>/dev/null)"
+
+# ---- kind объявлен в сигнатуре list_fetch --------------------------------------
+# rpcd отсекает поля, которых нет в сигнатуре. Реализация kind читает, а объявлен он не
+# был: доменный запрос уходил бы в фолбэк, где адресные категории проверяются первыми, и
+# для id, живущего в обоих пространствах (news, hodca), скачивался бы адресный файл под
+# именем доменного. Это I-011, вернувшийся с другой стороны.
+check "list_fetch объявляет kind" "yes" \
+      "$(rpcd_list | grep -A4 '"list_fetch"' | grep -q '"kind"' && echo yes || echo no)"
+
+# ---- набор выходов vless изменился — экземпляры пересобираются -------------------
+# Сигнал уходит экземпляру `vless_<выход>`, а у только что созданного или
+# переименованного выхода экземпляра ещё нет, и сигналить некому. Для обфускации это
+# давно различается (params против instances), для vless — не различалось, и новый
+# туннель не поднимался до перезагрузки на конфигурации с доменными каналами.
+check "spec_set помечает смену НАБОРА выходов vless как instances" "instances" \
+      "$(grep -A4 'vless_before_n" != "\$vless_after_n' "$SCRIPT" | grep -o 'instances' | head -1)"
+check "apply пересобирает экземпляры на instances" "yes" \
+      "$(grep -A22 'if \[ -f "\$VLESS_DIRTY" \]' "$SCRIPT" | grep -q '"\$INITD" start' && echo yes || echo no)"
+
+# ---- бэкенд знает оба менеджера пакетов ------------------------------------------
+# Установщик ставит .ipk через opkg на OpenWrt 23.05, и бэкенд обязан уметь то же:
+# иначе карточка движка показывает пустую версию, а «Установить» возвращает пустую
+# ошибку (apk нет, rc 127, вывод пуст).
+check "бэкенд определяет менеджер пакетов" "yes" \
+      "$(grep -q 'elif command -v opkg' "$SCRIPT" && echo yes || echo no)"
+check "версия пакета читается обоими способами" "yes" \
+      "$(grep -q 'opkg list-installed' "$SCRIPT" && echo yes || echo no)"
+check "установка идёт через обёртку, а не через apk напрямую" "0" \
+      "$(sed -n '/^pkg_install()/,$p' "$SCRIPT" | grep -c 'apk add\|apk del')"
+check "имена файлов пакетов зависят от менеджера" "yes" \
+      "$(grep -q 'pkg_ext)' "$SCRIPT" && grep -q 'pkg_noarch)' "$SCRIPT" && echo yes || echo no)"
+
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo "ЕСТЬ ПРОВАЛЫ: $fails")"
 [ "$fails" -eq 0 ]

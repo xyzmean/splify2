@@ -203,5 +203,38 @@ check "переименование названо в журнале вслух"
 check "пропуска по причине «нет в манифесте» не было" \
       "" "$(grep -o 'rkn_other.lst: нет в манифесте' "$T/syslog" 2>/dev/null | head -1)"
 
+# ---- откат возвращает и ДОМЕННЫЕ списки тоже -----------------------------------
+#
+# Копии кладутся рядом с файлом, а доменные списки лежат в подкаталоге domains/ — глоб
+# "$LISTS"/*.prev туда не заходит. Откат поэтому возвращал только адресные: повторный
+# apply падал на том же доменном файле, и в журнал уходило «ОТКАТ НЕ ПОМОГ», при
+# полностью исправном механизме отката. Заодно доменные .prev не удалялись никогда и
+# занимали на overlay двойной объём.
+#
+# Прогон второй, отдельный: движок теперь отвергает применение, то есть срабатывает
+# ровно ветка отката.
+rm -rf "$T/lists" "$T/var/last-update"
+mkdir -p "$T/lists/domains"
+printf 'prev-address.example/32\n' > "$T/lists/news.lst"
+printf 'prev-domain.example\n'     > "$T/lists/domains/news.lst"
+cat > "$T/bin/steer" <<'EOF'
+#!/bin/sh
+case "${1:-}" in
+    fit) src=""; for a in "$@"; do src="$a"; done; cat "$src" ;;
+    apply) exit 1 ;;          # движок отвергает — включается откат
+esac
+exit 0
+EOF
+chmod +x "$T/bin/steer"
+
+SANDBOX="$T" PATH="$T/bin:$PATH" STEER="$T/bin/steer" SPEC="$T/etc/spec.json" LISTS="$T/lists" MANIFEST="$T/etc/manifest.json" STAMP="$T/var/last-update" LOCK="$T/var/update.lock"     sh "$SCRIPT" > "$T/out2" 2>&1
+
+check "откат вернул адресный список" "prev-address.example/32" \
+      "$(cat "$T/lists/news.lst" 2>/dev/null)"
+check "откат вернул и ДОМЕННЫЙ список" "prev-domain.example" \
+      "$(cat "$T/lists/domains/news.lst" 2>/dev/null)"
+check "копий .prev после отката не осталось" "" \
+      "$(find "$T/lists" -name '*.prev' 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo 'ЕСТЬ ПРОВАЛЫ')"
 [ "$fails" -eq 0 ]

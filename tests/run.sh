@@ -27,6 +27,7 @@ run() {  # ИМЯ КОМАНДА...
 
 run listsmatch sh "$ROOT/tests/listsmatch.sh"
 run rpcdmatch  sh "$ROOT/tests/rpcdmatch.sh"
+run pkgmatch   sh "$ROOT/tests/pkgmatch.sh"
 
 # Интерфейс. Пропускается вслух, а не молча: молчаливый пропуск читается как «прошло», и
 # ровно так стенд однажды и превратился в фикцию.

@@ -118,6 +118,60 @@ docker run --rm -v "$PWD":/w -w /w alpine:latest sh -c \
        --info arch:noarch --info depends:'luci-base' \
        --script post-install:build/scripts/post-install \
        -F $PKG -o $OUT/luci-app-splify2-$VERSION-1_noarch.apk" >/dev/null 2>&1 \
-    || { echo "упаковка провалилась"; exit 1; }
+    || { echo "упаковка apk провалилась"; exit 1; }
+
+# ---- тот же пакет в формате opkg ---------------------------------------------
+#
+# OpenWrt перешёл на apk в 24.10, но 23.05 и 22.03 стоят на роутерах и будут стоять: на
+# 4/32 их никто не обновит. Интерфейс к движку нужен там ровно так же, а apk на таком
+# роутере нет вовсе — то есть пакет только в новом формате отрезает половину устройств,
+# ничего об этом не сказав.
+#
+# Дерево файлов ОДНО ($PKG) на оба формата: разные деревья означали бы пакет, который в
+# одном формате работает, а в другом нет, и заметить это можно было бы только на роутере.
+# Отличаются только метаданные.
+#
+# ipkg-build — родной скрипт OpenWrt, тот же, что собирает пакеты в их SDK. Качается один
+# раз в build/ (см. .gitignore): своя реализация формата дала бы .ipk, который opkg
+# принимает не везде.
+IPKG=build/ipkg-build
+if [ ! -x "$IPKG" ]; then
+    echo "качаю ipkg-build из OpenWrt"
+    # curl или wget: на машине сборщика бывает любой из двух, а требовать конкретный
+    # значит уронить сборку там, где всё для неё есть.
+    URL=https://raw.githubusercontent.com/openwrt/openwrt/master/scripts/ipkg-build
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$URL" -o "$IPKG" || { echo "не удалось скачать ipkg-build"; exit 1; }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$IPKG" "$URL" || { echo "не удалось скачать ipkg-build"; exit 1; }
+    else
+        echo "нужен curl или wget, чтобы взять ipkg-build"; exit 1
+    fi
+    chmod +x "$IPKG"
+fi
+
+# CONTROL кладётся ВНУТРЬ дерева пакета, поэтому строго ПОСЛЕ apk mkpkg по тому же
+# дереву: иначе служебные файлы уехали бы в полезную нагрузку apk.
+mkdir -p "$PKG/CONTROL"
+cat > "$PKG/CONTROL/control" <<EOF
+Package: luci-app-splify2
+Version: $VERSION-1
+Depends: luci-base
+Architecture: all
+Maintainer: xyzmean
+Section: luci
+Description: splify2: каналы, выходы и списки поверх движка steer
+EOF
+cp build/scripts/post-install "$PKG/CONTROL/postinst"
+chmod 0755 "$PKG/CONTROL/postinst"
+if "$PWD/$IPKG" "$PKG" "$PWD/$OUT" >/dev/null 2>&1; then
+    # ipkg-build называет файл через подчёркивания; приводим к тому же виду, что у apk,
+    # чтобы в релизе оба формата одного пакета лежали рядом и читались одинаково.
+    mv "$OUT/luci-app-splify2_${VERSION}-1_all.ipk" \
+       "$OUT/luci-app-splify2-${VERSION}-1_all.ipk" 2>/dev/null || true
+else
+    echo "упаковка ipk провалилась"; exit 1
+fi
+rm -rf "$PKG/CONTROL"
 
 ls -la "$OUT"
