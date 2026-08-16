@@ -8,6 +8,7 @@ import { rpc } from '@/lib/rpc'
 import { EMPTY_SPEC, ON_FAIL_TEXT, type OnFail, type Output, type Spec } from '@/lib/model'
 import { type Live } from '@/lib/live'
 import VlessPanel from '@/components/VlessPanel'
+import ObfsPanel from '@/components/ObfsPanel'
 
 // Outputs are named, and channels point at the NAME. That indirection is what lets
 // several tunnels coexist: failover re-points an output's device without touching a
@@ -308,6 +309,14 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                     />
                                 )}
 
+                                {/* Обфускация транспорта — под именем и до списка устройств:
+                                    сначала «чем доставляется», потом «куда». Только для
+                                    interface: у vless свой транспорт внутри движка, у direct
+                                    транспорта нет вовсе. */}
+                                {o.kind === 'interface' && (
+                                    <ObfsPanel output={o} onChange={(next) => patch(name, next)} />
+                                )}
+
                                 {o.kind === 'interface' && (() => {
                                     const list = devList(o)
                                     const free = devices.filter((d) => !list.includes(d.name))
@@ -392,6 +401,9 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                             <Badge variant={s.nat ? 'secondary' : 'destructive'}>
                                                 {s.nat ? 'NAT есть' : 'NAT не найден'}
                                             </Badge>
+                                            {o.obfs && (
+                                                <Badge variant="secondary">поверх TCP</Badge>
+                                            )}
                                             {s.mark && (
                                                 <span className="text-muted-foreground">
                                                     метка {s.mark}, таблица {s.table}

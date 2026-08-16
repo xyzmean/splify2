@@ -131,6 +131,29 @@ vless_fingerprint() {  # ФАЙЛ_СПЕКИ
     done | md5sum | awk '{print $1}'
 }
 
+# То же для обфускации транспорта (WireGuard поверх TCP). Отдельный признак, а не общий с
+# vless: перезапускать надо разные экземпляры, и по разным поводам.
+OBFS_DIRTY="${OBFS_DIRTY:-/var/run/splify2-obfs-dirty}"
+
+# Обфускатор читает адрес сервера и локальный порт ОДИН РАЗ при старте — как клиент vless
+# читает узел. Правка любого другого поля выхода (устройства, on_fail, списки каналов) его
+# не касается, и трогать процесс из-за неё нельзя: перезапуск рвёт сессию, а с ней и
+# рукопожатие WireGuard поверх неё.
+obfs_fingerprint() {  # ФАЙЛ_СПЕКИ
+    f="$1"
+    [ -s "$f" ] || { echo none; return; }
+    for o in $("$STEER" outputs --obfs --spec "$f" 2>/dev/null); do
+        printf '%s:%s:%s\n' "$o" \
+            "$(jsonfilter -i "$f" -e "@.outputs.$o.obfs.server" 2>/dev/null)" \
+            "$(jsonfilter -i "$f" -e "@.outputs.$o.obfs.listen" 2>/dev/null)"
+    done | md5sum | awk '{print $1}'
+}
+
+obfs_names() {  # ФАЙЛ_СПЕКИ
+    [ -s "$1" ] || return 0
+    "$STEER" outputs --obfs --spec "$1" 2>/dev/null | tr '\n' ' '
+}
+
 zone_index() {
     uci show firewall 2>/dev/null | sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.name='$ZONE'$/\1/p" | head -1
 }
@@ -406,9 +429,24 @@ call)
         # Сравниваем ДО подмены: после неё старого отпечатка уже не узнать.
         before="$(vless_fingerprint "$SPEC")"
         after="$(vless_fingerprint "$tmp")"
+        # Обфускация: важно не только «изменилось», но и «изменился ли НАБОР выходов».
+        # Смена адреса сервера лечится сигналом живому экземпляру, а появление нового
+        # выхода с obfs — нет: экземпляра ещё не существует, и сигнал уходить некому.
+        # Такой выход выглядел бы настроенным и молча не работал бы до перезагрузки.
+        obfs_before="$(obfs_fingerprint "$SPEC")"
+        obfs_after="$(obfs_fingerprint "$tmp")"
+        obfs_before_n="$(obfs_names "$SPEC")"
+        obfs_after_n="$(obfs_names "$tmp")"
         mkdir -p "$(dirname "$SPEC")"
         mv "$tmp" "$SPEC"
         [ "$before" = "$after" ] || : > "$VLESS_DIRTY"
+        if [ "$obfs_before" != "$obfs_after" ]; then
+            if [ "$obfs_before_n" != "$obfs_after_n" ]; then
+                echo instances > "$OBFS_DIRTY"
+            else
+                echo params > "$OBFS_DIRTY"
+            fi
+        fi
         json_init; json_add_boolean ok 1; json_dump
         ;;
 
@@ -437,6 +475,30 @@ $out"
 splify2: туннель $o перезапущен — сменился узел или подписка"
             done
             rm -f "$VLESS_DIRTY"
+        fi
+        # Обфускаторы. Два разных случая с разной ценой:
+        #
+        #   params    — сменился адрес сервера или локальный порт: хватит сигнала живому
+        #               экземпляру, procd поднимет его заново с новой спекой;
+        #   instances — набор выходов с obfs изменился: экземпляра для нового выхода ещё
+        #               не существует, и сигналить некому. `start` на работающем сервисе
+        #               заставляет procd СВЕРИТЬ описанные экземпляры с запущенными и
+        #               завести/снять разницу — без этого новый выход молча не работал бы
+        #               до перезагрузки роутера, выглядя настроенным.
+        if [ -f "$OBFS_DIRTY" ]; then
+            if [ "$(cat "$OBFS_DIRTY" 2>/dev/null)" = instances ]; then
+                "$INITD" start >/dev/null 2>&1
+                out="$out
+splify2: набор обфускаторов изменился — экземпляры пересобраны"
+            else
+                for o in $("$STEER" outputs --obfs --spec "$SPEC" 2>/dev/null); do
+                    ubus call service signal \
+                        "{\"name\":\"steer\",\"instance\":\"obfs_$o\",\"signal\":15}" 2>/dev/null
+                    out="$out
+splify2: обфускатор $o перезапущен — сменился сервер или порт"
+                done
+            fi
+            rm -f "$OBFS_DIRTY"
         fi
         # Резолвер обязан перечитать спеку: список файлов у доменного канала он берёт
         # при старте, поэтому после apply он ещё матчит прежние домены. Без этого
