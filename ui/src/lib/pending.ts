@@ -27,7 +27,11 @@ class PendingStore {
     private listeners = new Set<Listener>()
     private timer: ReturnType<typeof setTimeout> | null = null
     private writing: Promise<void> = Promise.resolve()
-    private dirty = false
+    dirty = false
+    /** Запись НА ЛЕТУ. Отдельно от dirty потому, что flush снимает dirty ещё до ответа
+     *  роутера: без этого признака страховка на выгрузку считала бы уехавшим то, что как раз
+     *  сейчас в полёте, и браузер имел бы полное право оборвать запрос молча. */
+    inflight = false
     private flashTimer: ReturnType<typeof setTimeout> | null = null
 
     subscribe(fn: Listener) {
@@ -74,23 +78,39 @@ class PendingStore {
         this.dirty = false
         if (this.timer) { clearTimeout(this.timer); this.timer = null }
         const spec = this.saved
+        this.inflight = true
         this.writing = this.writing.then(async () => {
-            const r = await rpc.specSet(JSON.stringify(spec))
-                .catch((e) => ({ ok: false, error: String(e instanceof Error ? e.message : e) }))
-            if (!r.ok) {
-                /* Отказ dry-run — это не «потеряно»: спека осталась в памяти, человек
-                 * видит причину и правит дальше; следующая правка попробует снова. */
-                notify(('error' in r && r.error) || 'не удалось сохранить', 'error')
-                this.dirty = true
-                this.emit()
-            } else if ('warn' in r && r.warn) {
-                /* Сохранение прошло, но список не скачался — значит его канал не поднимется.
-                 * Молчать здесь нельзя: человек выбрал сервис, интерфейс мигнул «Сохранено», а
-                 * работать оно не будет, и связь между этими событиями восстановить нечем. */
-                notify(String(r.warn), 'error')
+            try {
+                const r = await rpc.specSet(JSON.stringify(spec))
+                    .catch((e) => ({ ok: false, error: String(e instanceof Error ? e.message : e) }))
+                if (!r.ok) {
+                    /* Отказ dry-run — это не «потеряно»: спека осталась в памяти, человек
+                     * видит причину и правит дальше; следующая правка попробует снова. */
+                    notify(('error' in r && r.error) || 'не удалось сохранить', 'error')
+                    this.dirty = true
+                    this.emit()
+                } else if ('warn' in r && r.warn) {
+                    /* Сохранение прошло, но список не скачался — значит его канал не
+                     * поднимется. Молчать нельзя: человек выбрал сервис, интерфейс мигнул
+                     * «Сохранено», а работать оно не будет, и связь между этими событиями
+                     * восстановить нечем. */
+                    notify(String(r.warn), 'error')
+                }
+            } finally {
+                /* В finally, а не в трёх ветках: признак «в полёте» обязан сниматься при любом
+                 * исходе, включая исключение, — иначе страховка на выгрузку начнёт спрашивать
+                 * про несохранённое там, где всё давно записано. */
+                this.inflight = false
             }
         })
         await this.writing
+    }
+
+    /** Есть ли правка, которая ещё НЕ уехала на роутер: либо ждёт своих 500 мс, либо
+     *  прошлая запись отказала. Нужен снаружи — по нему страховка на выгрузку решает,
+     *  спрашивать ли человека. */
+    hasUnsaved(): boolean {
+        return this.dirty || this.inflight
     }
 
     /** Сколько правил и выходов отличается от применённого. Позиционно по каналам:
@@ -133,6 +153,33 @@ class PendingStore {
 }
 
 export const pending = new PendingStore()
+
+/* СТРАХОВКА НА УХОД СО СТРАНИЦЫ. Правка живёт в браузере до 500 мс — столько ждёт дебаунс, —
+ * и этого хватает, чтобы её потерять: человек создаёт правило и сразу обновляет страницу.
+ * Именно так и пришло сообщение об ошибке (splify2#11: «после создания правила и перезагрузки
+ * страницы пропадает правило»). С прежней кнопкой «Сохранить» такого случиться не могло:
+ * человек знал, отправил он что-нибудь или нет.
+ *
+ * Два крюка, и они делают разное. `visibilitychange`/`pagehide` — попытка ДОПИСАТЬ: браузер
+ * ещё разрешает начатый запрос, и в большинстве случаев этого достаточно. `beforeunload` —
+ * последняя черта: если правка всё ещё не уехала, человека СПРАШИВАЮТ, а не теряют её молча.
+ * Спрашивается только при действительно несохранённом (окно дебаунса или отказ прошлой
+ * записи), поэтому в обычной работе диалога не видно. */
+if (typeof window !== 'undefined') {
+    const flushNow = () => {
+        if (pending.hasUnsaved()) void pending.flush()
+    }
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') flushNow()
+    })
+    window.addEventListener('pagehide', flushNow)
+    window.addEventListener('beforeunload', (e) => {
+        if (!pending.hasUnsaved()) return
+        /* Текст сообщения браузеры давно не показывают — важен сам факт отмены события. */
+        e.preventDefault()
+        e.returnValue = ''
+    })
+}
 
 /** Подписка для компонентов: пилюли, вкладок, индикатора «Сохранено». */
 export function usePending() {
