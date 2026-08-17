@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { RefreshCw, Search, Trash2 } from 'lucide-react'
+import { Plus, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
@@ -36,6 +36,9 @@ export default function CatalogTab({ onUseInRule }: Props) {
         })
     const [q, setQ] = useState('')
     const [only, setOnly] = useState<'all' | 'used'>('all')
+    /** Форма своих списков — по кнопке, а не всегда: за ней приходят редко, а место
+     *  над каталогом она занимала всегда. Открытой остаётся, пока вкладку не покинули. */
+    const [customOpen, setCustomOpen] = useState(false)
 
     useEffect(() => {
         rpc.manifest().then((m) => setManifest(toCatalog(m))).catch(() => setManifest(null))
@@ -125,10 +128,6 @@ export default function CatalogTab({ onUseInRule }: Props) {
 
     return (
         <div className="space-y-3">
-            <CustomLists
-                local={local}
-                onChanged={async () => setLocal((await rpc.localLists()).files || {})}
-            />
             <div className="flex flex-wrap items-center gap-2">
                 <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-card px-2">
                     <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -161,7 +160,17 @@ export default function CatalogTab({ onUseInRule }: Props) {
                         </button>
                     ))}
                 </div>
+                <Button variant="secondary" onClick={() => setCustomOpen((v) => !v)} aria-expanded={customOpen}>
+                    <Plus className="mr-1 h-4 w-4" aria-hidden="true" /> Свой список
+                </Button>
             </div>
+
+            {customOpen && (
+                <CustomLists
+                    local={local}
+                    onChanged={async () => setLocal((await rpc.localLists()).files || {})}
+                />
+            )}
 
             <div className="overflow-x-auto rounded-md border border-border bg-card shadow-card">
                 <table className="w-full min-w-[38rem] text-sm">
