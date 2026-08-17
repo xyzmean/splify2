@@ -28,6 +28,8 @@ run() {  # ИМЯ КОМАНДА...
 run listsmatch sh "$ROOT/tests/listsmatch.sh"
 run rpcdmatch  sh "$ROOT/tests/rpcdmatch.sh"
 run pkgmatch   sh "$ROOT/tests/pkgmatch.sh"
+# Разбор конфигурации на странице протокола xsteer. Пропускается вслух, если нет quickjs.
+run protomatch python3 "$ROOT/tests/protomatch.py"
 
 # Интерфейс. Пропускается вслух, а не молча: молчаливый пропуск читается как «прошло», и
 # ровно так стенд однажды и превратился в фикцию.

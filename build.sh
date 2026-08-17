@@ -59,13 +59,31 @@ bad="$(grep -rEo '\b(bg|text|border|ring|from|to|via|fill|stroke)-sp-[a-z-]*' ui
 ( cd ui && npm run build >/dev/null 2>&1 ) || { echo "сборка интерфейса провалилась"; exit 1; }
 
 rm -rf "$PKG"
-mkdir -p "$RES" "$PKG/etc/init.d" "$PKG/usr/libexec/rpcd" "$PKG/usr/sbin" "$PKG/etc/splify2"
+mkdir -p "$RES" "$PKG/etc/init.d" "$PKG/usr/libexec/rpcd" "$PKG/usr/sbin" "$PKG/etc/splify2" \
+         "$PKG/lib/netifd/proto" "$PKG/www/luci-static/resources/protocol"
 cp -r ui/dist/* "$RES/"
 cp -r luci/htdocs/luci-static/resources/view "$PKG/www/luci-static/resources/"
 cp -r luci/root/usr/share "$PKG/usr/"
 cp files/usr/libexec/rpcd/splify2 "$PKG/usr/libexec/rpcd/splify2"
 cp files/usr/sbin/splify2-update-lists "$PKG/usr/sbin/splify2-update-lists"
 chmod 0755 "$PKG/usr/libexec/rpcd/splify2" "$PKG/usr/sbin/splify2-update-lists"
+
+# Протокол xsteer: обработчик netifd и страница LuCI.
+#
+# ПОЧЕМУ ЗДЕСЬ, А НЕ В steer. Клиент xsteer — часть движка: он живёт в пакете steer-extended и
+# запускается как `steer xsteer`. А эти два файла — часть ИНТЕРФЕЙСА: они описывают netifd и
+# LuCI, как показать туннель обычным интерфейсом и что у него за поля. Отдельный третий пакет
+# (luci-proto-xsteer) означал бы третью версию, третий барьер релиза и третий способ поставить
+# половину — например обработчик без страницы, и тогда LuCI говорит «не поддерживаемый тип
+# протокола» на работающем туннеле.
+#
+# ОБА ФАЙЛА ОБЯЗАНЫ ЕХАТЬ ВМЕСТЕ, и это ровно то, на чём стенд стоит ниже: без обработчика
+# интерфейс не поднимется вовсе, без страницы его нельзя настроить из браузера. Один из двух
+# забыть особенно легко потому, что лежат они в разных деревьях (files/ и luci/).
+cp files/lib/netifd/proto/xsteer.sh "$PKG/lib/netifd/proto/xsteer.sh"
+chmod 0755 "$PKG/lib/netifd/proto/xsteer.sh"
+cp luci/htdocs/luci-static/resources/protocol/xsteer.js \
+   "$PKG/www/luci-static/resources/protocol/xsteer.js"
 
 # Идентификатор сборки: загрузчик читает его на каждой загрузке страницы и добавляет
 # к URL бандлов. Без него браузер держал бы старый интерфейс после обновления пакета —

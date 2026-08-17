@@ -1,0 +1,365 @@
+'use strict';
+'require uci';
+'require ui';
+'require form';
+'require network';
+
+/* Протокол xsteer в LuCI: та же страница, что у WireGuard, и по той же причине.
+ *
+ * Человек, настраивающий туннель через веб-интерфейс, ждёт интерфейса, а не файла: зону
+ * firewall, адрес, MTU, «Сохранить и применить». Всё это уже умеет netifd, и наша задача —
+ * описать ему поля. Сам туннель поднимает /lib/netifd/proto/xsteer.sh, который собирает из
+ * этих полей конфигурацию в стиле wg и запускает движок.
+ *
+ * ПОЧЕМУ ПИРЫ ОТДЕЛЬНЫМИ СЕКЦИЯМИ. Так сделано у WireGuard (`config wireguard_<интерфейс>`),
+ * и повторять это соглашение важнее, чем придумать своё: человек, который однажды настраивал
+ * wg через LuCI, не должен изучать второй способ ради того же смысла.
+ *
+ * У ПИРА РОВНО ОДНА СЕКЦИЯ [Peer] — ХАБ. Это не ограничение интерфейса, а свойство звезды: сети
+ * других пиров задаются их префиксами в AllowedIPs этого пира, и трафик к ним идёт через хаб.
+ * Движок такую конфигурацию проверяет и отвергает лишнее с внятной строкой, поэтому здесь
+ * достаточно сказать это в подсказке.
+ */
+
+/* Кнопки «сгенерировать ключ» здесь НЕТ намеренно. Она требовала бы своей точки в rpcd и
+ * права на неё, то есть ещё одного места, где приватный ключ проходит через веб-интерфейс.
+ * Ключ делается одной командой на самом роутере — `steer xsteer-key`, — и так он не покидает
+ * консоль. Объявить вызов и не реализовать его было бы хуже всего: страница обещала бы то,
+ * чего нет. */
+
+/* Разбор конфигурации в стиле wg — тот же формат, что печатает server/xs_install.sh на хабе и
+ * что читает движок из /etc/steer/xsteer/*.conf.
+ *
+ * ПОЧЕМУ РАЗБОР ПОВТОРЁН ЗДЕСЬ, а не сделан вызовом движка. Страница обязана работать до того,
+ * как что-либо записано: человек вставляет текст, и ошибку в нём надо назвать сразу, в том же
+ * окне. Отправить текст на роутер и ждать ответа значило бы завести для этого точку rpcd,
+ * которая принимает ПРИВАТНЫЙ КЛЮЧ, — второе место, где ключ проходит через веб-интерфейс.
+ *
+ * Цена повторения названа прямо: два разбора одного формата могут разойтись. Поэтому здесь
+ * НЕТ своих правил — только те же, что у движка, и отказ теми же словами. Ключи, которых
+ * движок не делает, отвергаются, а не отбрасываются молча: молча отброшенный `DNS =` означает,
+ * что человек считает DNS настроенным, а его нет.
+ */
+var REFUSED = {
+	dns: _('steer не настраивает DNS через туннель — для этого есть доменные каналы'),
+	table: _('таблицей маршрутизации владеет сам движок'),
+	fwmark: _('метками владеет движок (registry_assign)'),
+	preup: _('команд из конфигурации steer не исполняет'),
+	postup: _('команд из конфигурации steer не исполняет'),
+	predown: _('команд из конфигурации steer не исполняет'),
+	postdown: _('команд из конфигурации steer не исполняет'),
+	saveconfig: _('steer конфигурацию не перезаписывает'),
+	presharedkey: _('общего секрета в xsteer нет: рукопожатие Noise IK его не использует'),
+	listenport: _('ListenPort бывает только у хаба — пир начинает соединение сам')
+};
+
+function isB64Key(v) {
+	return typeof v == 'string' && v.match(/^[A-Za-z0-9+\/]{43}=$/) != null;
+}
+
+function parseXsteerConfig(data) {
+	/* Разделители строк — и \n, и \r\n, и одинокий \r: конфигурацию приносят файлом из Windows,
+	 * из буфера обмена и перетаскиванием, и все три способа дают разные концы строк. */
+	var lines = String(data).split(/\r\n|\r|\n/);
+	var section = null, iface = {}, peers = [], cur = null;
+
+	for (var i = 0; i < lines.length; i++) {
+		/* Комментарии и `#`, и `;` — как у движка. БЕЗ якоря `$`: в регулярных выражениях JS
+		 * точка не пересекает `\r`, поэтому `[#;].*$` на строке «# что-то\r» не совпадал вовсе
+		 * и комментарий доезжал до разбора как ошибка. Проверено стендом. */
+		var line = lines[i].replace(/[#;].*/, '').trim();
+		if (!line.length)
+			continue;
+		var m = line.match(/^\[(\w+)\]$/);
+		if (m) {
+			section = m[1].toLowerCase();
+			if (section == 'peer') {
+				cur = {};
+				peers.push(cur);
+			} else if (section == 'interface') {
+				cur = iface;
+			} else {
+				return _('Неизвестная секция [%s] в строке %d').format(m[1], i + 1);
+			}
+			continue;
+		}
+		var kv = line.match(/^(\w+)\s*=\s*(.*)$/);
+		if (!kv)
+			return _('Строка %d не разбирается: %s').format(i + 1, line);
+		if (!section)
+			return _('Строка %d стоит до всякой секции').format(i + 1);
+		var key = kv[1].toLowerCase(), val = kv[2].trim();
+		if (REFUSED[key])
+			return _('Ключ %s (строка %d) не поддерживается: %s').format(kv[1], i + 1, REFUSED[key]);
+		if (val.length)
+			cur[key] = val;
+	}
+
+	if (!isB64Key(iface.privatekey))
+		return _('PrivateKey отсутствует или не 44 символа base64');
+	if (!iface.address)
+		return _('Address отсутствует: без адреса в туннеле хаб не узнаёт пир');
+	/* Ровно один пир — это не ограничение страницы, а свойство звезды: сети остальных пиров
+	 * задаются в AllowedIPs хаба, и трафик к ним идёт через него. */
+	if (peers.length != 1)
+		return _('Ожидается ровно одна секция [Peer] — хаб. Найдено: %d').format(peers.length);
+	var p = peers[0];
+	if (!isB64Key(p.publickey))
+		return _('PublicKey хаба отсутствует или не 44 символа base64');
+	if (!p.endpoint)
+		return _('Endpoint отсутствует: пир начинает соединение сам, и адрес хаба обязателен');
+	/* Только литерал IPv4 — то же правило, что у движка, и по той же причине: разрешение имени
+	 * пошло бы через DNS, который сам может быть направлен в этот же туннель. */
+	var ep = String(p.endpoint).match(/^(\d+\.\d+\.\d+\.\d+):(\d+)$/);
+	if (!ep)
+		return _('Endpoint должен быть адресом IPv4 и портом, например 203.0.113.7:443 (имя не подойдёт: его разрешение может уйти в этот же туннель)');
+	if (+ep[2] < 1 || +ep[2] > 65535)
+		return _('Порт хаба вне диапазона');
+	if (!p.allowedips)
+		return _('AllowedIPs отсутствует: непонятно, что заворачивать в туннель');
+
+	return {
+		private_key: iface.privatekey,
+		addresses: String(iface.address).split(/[,\s]+/).filter(function(x) { return x.length; }),
+		sni: iface.sni || '',
+		mtu: iface.mtu || '',
+		public_key: p.publickey,
+		endpoint_host: ep[1],
+		endpoint_port: ep[2],
+		allowed_ips: String(p.allowedips).split(/[,\s]+/).filter(function(x) { return x.length; }),
+		persistent_keepalive: p.persistentkeepalive || ''
+	};
+}
+
+network.registerPatternVirtual(/^xs-.+$/);
+network.registerErrorCode('NO_PRIVATE_KEY', _('Приватный ключ не задан'));
+network.registerErrorCode('INVALID_CONFIG', _('Движок отверг настройки: смотрите системный журнал'));
+
+return network.registerProtocol('xsteer', {
+	getI18n: function() {
+		return _('xsteer (звезда поверх поддельного TCP)');
+	},
+
+	getIfname: function() {
+		return this._ubus('l3_device') || 'xs-%s'.format(this.sid);
+	},
+
+	/* Имя метода — getPackageName, а не getOpkgPackage: в LuCI этой версии (сверено с
+	 * работающим amneziawg.js на самом роутере) спрашивают именно его, и старое имя молча
+	 * ничего не вернуло бы — кнопка «установить расширения протокола» осталась бы без пакета.
+	 *
+	 * Пакет здесь — САМ splify2, а не отдельный luci-proto-xsteer. Так решено сознательно:
+	 * клиент xsteer это часть движка steer, а страница протокола и обработчик netifd — часть
+	 * интерфейса, то есть этого пакета. Отдельный третий пакет означал бы третью версию,
+	 * третий барьер релиза и третий способ поставить половину. */
+	getPackageName: function() {
+		return 'luci-app-splify2';
+	},
+
+	isFloating: function() {
+		return true;
+	},
+
+	isVirtual: function() {
+		return true;
+	},
+
+	getDevices: function() {
+		return null;
+	},
+
+	containsDevice: function(ifname) {
+		return (network.getIfnameOf(ifname) == this.getIfname());
+	},
+
+	renderFormOptions: function(s) {
+		var o;
+
+		o = s.taboption('general', form.Value, 'private_key',
+			_('Приватный ключ'),
+			_('Ключ этой пира, 44 символа base64 — как у WireGuard. Получить: <code>steer xsteer-key</code>. Публичную половину надо отдать хабу.'));
+		o.password = true;
+		o.rmempty = false;
+		o.validate = function(section_id, value) {
+			if (!value || value.length != 44 || !value.match(/^[A-Za-z0-9+\/]{43}=$/))
+				return _('Ожидается 44 символа base64 (32 байта), как печатает steer xsteer-key');
+			return true;
+		};
+
+		o = s.taboption('general', form.DynamicList, 'addresses',
+			_('Адрес в туннеле'),
+			_('Адрес этой пира внутри звезды, с префиксом: например <code>10.77.0.2/24</code>. Он же попадает в конфигурацию движка — хаб узнаёт пир по нему.'));
+		o.datatype = 'cidr4';
+		o.rmempty = false;
+
+		/* ---- загрузка готовой конфигурации ------------------------------------
+		 *
+		 * Кнопка есть у wireguard и amneziawg, и здесь она нужна БОЛЬШЕ, чем там: конфигурацию
+		 * пира печатает установщик хаба (server/xs_install.sh), и без этой кнопки её пришлось
+		 * бы разносить по семи полям руками, сверяя ключи по 44 символа глазами.
+		 *
+		 * Окно делается через ui.showModal, а не вставкой панели в страницу, как в amneziawg.js.
+		 * Там так сделано потому, что кнопка живёт ВНУТРИ модального окна пира (второе модальное
+		 * окно поверх первого LuCI не умеет), а наша — на самой странице интерфейса. Модальное
+		 * окно проще и не завязано на внутреннее устройство form.js: та вставка ищет соседние
+		 * узлы по структуре разметки и ломается от её изменения между версиями LuCI.
+		 */
+		o = s.taboption('general', form.Button, '_import',
+			_('Импорт конфигурации'),
+			_('Вставить конфигурацию, которую напечатал установщик хаба (<code>xs_install.sh</code>), — поля заполнятся сами.'));
+		o.inputtitle = _('Загрузка конфигурации…');
+		o.inputstyle = 'action';
+		o.onclick = function() {
+			var textarea = E('textarea', {
+				'placeholder': _('Вставьте сюда конфигурацию пира или перетащите файл .conf…'),
+				'style': 'height:14em;width:100%;white-space:pre;font-family:monospace'
+			});
+			var problem = E('div', { 'class': 'alert-message warning', 'style': 'display:none' }, ['']);
+
+			/* Перетаскивание файла — как в эталоне: конфигурацию чаще всего приносят файлом,
+			 * а не из буфера обмена. */
+			var drop = E('div', {
+				'dragover': function(ev) { ev.stopPropagation(); ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; },
+				'drop': function(ev) {
+					ev.stopPropagation(); ev.preventDefault();
+					var file = ev.dataTransfer.files[0];
+					if (!file) return;
+					var reader = new FileReader();
+					reader.onload = function(rev) { textarea.value = String(rev.target.result).trim(); };
+					reader.readAsText(file);
+				}
+			}, [textarea]);
+
+			var apply = function() {
+				var parsed = parseXsteerConfig(textarea.value);
+				if (typeof parsed == 'string') {
+					/* Ошибку показываем В ТОМ ЖЕ окне и окно не закрываем: закрыть его значит
+					 * потерять вставленный текст, и человек будет вставлять заново, чтобы
+					 * прочитать сообщение второй раз. */
+					problem.firstChild.data = parsed;
+					problem.style.display = '';
+					return;
+				}
+				var sid = s.section;
+				var have = s.formvalue(sid, 'private_key') || uci.get('network', sid, 'private_key');
+				if (have && have != parsed.private_key &&
+				    !confirm(_('Заменить настройки этого интерфейса вставленной конфигурацией?')))
+					return;
+
+				s.getOption('private_key').getUIElement(sid).setValue(parsed.private_key);
+				s.getOption('addresses').getUIElement(sid).setValue(parsed.addresses);
+				s.getOption('sni').getUIElement(sid).setValue(parsed.sni);
+				/* MTU переносим только если он в файле ЕСТЬ. Пустое значение здесь означает
+				 * «согласуй сам», и подставить в него число значило бы запретить движку
+				 * поднимать предел выше — то есть тихо ухудшить туннель. */
+				if (parsed.mtu)
+					s.getOption('mtu').getUIElement(sid).setValue(parsed.mtu);
+
+				/* Хаб заменяется, а не добавляется: пиру нужен ровно один хаб, и оставленный
+				 * второй означал бы, что часть трафика идёт мимо звезды. */
+				uci.sections('network', 'xsteer_%s'.format(sid), function(old) {
+					uci.remove('network', old['.name']);
+				});
+				var psid = uci.add('network', 'xsteer_%s'.format(sid));
+				uci.set('network', psid, 'public_key', parsed.public_key);
+				uci.set('network', psid, 'allowed_ips', parsed.allowed_ips);
+				uci.set('network', psid, 'endpoint_host', parsed.endpoint_host);
+				uci.set('network', psid, 'endpoint_port', parsed.endpoint_port);
+				if (parsed.persistent_keepalive)
+					uci.set('network', psid, 'persistent_keepalive', parsed.persistent_keepalive);
+
+				ui.hideModal();
+				/* Сохраняем и перерисовываем: секции пира созданы в обход карты, и без этого их
+				 * на странице не видно до перезагрузки. */
+				return s.map.save(null, true);
+			};
+
+			ui.showModal(_('Загрузка конфигурации xsteer'), [
+				E('p', _('Конфигурация в стиле WireGuard: секция <code>[Interface]</code> с приватным ключом и адресом, секция <code>[Peer]</code> с ключом хаба и его адресом. Ровно один пир — хаб звезды.')),
+				drop,
+				problem,
+				E('div', { 'class': 'right' }, [
+					E('button', { 'class': 'btn', 'click': ui.hideModal }, [ _('Отмена') ]),
+					' ',
+					E('button', { 'class': 'btn cbi-button-positive', 'click': ui.createHandlerFn(this, apply) },
+						[ _('Применить') ])
+				])
+			]);
+			textarea.focus();
+			return false;
+		};
+
+		o = s.taboption('advanced', form.Value, 'sni',
+			_('Маскировочный домен (SNI)'),
+			_('Имя, которое уйдёт в ClientHello. Для наблюдателя поток выглядит обычным TLS к этому домену, поэтому имя стоит брать существующее и ничем не выделяющееся.'));
+		o.placeholder = 'www.microsoft.com';
+
+		o = s.taboption('advanced', form.Value, 'mtu',
+			_('MTU'),
+			_('Накладные расходы xsteer — 61 байт, поэтому предел равен MTU канала минус 61: 1439 при обычных 1500 и 1431 на PPPoE. MTU обязан СОВПАДАТЬ у всех участников звезды: при расхождении маленькие пакеты ходят, а большие пропадают — движок предупредит об этом в журнале.'));
+		o.datatype = 'range(576,1439)';
+		o.placeholder = '1439';
+
+		o = s.taboption('advanced', form.Value, 'device_name',
+			_('Имя устройства'),
+			_('По умолчанию <code>xs-&lt;интерфейс&gt;</code>. Менять стоит только если имя с чем-то спорит.'));
+		o.placeholder = 'xs-%s'.format(s.section);
+
+		/* ---- хаб (пир) ------------------------------------------------------- */
+		try {
+			s.tab('peers', _('Хаб'), _('Пиру нужен ровно один пир — хаб звезды. Сети остальных пиров перечисляются в его AllowedIPs: трафик к ним идёт через хаб.'));
+		} catch (e) {}
+
+		o = s.taboption('peers', form.SectionValue, '_peers', form.GridSection,
+			'xsteer_%s'.format(s.section));
+		/* Без этой строки секция пиров показывалась бы и у интерфейсов с другим протоколом:
+		 * так же сделано в amneziawg.js на этом же роутере. */
+		o.depends('proto', 'xsteer');
+		var ss = o.subsection;
+		ss.anonymous = true;
+		ss.addremove = true;
+		ss.nodescriptions = true;
+		ss.modaltitle = _('Хаб звезды');
+		ss.addbtntitle = _('Добавить хаб');
+
+		o = ss.option(form.Flag, 'disabled', _('Выключен'));
+		o.modalonly = false;
+
+		o = ss.option(form.Value, 'public_key', _('Публичный ключ хаба'));
+		o.rmempty = false;
+		o.validate = function(section_id, value) {
+			if (!value || !value.match(/^[A-Za-z0-9+\/]{43}=$/))
+				return _('Ожидается 44 символа base64');
+			return true;
+		};
+
+		o = ss.option(form.DynamicList, 'allowed_ips', _('AllowedIPs'),
+			_('Какие адреса идут в туннель. Для звезды это сеть туннеля и сети других пиров; <code>0.0.0.0/0</code> означает «весь трафик через хаб».'));
+		o.datatype = 'cidr4';
+		o.rmempty = false;
+
+		o = ss.option(form.Value, 'endpoint_host', _('Адрес хаба'),
+			_('Только адрес, не имя: разрешение имени пошло бы через DNS, который сам может быть направлен в этот же туннель, — и тогда туннель не поднимется никогда.'));
+		o.datatype = 'ip4addr';
+		o.rmempty = false;
+
+		o = ss.option(form.Value, 'endpoint_port', _('Порт хаба'),
+			_('Обычно 443: на этом порту поток, похожий на TLS, не выделяется среди остального.'));
+		o.datatype = 'port';
+		o.placeholder = '443';
+
+		o = ss.option(form.Value, 'persistent_keepalive', _('Keepalive, с'),
+			_('Пир за NAT обязана поддерживать отображение живым: дозвониться до неё хаб не может. Ноль выключает.'));
+		o.datatype = 'range(0,3600)';
+		o.placeholder = '25';
+	},
+
+	/* Удаление интерфейса обязано забирать и его секции пиров: оставленные `xsteer_<имя>`
+	 * висели бы в /etc/config/network навсегда и однажды достались бы новому интерфейсу с тем
+	 * же именем — то есть чужой хаб с чужим ключом. */
+	deleteConfiguration: function() {
+		uci.sections('network', 'xsteer_%s'.format(this.sid), function(s) {
+			uci.remove('network', s['.name']);
+		});
+	}
+});

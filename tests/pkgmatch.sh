@@ -126,6 +126,40 @@ for d in README.md docs/rpcd-api.md ui/README.md; do
         "$(grep -qP '[А-Яа-я]' "$d" && echo yes || echo no)"
 done
 
+# ---- протокол xsteer: обработчик netifd и страница LuCI -------------------------
+# Оба файла ОБЯЗАНЫ ехать в пакете вместе, и проверяется это здесь потому, что каждая из
+# половин ломается по-своему и молча. Без обработчика /lib/netifd/proto/xsteer.sh интерфейс с
+# `proto xsteer` не поднимается вовсе, а LuCI показывает его «неизвестным». Без страницы
+# protocol/xsteer.js туннель работает, но в браузере на нём написано «Не поддерживаемый тип
+# протокола» и предлагается поставить пакет — который уже стоит. Второе уже случалось на живом
+# роутере: обработчик был, страницы не было, и выглядело это как поломка пакета.
+check "build.sh кладёт обработчик netifd" "1" \
+    "$(grep -c 'cp files/lib/netifd/proto/xsteer.sh' build.sh)"
+check "обработчик кладётся исполняемым" "1" \
+    "$(grep -c 'chmod 0755 "\$PKG/lib/netifd/proto/xsteer.sh"' build.sh)"
+check "build.sh кладёт страницу протокола" "1" \
+    "$(grep -c 'cp luci/htdocs/luci-static/resources/protocol/xsteer.js' build.sh)"
+check "обработчик есть в дереве" "yes" \
+    "$([ -f files/lib/netifd/proto/xsteer.sh ] && echo yes || echo no)"
+check "страница протокола есть в дереве" "yes" \
+    "$([ -f luci/htdocs/luci-static/resources/protocol/xsteer.js ] && echo yes || echo no)"
+# Кнопка «установить расширения протокола» обязана называть ЭТОТ пакет: клиент xsteer живёт в
+# движке, а протокол для netifd и LuCI — здесь, отдельного пакета для протокола нет и не будет.
+# Проверяется не отсутствие имени в тексте (в пояснении оно уместно), а то, что в КОДЕ
+# возвращается имя существующего пакета: имя несуществующего оставило бы кнопку, которая ничего
+# не ставит.
+check "страница называет пакетом сам splify2" "1" \
+    "$(grep -c "return 'luci-app-splify2'" luci/htdocs/luci-static/resources/protocol/xsteer.js)"
+check "в коде не возвращается несуществующий пакет" "0" \
+    "$(grep -c "'luci-proto-xsteer'" luci/htdocs/luci-static/resources/protocol/xsteer.js)"
+# Обработчик вызывает движок по абсолютному пути. Путь обязан быть тем, куда движок ставится
+# пакетом steer: /usr/sbin/steer. Проверка стоит потому, что при отладке этот путь заменяют на
+# свой бинарник, и уехать в релиз с чужим путём — значит получить «нет такой команды» у всех.
+check "обработчик вызывает /usr/sbin/steer" "2" \
+    "$(grep -c '/usr/sbin/steer' files/lib/netifd/proto/xsteer.sh)"
+check "в обработчике нет отладочных путей" "0" \
+    "$(grep -c '/usr/local/sbin' files/lib/netifd/proto/xsteer.sh)"
+
 # ---- workflow вообще пригоден к запуску ---------------------------------------
 # Разбор вынесен в tests/wfcheck.py — там объяснено, почему глазами это не ловится.
 # Коротко: GitHub раскрывает выражения и внутри комментариев оболочки в блоке `run:`,
