@@ -1,32 +1,92 @@
-# React + TypeScript + Vite
+# Интерфейс splify2
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Одностраничное приложение, которое LuCI отдаёт как view `splify2/home`. Собирается в статические
+файлы и уезжает в пакет `luci-app-splify2`; работать ему предстоит на роутере, отдавая себя по
+локальной сети с флеша размером в единицы мегабайт, и почти все решения здесь про это.
 
-Currently, two official plugins are available:
+## Как запустить и собрать
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```sh
+npm install
+npm run dev        # dev-сервер Vite; вызовы rpcd падают вслух — их нет вне LuCI
+npm run build      # проверки + tsc + сборка + фиксация имён чанков + проверка бандла
+npm test           # vitest
+npm run lint       # oxlint
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+`npm run build` — это конвейер, а не просто `vite build`, и каждое звено закрывает конкретную
+поломку:
+
+| Шаг | Зачем |
+|---|---|
+| `check:cn` | Сверяет вендорную замену `tailwind-merge` с настоящей: подмена сделана ради размера, и её расхождение проявлялось бы съехавшими стилями |
+| `tsc -b` | Типы; сборка Vite сама их не проверяет |
+| `vite build` | Сборка с подменой `react` на `preact/compat` алиасом |
+| `pin-chunks.mjs` | Фиксирует имена чанков и дописывает `?v=` к их ссылкам |
+| `check-dist.mjs` | Проверяет целостность готового бандла |
+
+## Почему сделано именно так
+
+**preact вместо react — алиасом на сборке.** Уменьшает бандл в несколько раз. Это существенно
+потому, что uhttpd в OpenWrt **не отдаёт gzip**: сколько весит файл, столько и уедет по сети и
+столько же займёт во флеше. Исходный код при этом остаётся обычным React, алиас живёт только в
+`vite.config.ts`.
+
+**Имена чанков зафиксированы.** Однажды один и тот же чанк оказался доступен по двум URL, браузер
+загрузил две копии preact, и `useState` из одной не видел состояния другой — страница выглядела
+работающей и не реагировала. `pin-chunks.mjs` и `check-dist.mjs` держат этот инвариант.
+
+**Обход кеша LuCI двойной индирекцией.** LuCI ходит между страницами без перезагрузки документа,
+поэтому старый ES-модуль остаётся в памяти. Загрузчик (`luci/htdocs/.../home.js`) читает
+`build-id.txt` с `cache:'no-store'` и подставляет его как `?v=` ко всем бандлам.
+
+**`modulePreload` выключен.** LuCI не вставляет `modulepreload`, а таблица зависимостей без `?v=`
+ломала бы версионирование.
+
+## Устройство
+
+```
+src/
+  lib/
+    rpc.ts       мост в ubus: по методу на вызов, у каждого комментарий «почему именно так»
+    model.ts     типы, зеркалящие spec и status движка 1:1, и сборка каталога сервисов
+    live.ts      useLive(): один опрос на весь экран
+    engine.ts    состояние движка и версии
+    validate.ts  проверки адресов и доменов
+    notify.ts    тосты
+  components/
+    Console      корневой экран с вкладками
+    StatusRail   левая колонка: вердикт, скорость, устройства
+    EngineCard   установка и обновление движка
+    FirstRun     первый запуск
+    VlessPanel   подписка и узлы
+    ObfsPanel    обфускация транспорта
+    tabs/        RulesTab, RuleEditor, OutboundsTab, CatalogTab, LogsTab
+    ui/          примитивы в духе shadcn
+```
+
+**Главный принцип — тонкий мост.** Интерфейс не заводит своей модели данных. Вывод движка
+показывается, а не пересказывается: `model.ts` повторяет типы движка один к одному, спека пишется
+целиком, а `status`, `diag` и журнал отображаются как пришли. Вторая модель была бы вторым местом,
+которое расходится с движком при первом же его изменении — и почти каждая находка в этом коде
+оказывалась ровно там, где принцип нарушен.
+
+**Один снимок на весь экран.** `useLive()` делает один опрос раз в пять секунд и раздаёт результат
+всем панелям. Два опроса — это два разных мгновения, а скорость считается из разницы снимков: с
+разными мгновениями она считалась бы неверно. Там же страж от перекрывающихся кругов — на медленном
+роутере опрос может не уложиться в пять секунд.
+
+**Отказ приезжает успешным вызовом.** Бэкенд отвечает на любую беду объектом `{ok:false,error}` с
+нулевым кодом, поэтому промис резолвится. Проверять надо поле `ok`. На этом уже обжигались: движок
+не отвечал, а страница показывала «Работает» зелёной точкой.
+
+**Единственный нетривиальный алгоритм** — `toCatalog()` в `model.ts`: объединение категорий адресов
+и доменных списков в связные группы, чтобы одна запись каталога была одним сервисом. Union-Find с
+сжатием путей; ключи разделены по пространствам имён, потому что id из разных пространств законно
+совпадают.
+
+## Контракты, на которые опирается интерфейс
+
+- [docs/rpcd-api.md](../docs/rpcd-api.md) — методы бэкенда, их вход и выход.
+- [Контракт steer](https://github.com/xyzmean/steer/blob/main/docs/contract-v1.md) — формат спеки и
+  состояния. Интерфейс пишет спеку, поэтому ограничения оттуда — его ограничения.

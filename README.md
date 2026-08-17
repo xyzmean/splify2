@@ -1,102 +1,242 @@
-# splify2: Smart Routing & VPN UI for OpenWrt
+# splify2 — умная маршрутизация для OpenWrt с веб-интерфейсом
 
-splify2 is a complete frontend and management layer for OpenWrt that allows your router to intelligently decide what traffic goes through a VPN and what remains direct. By simply selecting services (e.g., YouTube, Telegram, Discord), you can route them seamlessly for all devices in your home network—without requiring VPN clients on individual phones or PCs, and without slowing down your regular internet traffic.
+splify2 позволяет роутеру самому решать, какой трафик идёт через VPN, а какой напрямую. Вы отмечаете
+сервисы в каталоге — YouTube, Telegram, Discord и прочие, — и они начинают ходить через туннель для
+**всех устройств в доме**: телефонов, телевизоров, приставок, гостей. Клиент VPN на каждом устройстве
+не нужен, а обычный трафик остаётся на полной скорости и по прямому пути.
 
 [![Telegram](https://img.shields.io/badge/Telegram-chat-2CA5E0?style=flat&logo=telegram)](https://t.me/ssplify)
-[![Support Project](https://img.shields.io/badge/Support-project-f5365c?style=flat)](https://www.donationalerts.com/r/yo1nkxxd)
+[![Поддержать проект](https://img.shields.io/badge/%D0%9F%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%B0%D1%82%D1%8C-%D0%BF%D1%80%D0%BE%D0%B5%D0%BA%D1%82-f5365c?style=flat)](https://www.donationalerts.com/r/yo1nkxxd)
 
-## Key Features
+## Что умеет
 
-- **Whole-Home Coverage:** Configure once on the router, and it works for all connected devices (phones, TVs, consoles, guests).
-- **Selective Routing:** Only selected services are routed through the VPN. Local banking, gaming, and regular browsing remain direct for full speed.
-- **High-Precision Domain Routing:** Routes traffic based on exact domain names, not just IP lists. This prevents massive IP blocks (like CDN IPs) from accidentally routing unrelated websites through your VPN.
-- **Multi-Tunnel Support:** Route different services through different VPNs (e.g., YouTube via Netherlands, Telegram via a personal WireGuard tunnel). Up to three distinct destinations are supported.
-- **Failover Capabilities:** Automatically switches to a backup server if the primary VPN fails. If all servers fail, traffic is blocked from leaking into the open internet.
-- **Automated Updates:** Categorized lists and services are automatically updated on a schedule from a central repository. No manual list management is required.
-- **Universal VPN Compatibility:** Supports direct VLESS/Reality subscription links, standalone `vless://` links, or existing WireGuard/AmneziaWG interfaces.
+- **Один раз на роутере — работает для всех.** Настройка живёт на роутере, устройствам ничего не
+  нужно.
+- **Выборочно, а не «всё в VPN».** Через туннель идёт только отмеченное. Банк, игры и обычный
+  просмотр остаются напрямую.
+- **Маршрутизация по доменам, а не только по адресам.** Один адрес CDN обслуживает сотни сайтов, и
+  по адресу их не различить: списки адресов уводят в туннель заодно всё, что живёт по соседству. По
+  именам этого не происходит.
+- **Свои списки.** Кроме каталога можно добавить свои домены и подсети — текстом, по ссылке или
+  файлом.
+- **Несколько туннелей одновременно.** Разные сервисы — в разные выходы: YouTube через Нидерланды,
+  Telegram через свой WireGuard. Число выходов ограничено движком (до 16), а не интерфейсом.
+- **Отказоустойчивость.** У выхода может быть список серверов; при отказе основного трафик уходит на
+  следующий. Когда не работает ни один — по умолчанию трафик останавливается, а не утекает в
+  открытый интернет.
+- **Обновление списков по расписанию.** Категории и сервисы обновляются сами, раз в сутки, из
+  центрального репозитория. Списки ужимаются под память роутера.
+- **Любой туннель.** Ссылка подписки VLESS/Reality, отдельные ссылки `vless://` или уже работающий
+  WireGuard/AmneziaWG.
+- **WireGuard поверх TCP** для сетей, где UDP режут: отдельная панель настройки обфускации.
+- **Самообновление интерфейса** и кнопка «Остановить всё» — отключить маршрутизацию целиком, не
+  разбирая настройку.
 
-## System Requirements
+## Требования
 
-- A router running **OpenWrt 24.10 or newer** (requires the `apk` package manager).
-- At least **1 MB** of free storage space.
-- One of the following:
-  - A VLESS/Reality subscription link.
-  - A standalone `vless://` link.
-  - A pre-configured WireGuard or AmneziaWG interface.
+- Роутер с **OpenWrt 22.03 или новее**. Работают оба менеджера пакетов: `apk` (24.10 и новее) и
+  `opkg` (23.05, 22.03).
+- Свободно хотя бы **1 МБ** во флеше.
+- И одно из:
+  - ссылка подписки VLESS/Reality;
+  - одна или несколько ссылок `vless://`;
+  - уже настроенный интерфейс WireGuard или AmneziaWG.
 
-## Installation
+## Установка
 
-Run the following command on your router to install splify2 automatically:
+Одной строкой на роутере:
 
 ```sh
 sh -c "$(wget -qO- https://raw.githubusercontent.com/xyzmean/splify2/main/install.sh)"
 ```
 
-The script will detect your router's architecture, install the core routing engine (`steer`), set up the web interface, and enable the service. 
+Скрипт определит архитектуру и менеджер пакетов, поставит движок маршрутизации
+([steer](https://github.com/xyzmean/steer)), затем интерфейс, и включит службу. Если движка нет, он
+спросит, какой вариант ставить:
 
-Once installed, navigate to **LuCI → Services → splify2** in your router's web interface to complete the setup.
+| Вариант | Когда брать |
+|---|---|
+| Расширенный | Туннель должен поднимать сам движок — есть ссылка подписки. Берите этот, если туннеля ещё нет. |
+| Базовый | Туннель уже работает: WireGuard, AmneziaWG, что угодно. Только маршрутизация. |
 
-## Uninstall
+Дальше — **LuCI → Сервисы → splify2**.
 
-Two packages are installed: the web interface (`luci-app-splify2`) and the engine — `steer`, or
-`steer-extended` if you chose the VLESS-capable build.
+Если предпочитаете ставить руками, возьмите пакеты со страниц релизов
+[splify2](https://github.com/xyzmean/splify2/releases) и
+[steer](https://github.com/xyzmean/steer/releases):
 
 ```sh
+# OpenWrt 24.10 и новее
+apk add --allow-untrusted ./steer-extended-<версия>-1_<арх>.apk
+apk add --allow-untrusted --force-overwrite ./luci-app-splify2-<версия>-1_noarch.apk
+
+# OpenWrt 23.05 и старше
+opkg install --force-overwrite ./steer-extended-<версия>-1_<арх>.ipk
+opkg install --force-overwrite ./luci-app-splify2-<версия>-1_all.ipk
+```
+
+Архитектура в имени пакета движка — та же, что показывает `DISTRIB_ARCH` в `/etc/openwrt_release`.
+Интерфейс архитектуры не имеет: весь бинарный код — в движке.
+
+### Если установка не удалась
+
+**«не удалось узнать версию движка (нет релизов?)»** — чаще всего релизы на месте, а недоступен
+`api.github.com` из сети роутера. Проверьте: `wget -qO- https://api.github.com/repos/xyzmean/steer/releases/latest`.
+Если запрос не проходит, скачайте пакеты на компьютере и поставьте руками, как выше.
+
+**«не нашёл ни apk, ни opkg»** — это не OpenWrt либо очень старая сборка.
+
+## Как устроено
+
+splify2 — это управляющий слой и интерфейс; пакеты маршрутизирует движок
+**[steer](https://github.com/xyzmean/steer)**.
+
+```
+Вы → интерфейс splify2 → ubus/rpcd → /etc/steer/spec.json → steer → nftables, ip route, DNS
+```
+
+- **splify2** держит списки, интерфейс, настройки и обновления. Он превращает ваш выбор в
+  файл настройки для движка и ничего не маршрутизирует сам.
+- **steer** компилирует эту настройку в правила `nftables`, наборы адресов и таблицы маршрутизации,
+  держит встроенный DNS для маршрутизации по доменам и, в расширенной сборке, сам поднимает туннель
+  VLESS/Reality.
+
+Разделение не формальное: интерфейс сознательно **не заводит своей модели данных**. Вывод движка
+проксируется дословно, а не разбирается и не пересказывается — вторая модель была бы вторым местом,
+которое расходится с движком при первом же его изменении.
+
+Если движок не установлен, интерфейс это переживает и говорит прямо, предлагая поставить: это
+предусмотренное состояние, а не поломка.
+
+### Откуда берутся списки
+
+- Списки маршрутизации (адреса и домены): [xyzmean/ru-bypass-ipsets](https://github.com/xyzmean/ru-bypass-ipsets)
+- Базовые доменные списки: [itdoginfo/allow-domains](https://github.com/itdoginfo/allow-domains)
+- Движок маршрутизации: [xyzmean/steer](https://github.com/xyzmean/steer)
+
+## Что где лежит
+
+| Путь | Что там |
+|---|---|
+| `/etc/steer/spec.json` | Вся настройка маршрутизации: правила, выходы, `on_fail`, выбранный узел |
+| `/etc/steer/sub.txt` | Узлы подписки VLESS |
+| `/etc/steer/lists/` | Скачанные списки; `custom/` внутри — свои |
+| `/etc/config/splify2` | Настройки uci: адрес подписки, адрес манифеста |
+| `/etc/splify2/` | Манифест каталога списков |
+| `/var/lib/steer/` | Реестр меток и таблиц, база fake-IP |
+| `/var/lib/splify2/` | Отметка времени последнего обновления списков |
+
+## Резервная копия настроек
+
+**Штатный механизм OpenWrt настройки не сохраняет.** `/etc/steer/spec.json` и `/etc/steer/sub.txt`
+не объявлены файлами конфигурации пакета, поэтому `sysupgrade` и «Создать архив» в LuCI их не
+берут — а `/etc/config/splify2` берут. После обновления прошивки «с сохранением настроек» вы
+получите подписку, которая выглядит настроенной, и при этом ноль правил, ноль выходов и ноль узлов.
+
+Сохраняйте руками:
+
+```sh
+tar czf /tmp/splify2-backup.tar.gz /etc/steer/spec.json /etc/steer/sub.txt /etc/config/splify2
+# и скопируйте файл с роутера
+```
+
+Восстановление — распаковать обратно и применить настройки в интерфейсе. Списки восстанавливать не
+нужно: отсутствующий список не мешает применению, а обновление скачает их по расписанию.
+
+## Удаление
+
+Ставятся два пакета: интерфейс (`luci-app-splify2`) и движок — `steer` либо `steer-extended`.
+
+```sh
+# OpenWrt 24.10 и новее
 apk del luci-app-splify2
 apk del steer-extended 2>/dev/null; apk del steer 2>/dev/null
+
+# OpenWrt 23.05 и старше
+opkg remove luci-app-splify2
+opkg remove steer-extended 2>/dev/null; opkg remove steer 2>/dev/null
 ```
 
-Kernel state needs no manual cleanup: the engine is stopped before the package is removed, and its
-`stop` deletes the `inet steer` nftables table and drops the `ip rule` / `ip route` entries it
-created.
+Состояние в ядре чистить руками не нужно: движок останавливается перед удалением пакета, а его
+остановка удаляет таблицу `inet steer` и снимает созданные `ip rule` и `ip route`.
 
-Configuration is deliberately left behind by the package manager. Remove it if you want nothing
-left:
+Настройки менеджер пакетов оставляет намеренно. Убрать всё:
 
 ```sh
-rm -rf /etc/steer          # spec.json and downloaded lists
-rm -rf /etc/splify2        # list manifest
-rm -rf /var/lib/steer      # mark registry and fake-IP database
-rm -rf /var/lib/splify2    # last list update timestamp
-uci -q delete splify2 && uci commit splify2   # subscription settings, if any were set
+rm -rf /etc/steer            # spec.json, подписка и скачанные списки
+rm -rf /etc/splify2          # манифест списков
+rm -rf /var/lib/steer        # реестр меток и база fake-IP
+rm -rf /var/lib/splify2      # отметка последнего обновления
+uci -q delete splify2 && uci commit splify2   # настройки подписки
 ```
 
-Then restart `rpcd` (`/etc/init.d/rpcd restart`) so LuCI drops the menu entry. If a list-update cron
-job was added by a third-party installer, it is not ours to remove — check `crontab -l`.
+Затем перезапустите `rpcd` (`/etc/init.d/rpcd restart`), чтобы LuCI убрал пункт меню.
 
-To verify nothing is left: `nft list table inet steer` should report that the table does not exist,
-and `ip rule show` should contain no `fwmark 0x...` lines from the engine.
-
-## Architecture & Responsibilities
-
-splify2 acts as the control plane and user interface, but the actual packet routing is handled by the high-performance **[steer](https://github.com/xyzmean/steer)** engine.
-
-- **splify2 (This Project):** Manages lists, UI, user preferences, and updates. It translates your choices into a configuration file for `steer`.
-- **steer:** A lightweight C engine that compiles the configuration into `nftables` rules, `fake-ip` DNS sets, and handles VLESS/Reality tunnels directly.
-
-If the `steer` engine is not installed, the splify2 interface will prompt you to install it. You can choose between:
-- **Extended:** Includes built-in VLESS/Reality tunneling (recommended if you use subscription links).
-- **Base:** Only routing. Use this if you rely purely on existing WireGuard tunnels.
-
-### Data Sources
-- Routing lists (IPs and Domains): [xyzmean/ru-bypass-ipsets](https://github.com/xyzmean/ru-bypass-ipsets)
-- Base domain lists: [itdoginfo/allow-domains](https://github.com/itdoginfo/allow-domains)
-- Core routing engine: [xyzmean/steer](https://github.com/xyzmean/steer)
-
-## Documentation
-
-- [rpcd-api.md](docs/rpcd-api.md): Contract for the `splify2` ubus/rpcd object — every method's input (JSON on stdin) and output, the error object shape, and the ACL grouping.
-
-## Development & Building
-
-The UI is built using React and Tailwind CSS, styled to match the OpenWrt Argon theme.
+**Задание крона придётся снять руками.** Его добавляет `post-install` пакета интерфейса, а
+обратного шага у пакета сейчас нет, поэтому после удаления строка остаётся и раз в сутки зовёт
+удалённый скрипт:
 
 ```sh
-cd ui 
-npm install 
-npm run build
-cd ..
-./build.sh                 # Builds the luci-app-splify2 package (requires Docker)
+crontab -l | grep -v splify2-update-lists | crontab -
 ```
 
-The resulting package is architecture-independent, as all binary components are contained within the `steer` engine. Releases are managed automatically via GitHub Actions.
+Проверить, что ничего не осталось: `nft list table inet steer` должен сообщить, что таблицы нет, а
+`ip rule show` — не содержать строк `fwmark 0x...` от движка.
+
+## Разбор неполадок
+
+Первым делом — вкладка **Логи steer** в интерфейсе: там же лежат проверки состояния (`diag`) и
+последние строки журнала движка. Дальше — по симптому.
+
+**Сайт идёт не туда.** Спросите движок напрямую: он назовёт канал и выход.
+
+```sh
+steer explain example.org
+steer explain 1.2.3.4
+```
+
+Помните, что побеждает **первое совпавшее** правило: порядок в списке правил значим.
+
+**Отмеченный сервис не заработал.** Проверьте, что список скачался (`ls /etc/steer/lists`), и
+примените настройки заново. Правило, чей список не скачался, применяется без него — трафик просто
+не попадает в туннель, но остальные правила работают.
+
+**Домены не работают, а адреса работают.** Не запущен или не перечитал спеку встроенный резолвер.
+`steer diag` называет это отдельной проверкой.
+
+**Трафик уходит в туннель и не возвращается.** У выхода нет NAT. `diag` проверяет это и говорит
+прямо; само правило создаёт не движок, а firewall OpenWrt.
+
+**Через туннель работает всё, кроме больших страниц и файлов.** MTU. При обфускации MTU интерфейса
+WireGuard обязан быть `MTU канала − 72` (обычно 1428) и **совпадать на обеих сторонах**.
+
+**Первое открытие сайта заметно тормозит.** Это нормальная плата за рукопожатие к узлу на первом
+соединении; дальше работает пул заранее установленных сессий.
+
+**DNS перестал работать у части устройств.** Проверьте `diag`: в списке категории мог оказаться
+адрес публичного резолвера (списки собираются по номеру автономной системы целиком, поэтому
+`8.8.8.0/24` приезжает вместе с категорией Google). Движок находит это и называет и резолвер, и файл.
+
+**«Остановить всё» само включилось обратно.** Ночное обновление списков применяет настройки и
+поднимает движок. Это известное поведение: автозапуск остаётся снятым, а служба поднимается.
+
+## Разработка и сборка
+
+Интерфейс — React и Tailwind CSS, оформлен под тему Argon.
+
+```sh
+cd ui && npm install && npm run build && cd ..
+./build.sh                 # собирает пакеты luci-app-splify2 (нужен Docker)
+sh tests/run.sh            # все стенды
+```
+
+`./build.sh` кладёт в `out/` оба формата: `.apk` и `.ipk`. Содержимое одинаковое, отличаются только
+метаданные пакета. Релизы собираются GitHub Actions.
+
+## Документация
+
+- [docs/rpcd-api.md](docs/rpcd-api.md) — контракт объекта `splify2` в ubus/rpcd: каждый метод, его
+  вход и выход, форма объекта ошибки, разделение прав. Нужен, если пишете что-то поверх splify2.
+- [Контракт steer](https://github.com/xyzmean/steer/blob/main/docs/contract-v1.md) — формат
+  `spec.json`, формат состояния, ограничения, коды возврата. Нужен, чтобы понимать, что именно
+  интерфейс пишет движку.
