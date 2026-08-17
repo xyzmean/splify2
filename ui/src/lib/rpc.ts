@@ -64,7 +64,9 @@ export const rpc = {
      *  На старом бэкенде метода нет: вызывающий обязан ловить отказ (pending.ts ловит,
      *  и тогда применённым считается сохранённое — счётчик стартует с нуля). */
     appliedGet: () => appliedGetRaw().then(normalizeSpec),
-    specSet: declare<{ ok: boolean; error?: string }>('spec_set', ['spec']),
+    /** warn — сохранение прошло, но что-то требует внимания: например список, который не
+     *  скачался, из-за чего его канал не поднимется. Это не ошибка сохранения. */
+    specSet: declare<{ ok: boolean; error?: string; warn?: string }>('spec_set', ['spec']),
 
     /** Compile and install. Separate from spec_set so the UI can save a draft
      *  without steering traffic differently the same second. */

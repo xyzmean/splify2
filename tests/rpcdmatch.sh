@@ -536,6 +536,30 @@ check "spec_set помечает смену НАБОРА выходов vless к
 check "apply пересобирает экземпляры на instances" "yes" \
       "$(grep -A22 'if \[ -f "\$VLESS_DIRTY" \]' "$SCRIPT" | grep -q '"\$INITD" start' && echo yes || echo no)"
 
+# ---- списки доскачиваются перед КАЖДОЙ проверкой спеки ----------------------------
+# Движок умирает на отсутствующем файле списка, и делает это в ДВУХ местах: при
+# `apply --dry-run` внутри spec_set (проверка до записи) и при настоящем apply. Пока
+# доскачивание стояло только в apply, выбор нового сервиса не сохранялся вообще: автосохранение
+# звало spec_set, dry-run падал с «cannot read a channel's list», правка откатывалась — и
+# человек видел ошибку применения там, где ничего не применял. Проверяется поэтому не наличие
+# загрузки, а её место: перед каждой проверкой.
+check "доскачивание вынесено в общую функцию" "yes" \
+      "$(grep -q '^fetch_missing_lists()' "$SCRIPT" && echo yes || echo no)"
+check "функция вызывается дважды: в spec_set и в apply" "2" \
+      "$(grep -c 'fetch_missing_lists "' "$SCRIPT")"
+set_line=$(grep -n 'set_warn="$(fetch_missing_lists' "$SCRIPT" | cut -d: -f1)
+dry_line=$(grep -n 'apply --dry-run --spec "$tmp"' "$SCRIPT" | cut -d: -f1)
+check "в spec_set загрузка идёт ДО проверки движком" "yes" \
+      "$([ -n "$set_line" ] && [ -n "$dry_line" ] && [ "$set_line" -lt "$dry_line" ] && echo yes || echo no)"
+apply_fetch=$(grep -n 'fetch_warn="$(fetch_missing_lists' "$SCRIPT" | cut -d: -f1)
+apply_run=$(grep -n 'apply --spec "$SPEC" 2>&1)"; rc=' "$SCRIPT" | cut -d: -f1)
+check "в apply загрузка идёт ДО применения" "yes" \
+      "$([ -n "$apply_fetch" ] && [ -n "$apply_run" ] && [ "$apply_fetch" -lt "$apply_run" ] && echo yes || echo no)"
+# Сообщение об отказе обязано называть ПРИЧИНУ, а не только следствие: «cannot read a
+# channel's list» отправляет искать испорченный файл, которого никогда не было.
+check "при неудачной загрузке причина ставится перед ошибкой движка" "yes" \
+      "$(grep -q 'fail "${set_warn:+$set_warn; }' "$SCRIPT" && echo yes || echo no)"
+
 # ---- бэкенд знает оба менеджера пакетов ------------------------------------------
 # Установщик ставит .ipk через opkg на OpenWrt 23.05, и бэкенд обязан уметь то же:
 # иначе карточка движка показывает пустую версию, а «Установить» возвращает пустую
