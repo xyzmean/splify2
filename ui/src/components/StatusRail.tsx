@@ -6,6 +6,7 @@ import { rpc } from '@/lib/rpc'
 import { useConfirm } from '@/components/ui/confirm'
 import { engineAction } from '@/lib/engine'
 import { human, type Live } from '@/lib/live'
+import { Hint } from '@/components/ui/hint'
 
 /** Закреплённое состояние: то, что верно независимо от того, что человек делает справа.
  *
@@ -68,15 +69,28 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
     const [pings, setPings] = useState<Record<string, { ms: number; state: string }>>({})
     const [pinging, setPinging] = useState(false)
     const asked = useRef(false)
-    /* Активным считаем тот выход, через который трафик идёт СЕЙЧАС, а не первый в спеке:
-     * при нескольких туннелях первый может быть выключен, и назвать его активным значило бы
-     * показывать не то устройство, куда уходит трафик. */
-    const active = outputs.find(([, o]) => o.kind !== 'direct' && o.up)?.[1]
-    const tunnelDev = active?.device
+    /* Активными считаем ВСЕ выходы, поднятые сейчас, а не первый в спеке: туннелей у человека
+     * обычно несколько (vless рядом с wg), выключенный первый значил бы показ не того
+     * устройства, а один показанный из трёх — впечатление, что остальные не работают.
+     *
+     * Имя берётся ИЗ КЛЮЧА, а не из o.name, и это не вкус: `steer status` не повторяет имя
+     * внутри объекта выхода — там оно ключ. Тип OutputStatus наследует `name` от описания
+     * выхода в спеке (в спеке поле есть), поэтому tsc молчал, а в браузере выходило undefined
+     * и строка показывала «—» при трёх работающих туннелях. */
+    const activeEntries = outputs.filter(([, o]) => o.kind !== 'direct' && o.up)
+    const activeNames = activeEntries.map(([name]) => name)
+    /* Счётчики и «Сейчас» показываются по первому из активных: устройство у каждого своё, а
+     * складывать их в одну строку значило бы придумать число, которого нет ни у одного. */
+    const primary = activeEntries[0]
+    const tunnelDev = primary?.[1].device
     const tunnel = tunnelDev ? live.devs?.[tunnelDev] : undefined
 
     async function probeAll() {
         setPinging(true)
+        /* Прежние значения гасим СРАЗУ: пока идёт проверка, старое число неотличимо от
+         * свежего, и кнопка выглядела так, будто ничего не делает. Теперь отклики гаснут в
+         * «…» и возвращаются по одному. */
+        setPings({})
         let failed: string | null = null
         try {
             for (const [name, o] of outputs) {
@@ -201,20 +215,34 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
 
                 <dl className="mt-3 space-y-1.5 text-sm">
                     <div className="flex items-baseline justify-between gap-2">
-                        <dt className="text-muted-foreground">Активный outbound</dt>
-                        <dd className="truncate font-medium">{active?.name || '—'}</dd>
+                        <dt className="text-muted-foreground">
+                            <Hint tip="Туннелей может работать сразу несколько. Какой трафик пойдёт в какой — решают правила: выход выбирается для канала, а не для всего роутера.">
+                                Активные туннели
+                            </Hint>
+                        </dt>
+                        <dd className="truncate font-medium">{activeNames.join(', ') || '—'}</dd>
                     </div>
-                    {active && pings[active.name] && (
+                    {primary && (pinging || pings[primary[0]]) && (
                         <div className="flex items-baseline justify-between gap-2">
-                            <dt className="text-muted-foreground">Отклик</dt>
+                            <dt className="text-muted-foreground">
+                                {/* Имя туннеля в подписи, когда их несколько: иначе «Отклик»
+                                    без указания, чей он, читается как отклик всего роутера. */}
+                                {activeNames.length > 1 ? `Отклик · ${primary[0]}` : 'Отклик'}
+                            </dt>
                             <dd
-                                className={`font-medium ${
-                                    pings[active.name].ms < 0 ? 'text-destructive' : 'text-success'
+                                className={`font-medium transition-colors duration-200 ${
+                                    !pings[primary[0]]
+                                        ? 'text-muted-foreground'
+                                        : pings[primary[0]].ms < 0
+                                          ? 'text-destructive'
+                                          : 'text-success'
                                 }`}
                             >
-                                {pings[active.name].ms < 0
-                                    ? pings[active.name].state
-                                    : `${pings[active.name].ms} мс`}
+                                {!pings[primary[0]]
+                                    ? '…'
+                                    : pings[primary[0]].ms < 0
+                                      ? pings[primary[0]].state
+                                      : `${pings[primary[0]].ms} мс`}
                             </dd>
                         </div>
                     )}
@@ -296,7 +324,7 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                                 />
                                 <span className="min-w-0 flex-1 truncate">{name}</span>
                                 <span
-                                    className={`shrink-0 text-xs ${
+                                    className={`shrink-0 text-xs transition-colors duration-200 ${
                                         pings[name] && pings[name].ms < 0
                                             ? 'text-destructive'
                                             : pings[name]
@@ -304,15 +332,22 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                                               : 'text-muted-foreground'
                                     }`}
                                 >
+                                    {/* Пока идёт проверка — «…» вместо ПРЕЖНЕГО числа. Старое
+                                        число во время проверки хуже, чем ничего: оно выглядит
+                                        свежим, и понять, ответил ли узел ТОЛЬКО ЧТО,
+                                        невозможно. Значения возвращаются по одному, в том
+                                        порядке, в каком отвечают выходы. */}
                                     {o.kind === 'direct'
                                         ? 'напрямую'
                                         : pings[name]
                                           ? pings[name].ms < 0
                                               ? pings[name].state
                                               : `${pings[name].ms} мс`
-                                          : o.up
-                                            ? o.device
-                                            : 'нет устройства'}
+                                          : pinging
+                                            ? '…'
+                                            : o.up
+                                              ? o.device
+                                              : 'нет устройства'}
                                 </span>
                             </li>
                         ))}
