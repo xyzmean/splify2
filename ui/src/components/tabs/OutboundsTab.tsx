@@ -5,8 +5,10 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
+import { pending, usePending } from '@/lib/pending'
 import { EMPTY_SPEC, ON_FAIL_TEXT, type OnFail, type Output, type Spec } from '@/lib/model'
 import { type Live } from '@/lib/live'
+import { Hint } from '@/components/ui/hint'
 import VlessPanel from '@/components/VlessPanel'
 import ObfsPanel from '@/components/ObfsPanel'
 
@@ -14,52 +16,41 @@ import ObfsPanel from '@/components/ObfsPanel'
 // several tunnels coexist: failover re-points an output's device without touching a
 // single channel, and two channels can lead to two different tunnels at once.
 //
-// Renaming therefore has to rewrite every channel that points at the old name — a
-// dangling `out` is a spec the engine refuses, and the UI is the only place that knows
-// both sides.
+// Кнопки «Сохранить и применить» здесь больше нет: правки уходят в spec_set сами
+// (lib/pending.ts), применяет плавающая пилюля. Переименование — по Enter или
+// расфокусу, без отдельной кнопки: черновик по-прежнему живёт отдельно от спеки,
+// чтобы полунабранное имя не осиротило каналы.
 
 const NAME_RE = /^[A-Za-z0-9_-]{1,24}$/
 
-/** Состояние берётся из ОБЩЕГО опроса, а не запрашивается здесь.
- *
- *  Свой запрос давал второе мгновение на одном экране: закреплённая колонка говорила «поднят», а
- *  строка рядом — «выключен», и оба были правдой, снятой в разные секунды. */
 export default function OutboundsTab({ live }: { live: Live }) {
     const [spec, setSpec] = useState<Spec | null>(null)
     const [devices, setDevices] = useState<{ name: string; up: boolean; kind: string }[]>([])
-    const [dirty, setDirty] = useState(false)
-    const [busy, setBusy] = useState(false)
-    /** Умеет ли установленный движок VLESS. Спрашиваем, а не предполагаем: предлагать
-     *  выход, который движок отвергнет при сохранении, — это заставить человека спорить
-     *  с интерфейсом вместо того, чтобы поставить нужный пакет. */
     const [hasVless, setHasVless] = useState<boolean | null>(null)
-    /** Имена выходов, про которые движок уже знает. Панель vless спрашивает у него узлы,
-     *  а для несохранённого выхода спрашивать нечего. */
-    const [saved, setSaved] = useState<Set<string>>(new Set())
     /** Names being typed. Held separately so a half-typed name never lands in the spec
      *  and orphans the channels pointing at the old one. */
     const [draft, setDraft] = useState<Record<string, string>>({})
+    /** Имена выходов, про которые движок уже знает, — из снимка применённого:
+     *  панель vless спрашивает узлы у движка, а для непримененного выхода спрашивать
+     *  нечего. Обновляется само после каждого apply (usePending перерисовывает). */
+    const { applied } = usePending()
+    const saved = new Set(Object.keys(applied?.outputs || {}))
 
     useEffect(() => {
-        rpc.specGet()
-            .then((s) => { setSpec(s); setSaved(new Set(Object.keys(s.outputs || {}))) })
-            .catch(() => setSpec(EMPTY_SPEC))
+        pending.load().then(setSpec).catch(() => setSpec(EMPTY_SPEC))
         rpc.devices().then((d) => setDevices(d.devices || [])).catch(() => setDevices([]))
         rpc.engine().then((e) => setHasVless(!!e.vless)).catch(() => setHasVless(null))
     }, [])
 
     function edit(next: Spec) {
         setSpec(next)
-        setDirty(true)
+        pending.edit(next)
     }
 
     function addInterface() {
         if (!spec) return
         const taken = new Set(Object.values(spec.outputs).map((o) => o.device))
         const free = devices.find((d) => !taken.has(d.name))
-        /* Без свободного устройства выход создавать нечестно: спека с пустым devices
-         * отвергается движком при сохранении, и человек спорил бы с интерфейсом,
-         * который сам это предложил (I-020). Ранний отказ со словами — дешевле. */
         if (!free) {
             notify('Свободных туннельных устройств нет — поднимите туннель (wireguard, ' +
                    'amneziawg) или освободите устройство у другого выхода', 'warning')
@@ -82,9 +73,6 @@ export default function OutboundsTab({ live }: { live: Live }) {
         let name = 'vless'
         let n = 2
         while (spec.outputs[name]) name = `vless${n++}`
-        // sub_file ставится сразу: движок отвергает выход vless без него, и предлагать
-        // человеку сохранить заведомо неприменимую спеку значило бы упереться в ошибку
-        // там, где путь известен заранее. Файл появится, когда подписку загрузят.
         edit({
             ...spec,
             outputs: {
@@ -100,8 +88,6 @@ export default function OutboundsTab({ live }: { live: Live }) {
     function addDirect() {
         if (!spec) return
         if (spec.outputs.direct) { notify('Выход «direct» уже есть', 'warning'); return }
-        // A `direct` output is how a list is EXCLUDED: a channel above the others that
-        // claims those addresses and leaves them on the normal path.
         edit({ ...spec, outputs: { ...spec.outputs, direct: { name: 'direct', kind: 'direct' } } })
     }
 
@@ -110,15 +96,11 @@ export default function OutboundsTab({ live }: { live: Live }) {
         edit({ ...spec, outputs: { ...spec.outputs, [name]: o } })
     }
 
-    /** Устройства выхода. Порядок — приоритет, поэтому редактируется стрелками, а не
-     *  списком-множеством: какой туннель основной, а какой запасной, решает именно он. */
     function devList(o: Output): string[] {
         return o.devices?.length ? o.devices : o.device ? [o.device] : []
     }
 
     function setDevs(name: string, o: Output, next: string[]) {
-        // device остаётся первым кандидатом: движок выведет одно из другого, но спека
-        // должна быть однозначной и без него до первого прохода failover.
         patch(name, { ...o, devices: next, device: next[0] || '' })
     }
 
@@ -130,6 +112,8 @@ export default function OutboundsTab({ live }: { live: Live }) {
         setDevs(name, o, list)
     }
 
+    /** Переименование — по Enter или расфокусу. Молча возвращаем прежнее имя, если
+     *  новое пустое или не изменилось; о недопустимом говорим, а не откатываем молча. */
     function rename(from: string) {
         if (!spec) return
         const to = (draft[from] ?? '').trim()
@@ -137,11 +121,6 @@ export default function OutboundsTab({ live }: { live: Live }) {
         if (!to || to === from) return
         if (!NAME_RE.test(to)) { notify('Имя: латиница, цифры, дефис или подчёркивание', 'warning'); return }
         if (spec.outputs[to]) { notify(`Выход «${to}» уже есть`, 'warning'); return }
-        // Rebuilt rather than mutated so the ORDER of outputs survives a rename. Marks
-        // are assigned BY NAME from a persisted registry (spec.c registry_assign), not
-        // by position — so a rename means the output gets a fresh mark, and the engine
-        // sweeps the old name's rule on the next apply. Order still matters for which
-        // free mark bit a NEW output picks up.
         const outputs: Record<string, Output> = {}
         for (const [k, v] of Object.entries(spec.outputs))
             if (k === from) outputs[to] = { ...v, name: to }
@@ -166,26 +145,6 @@ export default function OutboundsTab({ live }: { live: Live }) {
         edit({ ...spec, outputs })
     }
 
-    async function save() {
-        if (!spec) return
-        setBusy(true)
-        try {
-            const res = await rpc.specSet(JSON.stringify(spec))
-            if (!res.ok) throw new Error(res.error || 'не удалось сохранить')
-            const ap = await rpc.apply()
-            setDirty(false)
-            /* Теперь движок знает про эти выходы — панель VLESS может спрашивать у него
-             * узлы. До сохранения он о выходе не слышал, и вопрос был бы бессмысленным. */
-            setSaved(new Set(Object.keys(spec.outputs)))
-            notify(ap.output?.trim() || 'Применено', ap.ok ? 'info' : 'error')
-            live.refresh()
-        } catch (e) {
-            notify(String(e instanceof Error ? e.message : e), 'error')
-        } finally {
-            setBusy(false)
-        }
-    }
-
     if (!spec) return <div className="p-5 text-sm text-muted-foreground">Загрузка…</div>
 
     const names = Object.keys(spec.outputs)
@@ -196,9 +155,12 @@ export default function OutboundsTab({ live }: { live: Live }) {
                 <CardHeader>
                     <CardTitle>Выходы</CardTitle>
                     <CardDescription>
-                        Куда каналы могут вести. Канал указывает на имя выхода, а не на устройство, поэтому
-                        смена туннеля не трогает каналы. Каждый выход получает свою метку и таблицу
-                        маршрутизации, так что несколько работают одновременно.
+                        Куда правила могут вести. Несколько выходов работают одновременно — у каждого
+                        своя{' '}
+                        <Hint tip="Каждый выход получает метку и таблицу маршрутизации в ядре. Правило указывает на имя выхода, а не на устройство — смена туннеля правил не трогает.">
+                            метка
+                        </Hint>
+                        . Изменения сохраняются сами.
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-2">
@@ -206,9 +168,6 @@ export default function OutboundsTab({ live }: { live: Live }) {
                         <Button onClick={addInterface} variant="secondary">
                             <Plus className="mr-1 h-4 w-4" aria-hidden="true" /> Туннель
                         </Button>
-                        {/* Кнопка есть всегда, но выключена без нужного пакета — и говорит,
-                            какого именно. Спрятать её значило бы оставить человека без
-                            объяснения, почему у него нет того, что описано в документации. */}
                         <Button
                             onClick={addVless}
                             variant="secondary"
@@ -249,33 +208,27 @@ export default function OutboundsTab({ live }: { live: Live }) {
                             <div key={name} className="space-y-2 rounded-md border border-border bg-card p-3">
                                 <div className="flex flex-wrap items-end gap-3">
                                     <label className="flex flex-col gap-1 text-xs">
-                                        Имя
-                                        <div className="flex gap-1">
-                                            <input
-                                                value={draft[name] ?? name}
-                                                onChange={(e) => setDraft({ ...draft, [name]: e.currentTarget.value })}
-                                                onKeyDown={(e) => e.key === 'Enter' && rename(name)}
-                                                className="w-32 rounded-md border border-border bg-background px-2 py-1 text-sm"
-                                                aria-label={`Имя выхода ${name}`}
-                                            />
-                                            <Button
-                                                variant="secondary"
-                                                size="sm"
-                                                disabled={!draft[name] || draft[name] === name}
-                                                onClick={() => rename(name)}
-                                            >
-                                                Переименовать
-                                            </Button>
-                                        </div>
+                                        <span>
+                                            Имя{' '}
+                                            <span className="text-muted-foreground">
+                                                · Enter или клик мимо — сохранится
+                                            </span>
+                                        </span>
+                                        <input
+                                            value={draft[name] || name}
+                                            onChange={(e) => setDraft({ ...draft, [name]: e.currentTarget.value })}
+                                            onBlur={() => rename(name)}
+                                            onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+                                            className="w-36 rounded-md border border-border bg-background px-2 py-1 text-sm transition-colors focus-visible:border-primary focus-visible:outline-none"
+                                            aria-label={`Имя выхода ${name}`}
+                                        />
                                     </label>
 
-                                    {/* on_fail есть у всякого выхода С УСТРОЙСТВОМ, а не
-                                        только у interface: у vless последствие поломки ровно
-                                        то же, и прятать настройку значило бы оставить его на
-                                        умолчании, о котором человек не знает. */}
                                     {o.kind !== 'direct' ? (
                                         <label className="flex flex-col gap-1 text-xs">
-                                            Если всё упало
+                                            <Hint tip="Что делать с трафиком, когда ни одно устройство выхода не работает. «Остановить» безопаснее: трафик не утечёт в открытый интернет.">
+                                                Если всё упало
+                                            </Hint>
                                             <select
                                                 value={o.on_fail || 'drop'}
                                                 onChange={(e) => patch(name, { ...o, on_fail: e.currentTarget.value as OnFail })}
@@ -287,12 +240,15 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                             </select>
                                         </label>
                                     ) : (
-                                        <Badge variant="secondary">напрямую, без устройства</Badge>
+                                        <Hint tip="Так исключают сервис: правило выше остальных забирает его адреса и оставляет на обычном пути, мимо туннеля.">
+                                            <Badge variant="secondary">напрямую, без устройства</Badge>
+                                        </Hint>
                                     )}
                                     {o.kind === 'vless' && <Badge variant="secondary">VLESS/Reality</Badge>}
 
                                     <div className="ml-auto">
                                         <Button variant="ghost" size="icon" aria-label={`Удалить выход ${name}`}
+                                                className="hover:bg-destructive/10 hover:text-destructive"
                                                 onClick={() => remove(name)}>
                                             <Trash2 className="h-4 w-4" aria-hidden="true" />
                                         </Button>
@@ -309,10 +265,6 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                     />
                                 )}
 
-                                {/* Обфускация транспорта — под именем и до списка устройств:
-                                    сначала «чем доставляется», потом «куда». Только для
-                                    interface: у vless свой транспорт внутри движка, у direct
-                                    транспорта нет вовсе. */}
                                 {o.kind === 'interface' && (
                                     <ObfsPanel output={o} onChange={(next) => patch(name, next)} />
                                 )}
@@ -332,7 +284,7 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                                 </p>
                                             )}
                                             {list.map((dev, di) => {
-                                                const live = devices.find((x) => x.name === dev)
+                                                const liveDev = devices.find((x) => x.name === dev)
                                                 const active = s?.device === dev
                                                 return (
                                                     <div key={dev} className="flex items-center gap-2 py-0.5 text-sm">
@@ -343,10 +295,10 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                                             {dev}
                                                         </span>
                                                         {active && <Badge variant="default">активно</Badge>}
-                                                        {!live && (
+                                                        {!liveDev && (
                                                             <Badge variant="destructive">нет в системе</Badge>
                                                         )}
-                                                        {live && !live.up && (
+                                                        {liveDev && !liveDev.up && (
                                                             <Badge variant="secondary">выключено</Badge>
                                                         )}
                                                         <div className="ml-auto flex items-center gap-1">
@@ -361,6 +313,7 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                                                 <ArrowDown className="h-4 w-4" aria-hidden="true" />
                                                             </Button>
                                                             <Button variant="ghost" size="icon" aria-label={`Убрать ${dev}`}
+                                                                    className="hover:bg-destructive/10 hover:text-destructive"
                                                                     onClick={() => setDevs(name, o, list.filter((x) => x !== dev))}>
                                                                 <Trash2 className="h-4 w-4" aria-hidden="true" />
                                                             </Button>
@@ -396,11 +349,11 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                             <Badge variant={s.up ? 'default' : 'destructive'}>
                                                 {s.up ? 'поднят' : 'выключен'}
                                             </Badge>
-                                            {/* Without NAT the route applies, the counter rises, and every
-                                                site behind it hangs — so it is shown here, not buried. */}
-                                            <Badge variant={s.nat ? 'secondary' : 'destructive'}>
-                                                {s.nat ? 'NAT есть' : 'NAT не найден'}
-                                            </Badge>
+                                            <Hint tip="Без NAT маршрут применяется, счётчик растёт, а сайты за туннелем висят — поэтому это видно здесь, а не спрятано.">
+                                                <Badge variant={s.nat ? 'secondary' : 'destructive'}>
+                                                    {s.nat ? 'NAT есть' : 'NAT не найден'}
+                                                </Badge>
+                                            </Hint>
                                             {o.obfs && (
                                                 <Badge variant="secondary">поверх TCP</Badge>
                                             )}
@@ -420,13 +373,6 @@ export default function OutboundsTab({ live }: { live: Live }) {
                     })}
                 </CardContent>
             </Card>
-
-            <div className="flex items-center gap-2">
-                <Button onClick={save} disabled={busy || !dirty}>
-                    {busy ? 'Применяем…' : 'Сохранить и применить'}
-                </Button>
-                {dirty && <span className="text-xs text-warning">Есть несохранённые изменения</span>}
-            </div>
         </div>
     )
 }

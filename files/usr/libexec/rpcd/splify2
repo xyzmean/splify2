@@ -17,6 +17,9 @@
 
 STEER="${STEER:-/usr/sbin/steer}"
 SPEC="${SPEC:-/etc/steer/spec.json}"
+# Снимок спеки в момент apply. По нему интерфейс считает «сколько ещё не применено»:
+# сравнение с ним переживает перезагрузку страницы, чего память браузера не может.
+APPLIED="${APPLIED:-/etc/steer/spec.applied.json}"
 LISTS="${LISTS:-/etc/steer/lists}"
 # Подписка VLESS. Один файл на роутер, а не по файлу на выход: узлы в подписке уже
 # перечислены списком, и выход выбирает из них номером. Два выхода на одну подписку — это
@@ -448,6 +451,7 @@ list)
     json_init
     json_add_object status; json_close_object
     json_add_object spec_get; json_close_object
+    json_add_object applied_get; json_close_object
     json_add_object spec_set; json_add_string spec; json_close_object
     json_add_object apply; json_close_object
     json_add_object explain; json_add_string address; json_close_object
@@ -505,6 +509,16 @@ call)
 
     spec_get)
         [ -s "$SPEC" ] && cat "$SPEC" || printf '{"schema":1,"outputs":{},"channels":[]}\n'
+        ;;
+
+    applied_get)
+        # Чего не применяли — то и применено: до первого apply честнее всего считать
+        # применённым сохранённое, иначе свежепоставленный пакет показывал бы
+        # неприменённые изменения, которых человек не делал.
+        if [ -s "$APPLIED" ]; then cat "$APPLIED"
+        elif [ -s "$SPEC" ]; then cat "$SPEC"
+        else printf '{"schema":1,"outputs":{},"channels":[]}\n'
+        fi
         ;;
 
     spec_set)
@@ -566,7 +580,35 @@ call)
         # Зона для устройств vless — ДО apply: иначе первый же прогон объявит, что
         # устройство никому не известно, и будет прав.
         zone_msg="$(ensure_vless_zone "$("$STEER" outputs --kind vless --spec "$SPEC" 2>/dev/null | tr '\n' ' ')" 2>&1)"
+        # Списки, на которые ссылается спека, но которых нет на диске. Движок умирает на
+        # отсутствующем файле — и одна недоступность сервера издателя блокировала бы всю
+        # маршрутизацию. Скачиваем недостающее ЗДЕСЬ, потому что момент, когда файл обязан
+        # существовать, — это apply, и обеспечить это должен тот, кто apply выполняет.
+        # Раньше это делал интерфейс перед вызовом (около шестидесяти строк про «части не
+        # скачались — правило выключено»), то есть знание жило не там, где применяется.
+        fetch_warn=""
+        if [ -s "$MANIFEST" ]; then
+            base="$(jsonfilter -i "$MANIFEST" -e '@.base_url')"
+            for f in $(jsonfilter -i "$SPEC" \
+                -e '@.channels[*].match.prefixes_files[*]' \
+                -e '@.channels[*].match.domains_files[*]' 2>/dev/null | sort -u); do
+                [ -s "$f" ] && continue
+                rel="${f#"$LISTS"/}"
+                [ "$rel" = "$f" ] && continue   # файл вне каталога списков — не наш
+                [ -n "$base" ] || continue
+                dest="$(local_path "$rel")" || continue
+                mkdir -p "$(dirname "$dest")"
+                download "$base/$rel" "$dest" || fetch_warn="$fetch_warn
+список $rel не скачался — канал, который на него ссылается, не поднимется"
+            done
+        fi
+
         out="$("$STEER" apply --spec "$SPEC" 2>&1)"; rc=$?
+        # Снимок — только на успехе: неудавшийся apply ничего не изменил в ядре, и счётчик
+        # обязан продолжать это показывать.
+        [ "$rc" -eq 0 ] && cp "$SPEC" "$APPLIED" 2>/dev/null
+        [ -n "$fetch_warn" ] && out="$fetch_warn
+$out"
         [ -n "$zone_msg" ] && out="$zone_msg
 $out"
 

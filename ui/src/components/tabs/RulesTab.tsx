@@ -3,8 +3,10 @@ import { ArrowDown, ArrowUp, Pencil, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
+import { pending } from '@/lib/pending'
 import { toCatalog, customServices, EMPTY_SPEC, type Channel, type ServiceEntry, type Spec } from '@/lib/model'
 import { type Live } from '@/lib/live'
+import { Hint } from '@/components/ui/hint'
 import RuleEditor, { pathFor, selectedIds } from '@/components/tabs/RuleEditor'
 
 /** Правила: единственное место, где что-то назначается.
@@ -13,23 +15,12 @@ import RuleEditor, { pathFor, selectedIds } from '@/components/tabs/RuleEditor'
  *  приоритет: движок раздаёт метки по первому совпадению, и интерфейс, который спрятал бы это,
  *  спрятал бы единственное, что человеку обязательно понимать.
  *
- *  Прежде маршрут назначался в двух местах: в правиле и на вкладке списков. Два места спорили
- *  об одном, и человек не знал, какое победит. Каталог теперь только справка.
+ *  Кнопок «Сохранить» здесь больше нет: каждая правка уходит в spec_set сама (lib/pending.ts),
+ *  а применяет одна плавающая пилюля. Скачивание выбранных, но отсутствующих списков переехало
+ *  в бэкенд, в ветку apply: человек не обязан помнить, что движок читает файлы при компиляции.
  */
 
-/** Выключение — поле спеки, а не память интерфейса.
- *
- *  Раньше выключенное правило ВЫНИМАЛОСЬ из спеки и лежало в памяти интерфейса: движок про
- *  `enabled` не знал, а держать правило в спеке с признаком было нельзя — оно продолжало бы
- *  работать, и выключатель врал бы. Теперь движок это поле понимает и пропускает такое правило,
- *  поэтому оно остаётся на своём месте в порядке, видно движку (status, explain) и не действует.
- */
-
-/** Строка под именем правила: что оно перенаправляет, словами человека.
- *
- *  Называем СЕРВИСЫ, а не виды списков: «YouTube, Telegram» отвечает на вопрос, а «2 доменных
- *  списка» заставляет вспоминать, что в них лежит. Вид упоминается только когда сервисов много
- *  и перечислять их негде. */
+/** Строка под именем правила: что оно перенаправляет, словами человека. */
 function describe(ch: Channel, services: ServiceEntry[]) {
     const ids = selectedIds(ch, services)
     const entries = services.filter((sv) => ids.includes(sv.id))
@@ -66,34 +57,28 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
     const [spec, setSpec] = useState<Spec | null>(null)
     const [catalogServices, setServices] = useState<ServiceEntry[]>([])
     const [local, setLocal] = useState<Record<string, { count: number; mtime: number }>>({})
-    /* Каталог издателя плюс свои списки. Редактор правил выбирает из ServiceEntry[], и
-     * пока собственного файла среди них не было, он и не предлагался — при том что
-     * local_lists его видел. Дешевле оказалось не менять редактор, а дать ему записи
-     * того же вида (customServices). */
     const services = useMemo(
         () => [...catalogServices, ...customServices(local)],
         [catalogServices, local],
     )
     const [open, setOpen] = useState<number | null>(null)
-    const [dirty, setDirty] = useState(false)
-    const [busy, setBusy] = useState(false)
 
     useEffect(() => {
-        rpc.specGet().then(setSpec).catch(() => setSpec(EMPTY_SPEC))
+        /* Спека приходит из общего хранилища (pending), а не своим запросом: хранилище
+         * помнит и несохранённые полсекунды, и снимок применённого — свой specGet здесь
+         * вернул бы то, что вкладка Outbounds уже успела поменять. */
+        pending.load().then(setSpec).catch(() => setSpec(EMPTY_SPEC))
         rpc.manifest().then((m) => setServices(toCatalog(m).services)).catch(() => setServices([]))
         rpc.localLists().then((d) => setLocal(d.files || {})).catch(() => setLocal({}))
     }, [])
 
+    /** Правка: в свой стейт для мгновенной перерисовки и в хранилище для автосохранения. */
     function edit(next: Spec) {
         setSpec(next)
-        setDirty(true)
+        pending.edit(next)
     }
 
-    /** Просьба из каталога: завести правило с этой записью и открыть его.
-     *
-     *  Ждём загрузки спеки — иначе новое правило легло бы в пустую и затёрло настоящую. И
-     *  сбрасываем просьбу сразу: иначе повторный заход на вкладку снова открывал бы редактор,
-     *  которого человек уже не просил. */
+    /** Просьба из каталога: завести правило с этой записью и открыть его. */
     useEffect(() => {
         if (!wanted || !spec) return
         onWantedUsed?.()
@@ -106,8 +91,6 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
         let name = wanted.name
         let n = 2
         while (used.has(name)) name = `${wanted.name} ${n++}`
-        /* Сразу ОБА вида, если у сервиса они есть: правило теперь про сервис, а движок такое
-         * принимает — набор один, адреса в нём постоянны, домены кладёт резолвер. */
         const ch: Channel = {
             name,
             out,
@@ -158,93 +141,6 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
         })
     }
 
-    async function save(andApply: boolean) {
-        if (!spec) return
-        setBusy(true)
-        try {
-            /* Списки скачиваем ДО применения: движок читает файлы при компиляции и умирает на
-             * отсутствующем, так что выбранный, но не скачанный список превратил бы «Применить»
-             * в ошибку, с которой человеку нечего делать. */
-            const needed = new Set<string>()
-            for (const ch of spec.channels)
-                for (const f of [...(ch.match.prefixes_files || []), ...(ch.match.domains_files || [])])
-                    needed.add(f)
-            /* Пути, которых после этого цикла НЕТ на роутере. Раньше сообщение обещало
-             * «правило будет без неё», а путь оставался в правиле — и apply падал ЦЕЛИКОМ
-             * на первом же отсутствующем файле (die в движке): один недоступный сервер
-             * издателя блокировал всю маршрутизацию, а человек видел «сбой» после
-             * сообщения, которое обещало обратное. Теперь сообщение и исход совпадают. */
-            const gone = new Set<string>()
-            for (const sv of services)
-                for (const p of sv.parts)
-                    if (needed.has(pathFor(p.file))) {
-                        const r = await rpc.listFetch(p.id, p.kind)
-                            .catch(() => ({ ok: false }) as { ok: boolean })
-                        if (r.ok) continue
-                        if (local[p.file.replace(/^\/+/, '')]) {
-                            /* Файл уже лежит на роутере — движку есть что читать, теряем
-                             * только свежесть. Это не повод трогать правило. */
-                            notify(`${sv.name}: часть «${p.name}» не обновилась — останется прежняя копия`,
-                                   'warning')
-                        } else {
-                            gone.add(pathFor(p.file))
-                            notify(`${sv.name}: часть «${p.name}» не скачалась — правило применится без неё`,
-                                   'warning')
-                        }
-                    }
-
-            let toSave = spec
-            if (gone.size) {
-                toSave = {
-                    ...spec,
-                    channels: spec.channels.map((ch) => {
-                        const pf = (ch.match.prefixes_files || []).filter((f) => !gone.has(f))
-                        const df = (ch.match.domains_files || []).filter((f) => !gone.has(f))
-                        const lost = pf.length + df.length <
-                            (ch.match.prefixes_files?.length || 0) + (ch.match.domains_files?.length || 0)
-                        if (!lost) return ch
-                        /* Правило, у которого не осталось ни одного файла, не удаляем и не
-                         * оставляем пустым (пустое движок отвергает) — ВЫКЛЮЧАЕМ, сохранив
-                         * выбор. Выключенное правило движок пропускает вместе с его файлами,
-                         * а когда списки скачаются, человек включит его на прежнем месте. */
-                        if (!pf.length && !df.length && !ch.match.any) {
-                            notify(`«${ch.name}»: ни один список не скачался — правило выключено`,
-                                   'warning')
-                            return { ...ch, enabled: false }
-                        }
-                        return {
-                            ...ch,
-                            match: {
-                                ...ch.match,
-                                ...(pf.length ? { prefixes_files: pf } : { prefixes_files: undefined }),
-                                ...(df.length
-                                    ? { domains_files: df }
-                                    : { domains_files: undefined, mode: undefined }),
-                            },
-                        }
-                    }),
-                }
-                setSpec(toSave)
-            }
-
-            const res = await rpc.specSet(JSON.stringify(toSave))
-            if (!res.ok) throw new Error(res.error || 'не удалось сохранить')
-            setLocal((await rpc.localLists()).files || {})
-            setDirty(false)
-            if (andApply) {
-                const ap = await rpc.apply()
-                notify(ap.output?.trim() || 'Применено', ap.ok ? 'info' : 'error')
-                live.refresh()
-            } else {
-                notify('Сохранено. Вступит в силу после применения')
-            }
-        } catch (e) {
-            notify(String(e instanceof Error ? e.message : e), 'error')
-        } finally {
-            setBusy(false)
-        }
-    }
-
     if (!spec) return <div className="p-5 text-sm text-muted-foreground">Загрузка…</div>
 
     const outputs = live.status?.outputs || {}
@@ -263,25 +159,22 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
                   : 'Совпавшее заберёт это правило — оно выше.')
             : null
         return (
-            <div className="space-y-3">
-                <RuleEditor
-                    ch={ch}
-                    index={open}
-                    services={services}
-                    local={local}
-                    outputs={outputs}
-                    clash={clash}
-                    onChange={(next) =>
-                        edit({ ...spec, channels: spec.channels.map((c, k) => (k === open ? next : c)) })
-                    }
-                    onClose={() => setOpen(null)}
-                    onDelete={() => {
-                        edit({ ...spec, channels: spec.channels.filter((_, k) => k !== open) })
-                        setOpen(null)
-                    }}
-                />
-                <SaveBar dirty={dirty} busy={busy} onSave={save} />
-            </div>
+            <RuleEditor
+                ch={ch}
+                index={open}
+                services={services}
+                local={local}
+                outputs={outputs}
+                clash={clash}
+                onChange={(next) =>
+                    edit({ ...spec, channels: spec.channels.map((c, k) => (k === open ? next : c)) })
+                }
+                onClose={() => setOpen(null)}
+                onDelete={() => {
+                    edit({ ...spec, channels: spec.channels.filter((_, k) => k !== open) })
+                    setOpen(null)
+                }}
+            />
         )
     }
 
@@ -289,7 +182,11 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
         <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-muted-foreground">
-                    Проверяются сверху вниз, побеждает первое совпадение.
+                    Сверху вниз — побеждает{' '}
+                    <Hint tip="steer раздаёт метки по первому совпадению: адрес достаётся самому верхнему правилу, остальное идёт напрямую. Стрелками меняется приоритет.">
+                        первое совпадение
+                    </Hint>
+                    . Изменения сохраняются сами.
                 </p>
                 <Button onClick={add}>
                     <Plus className="mr-1 h-4 w-4" aria-hidden="true" /> Новое правило
@@ -316,7 +213,7 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
                                     /* Выключенное приглушено, но НА ВИДУ и на своём месте: спрятанное
                                        правило человек считает удалённым и заводит второе такое же, а
                                        уехавшее вниз меняет порядок, то есть приоритет. */
-                                    className={`border-b border-border/50 last:border-b-0 ${on ? '' : 'opacity-50'}`}
+                                    className={`border-b border-border/50 transition-colors last:border-b-0 hover:bg-muted/40 ${on ? '' : 'opacity-50'}`}
                                 >
                                     <td className="px-3 py-2">
                                         <div className="flex items-start gap-3">
@@ -370,6 +267,7 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
                                                 <Pencil className="h-4 w-4" aria-hidden="true" />
                                             </Button>
                                             <Button variant="ghost" size="icon" aria-label="Удалить правило"
+                                                    className="hover:bg-destructive/10 hover:text-destructive"
                                                     onClick={() =>
                                                         edit({ ...spec, channels: spec.channels.filter((_, k) => k !== i) })
                                                     }>
@@ -407,14 +305,6 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
                     </tbody>
                 </table>
             </div>
-
-            <p className="text-xs text-muted-foreground">
-                Правило собирается из записей каталога: карандаш открывает тот же список сервисов и
-                категорий, что и вкладка «Сервисы и категории». Порядок задаёт приоритет — steer раздаёт
-                метки по первому совпадению, остальное идёт напрямую.
-            </p>
-
-            <SaveBar dirty={dirty} busy={busy} onSave={save} />
         </div>
     )
 }
@@ -431,40 +321,17 @@ function Switch({ on, label, onClick }: { on: boolean; label: string; onClick: (
                внутренние отступы, а у выключателя размер жёсткий, так что чужой
                отступ выталкивал ползунок за край дорожки. Сброс есть и в index.css,
                но контрол с фиксированной геометрией не должен на него полагаться. */
-            className={`mt-0.5 flex h-5 w-9 shrink-0 items-center p-0 rounded-full border transition-colors ${
+            className={`mt-0.5 flex h-5 w-9 shrink-0 items-center p-0 rounded-full border transition-colors duration-200 ${
                 on ? 'border-primary bg-primary' : 'border-border bg-muted'
             }`}
         >
-            {/* Цвет ползунка — от токенов, а не белый. На светлой теме дорожка выключенного
-                состояния сама светлая (#f4f5f7), и белый ползунок на ней исчезал: выключатель
-                выглядел пустой рамкой, по которой не понять, включено или нет. */}
             <span
-                className={`block h-4 w-4 rounded-full transition-transform ${
+                className={`block h-4 w-4 rounded-full transition-transform duration-200 ${
                     on
                         ? 'translate-x-4 bg-primary-foreground'
                         : 'translate-x-0.5 bg-muted-foreground'
                 }`}
             />
         </button>
-    )
-}
-
-function SaveBar({
-    dirty, busy, onSave,
-}: { dirty: boolean; busy: boolean; onSave: (andApply: boolean) => void }) {
-    if (!dirty && !busy) return null
-    return (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-card p-3">
-            <Button onClick={() => onSave(true)} disabled={busy}>
-                {busy ? 'Применяем…' : 'Сохранить и применить'}
-            </Button>
-            <Button variant="secondary" onClick={() => onSave(false)} disabled={busy}>
-                Только сохранить
-            </Button>
-            <span className="text-xs text-muted-foreground">
-                Применение перезаписывает настройку steer и перекомпилирует наборы — это около двух
-                секунд, соединения не рвутся.
-            </span>
-        </div>
     )
 }

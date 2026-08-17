@@ -45,6 +45,7 @@ function declare<T>(method: string, params: string[] = []) {
 }
 
 const specGetRaw = declare<Spec>('spec_get')
+const appliedGetRaw = declare<Spec>('applied_get')
 const listPutRaw = declare<unknown>('list_put', ['name', 'kind', 'text', 'url', 'append'])
 const listRemoveByName = declare<unknown>('list_remove', ['name', 'kind'])
 
@@ -58,6 +59,11 @@ export const rpc = {
     /** Единственный вход спеки в интерфейс — поэтому и приведение написаний стоит здесь,
      *  а не в четырёх потребителях `match` по отдельности (I-041, splicicd#7). */
     specGet: () => specGetRaw().then(normalizeSpec),
+
+    /** Снимок спеки в момент последнего apply — по нему считается «Применить · N».
+     *  На старом бэкенде метода нет: вызывающий обязан ловить отказ (pending.ts ловит,
+     *  и тогда применённым считается сохранённое — счётчик стартует с нуля). */
+    appliedGet: () => appliedGetRaw().then(normalizeSpec),
     specSet: declare<{ ok: boolean; error?: string }>('spec_set', ['spec']),
 
     /** Compile and install. Separate from spec_set so the UI can save a draft

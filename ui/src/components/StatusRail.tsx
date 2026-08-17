@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Activity, Check, Cpu } from 'lucide-react'
+import { AlertTriangle, Activity, Cpu } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
@@ -9,9 +9,9 @@ import { human, type Live } from '@/lib/live'
 
 /** Закреплённое состояние: то, что верно независимо от того, что человек делает справа.
  *
- *  Отдельной колонкой, а не карточкой сверху, по одной причине: вопрос «работает ли» человек
- *  задаёт ПОСРЕДИ работы — редактируя правило, выбирая узел, глядя на каталог. Прежде для
- *  ответа надо было уйти на другую вкладку и вернуться, то есть потерять то, что набрал.
+ *  Кнопки «Применить» здесь больше нет: применение живёт в одной плавающей пилюле
+ *  (ApplyPill), которая появляется только когда есть что применять. Две кнопки об одной
+ *  операции — это два места, которые человек должен был сверять между собой.
  *
  *  Здесь нет ни одного своего мнения о работоспособности: всё, что показано, приходит от
  *  движка. Два ответа на «работает ли» — это на один ответ больше, чем нужно. */
@@ -53,7 +53,6 @@ const DOT: Record<string, string> = {
 }
 
 export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: () => void }) {
-    const [busy, setBusy] = useState(false)
     const [toggling, setToggling] = useState(false)
     const [ask, confirmDialog] = useConfirm()
     /* Сведения о сборке — из общего опроса: свой запрос здесь запускал бы движок ещё раз, и на
@@ -139,17 +138,6 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
         }
     }
 
-    async function restart() {
-        setBusy(true)
-        try {
-            const r = await rpc.apply()
-            notify(r.output?.trim() || 'Применено', r.ok ? 'info' : 'error')
-            live.refresh()
-        } finally {
-            setBusy(false)
-        }
-    }
-
     return (
         <aside className="space-y-3">
             {confirmDialog}
@@ -230,9 +218,6 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                             </dd>
                         </div>
                     )}
-                    {/* Задержка и внешний IP появятся, когда в бэкенде будет чем их взять:
-                        показывать прочерк с обещанием честнее, чем рисовать поле, которое
-                        всегда пусто. */}
                     <div className="flex items-baseline justify-between gap-2">
                         <dt className="text-muted-foreground">Через туннель</dt>
                         <dd className="font-medium">
@@ -257,17 +242,12 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                     )}
                 </dl>
 
-                <div className="mt-3 flex gap-2">
-                    <Button variant="secondary" className="flex-1" onClick={probeAll} disabled={pinging}>
+                {/* «Применить» отсюда ушло в плавающую пилюлю: одна операция — одна кнопка,
+                    и она появляется только тогда, когда есть что применять. */}
+                <div className="mt-3">
+                    <Button variant="secondary" className="w-full" onClick={probeAll} disabled={pinging}>
                         <Activity className="mr-1 h-4 w-4" aria-hidden="true" />
-                        {pinging ? 'Проверяем…' : 'Проверить'}
-                    </Button>
-                    {/* Галочка, а не круговая стрелка: «Применить» ставит настройку в ядро, а не
-                        перезапускает туннель — соединения при этом не рвутся, и значок
-                        перезапуска обещал бы обратное. */}
-                    <Button variant="secondary" className="flex-1" onClick={restart} disabled={busy}>
-                        <Check className="mr-1 h-4 w-4" aria-hidden="true" />
-                        {busy ? 'Применяем…' : 'Применить'}
+                        {pinging ? 'Проверяем…' : 'Проверить соединение'}
                     </Button>
                 </div>
 

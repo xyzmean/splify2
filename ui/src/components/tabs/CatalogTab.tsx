@@ -1,21 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Download, RefreshCw, Search, Trash2 } from 'lucide-react'
+import { RefreshCw, Search, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
 import CustomLists from '@/components/CustomLists'
+import { Hint } from '@/components/ui/hint'
 import { toCatalog, type Catalog, type ServiceEntry, type Spec } from '@/lib/model'
 
 /** Каталог: что доступно, сколько записей, где используется. ТОЛЬКО справка.
  *
- *  Прежде маршрут назначался в двух местах — в канале и здесь, — и два места спорили об одном.
- *  Теперь назначение живёт только в правиле, а каталог отвечает на другой вопрос: «что вообще
- *  есть и задействовано ли оно». Колонка «где используется» и связывает одно с другим: у
- *  задействованной записи — имя правила, у свободной — кнопка, открывающая редактор с этой
- *  записью уже выбранной.
+ *  Кнопки «Загрузить» больше нет: списки, на которые указывает правило, скачивает бэкенд
+ *  в момент применения (ветка apply в rpcd), а свежесть держит расписание. Человеку
+ *  осталась одна необязательная кнопка — обновить уже лежащий список прямо сейчас.
  *
- *  Загрузка и удаление здесь остаются: это не про маршрут, а про то, лежит ли файл на роутере.
- *  Список сам ничего не меняет — он становится работающим, когда на него укажет правило. */
+ *  Назначение живёт только в правиле, каталог отвечает на другой вопрос: «что вообще
+ *  есть и задействовано ли оно». */
 
 interface Props {
     /** Открыть редактор правила с этим сервисом. Переключает вкладку — каталог не умеет
@@ -27,9 +26,6 @@ export default function CatalogTab({ onUseInRule }: Props) {
     const [manifest, setManifest] = useState<Catalog | null>(null)
     const [spec, setSpec] = useState<Spec | null>(null)
     const [local, setLocal] = useState<Record<string, { count: number; mtime: number }>>({})
-    // Занятость держится по id записи, а не одним слотом на всю таблицу: части
-    // сервиса качаются/снимаются независимо, и работа над одной записью не должна
-    // разблокировать незаконченную над другой (I-043).
     const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set())
     const mark = (id: string) => setBusy((b) => new Set(b).add(id))
     const unmark = (id: string) =>
@@ -49,7 +45,7 @@ export default function CatalogTab({ onUseInRule }: Props) {
 
     /** Кто на запись ссылается. Ключ — путь относительно каталога списков, а НЕ имя файла:
      *  `hodca.lst` есть и адресный, и доменный (`domains/hodca.lst`), и по имени они слились
-     *  бы в одну запись. Ровно на этом однажды один список затёр другой. */
+     *  бы в одну запись. */
     const used = useMemo(() => {
         const m = new Map<string, string[]>()
         for (const ch of spec?.channels || [])
@@ -60,8 +56,8 @@ export default function CatalogTab({ onUseInRule }: Props) {
         return m
     }, [spec])
 
-    /* Загрузка и удаление — по ВСЕМ частям сервиса. Части качаются по отдельности (у издателя
-     * это разные файлы), но человек попросил сервис, и отчитываться надо о нём. */
+    /* Обновление — по ВСЕМ частям сервиса: человек попросил сервис, и отчитываться
+     * надо о нём. */
     async function fetchService(sv: ServiceEntry) {
         mark(sv.id)
         let bad = 0
@@ -71,8 +67,8 @@ export default function CatalogTab({ onUseInRule }: Props) {
                 if (!r.ok) bad++
             }
             setLocal((await rpc.localLists()).files || {})
-            if (bad) notify(`${sv.name}: не загрузилось частей — ${bad} из ${sv.parts.length}`, 'warning')
-            else notify(`${sv.name}: загружено`)
+            if (bad) notify(`${sv.name}: не обновилось частей — ${bad} из ${sv.parts.length}`, 'warning')
+            else notify(`${sv.name}: обновлено`)
         } finally {
             unmark(sv.id)
         }
@@ -83,9 +79,6 @@ export default function CatalogTab({ onUseInRule }: Props) {
         let bad = 0
         let last = ''
         try {
-            /* Ответ читаем так же, как fetchService выше: fail() в rpcd завершается кодом 0
-             * и отдаёт {ok:false, error} — «список используется каналом, сначала снимите
-             * галочку». Раньше цикл глотал его и печатал успех безусловно (I-042). */
             for (const p of sv.parts) {
                 const r = await rpc.listRemove(p.id, p.kind).catch(
                     () => ({ ok: false }) as { ok: boolean; error?: string },
@@ -115,8 +108,6 @@ export default function CatalogTab({ onUseInRule }: Props) {
             </div>
         )
 
-    /** Кем занят сервис — по всем его частям сразу: включённый доменный список и есть
-     *  «сервис используется», даже если адресная часть не тронута. */
     const rulesFor = (sv: ServiceEntry) => {
         const names = new Set<string>()
         for (const p of sv.parts)
@@ -134,9 +125,6 @@ export default function CatalogTab({ onUseInRule }: Props) {
 
     return (
         <div className="space-y-3">
-            {/* Свои списки — до каталога издателя, а не после: человек, который сюда
-                пришёл добавить своё, не должен для этого прокручивать сорок чужих
-                записей. */}
             <CustomLists
                 local={local}
                 onChanged={async () => setLocal((await rpc.localLists()).files || {})}
@@ -152,8 +140,6 @@ export default function CatalogTab({ onUseInRule }: Props) {
                     />
                 </div>
                 <div className="flex gap-1" role="tablist" aria-label="Что показывать">
-                    {/* Разделения по виду списка здесь больше нет: человек выбирает сервис, а
-                        не «адресами или доменами». Осталось только «что уже задействовано». */}
                     {([
                         ['all', `все · ${manifest.services.length}`],
                         ['used', `используются · ${usedCount}`],
@@ -164,7 +150,7 @@ export default function CatalogTab({ onUseInRule }: Props) {
                             aria-selected={only === id}
                             onClick={() => setOnly(id)}
                             className={[
-                                'rounded-md px-3 py-1.5 text-sm',
+                                'rounded-md px-3 py-1.5 text-sm transition-colors',
                                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
                                 only === id
                                     ? 'bg-primary text-primary-foreground'
@@ -190,19 +176,14 @@ export default function CatalogTab({ onUseInRule }: Props) {
                     <tbody>
                         {shown.map((sv) => {
                             const byRules = rulesFor(sv)
-                            /* «Загружено» считаем по частям: сервис бывает наполовину на роутере,
-                               и сказать про него «загружен» было бы неправдой. */
                             const have = sv.parts.filter((p) => local[p.file.replace(/^\/+/, '')])
                             const localCount = have.reduce(
                                 (n, p) => n + (local[p.file.replace(/^\/+/, '')]?.count || 0), 0)
                             const kinds = [...new Set(sv.parts.map((p) => p.kind))]
                             return (
-                                <tr key={sv.id} className="border-b border-border/50 last:border-b-0">
+                                <tr key={sv.id} className="border-b border-border/50 transition-colors last:border-b-0 hover:bg-muted/40">
                                     <td className="px-3 py-2">
                                         <div className="truncate font-medium">{sv.name}</div>
-                                        {/* Вторая строка — из чего сервис собран. Вид списка не
-                                            исчез из мира, он перестал быть тем, что ВЫБИРАЮТ:
-                                            домены точнее, адреса работают без DNS. */}
                                         <div className="truncate text-xs text-muted-foreground">
                                             {kinds.length === 2
                                                 ? 'домены и адреса'
@@ -210,9 +191,6 @@ export default function CatalogTab({ onUseInRule }: Props) {
                                                   ? 'только домены'
                                                   : 'только адреса'}
                                             {sv.parts.length > 1 && ` · частей ${sv.parts.length}`}
-                                            {have.length === 0 && ' · не загружен на роутер'}
-                                            {have.length > 0 && have.length < sv.parts.length &&
-                                                ` · загружено ${have.length} из ${sv.parts.length}`}
                                         </div>
                                     </td>
                                     <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
@@ -232,30 +210,39 @@ export default function CatalogTab({ onUseInRule }: Props) {
                                         )}
                                     </td>
                                     <td className="px-3 py-2">
-                                        <div className="flex justify-end gap-1">
-                                            <Button
-                                                variant="secondary"
-                                                size="sm"
-                                                disabled={busy.has(sv.id)}
-                                                onClick={() => fetchService(sv)}
-                                            >
-                                                {have.length ? (
-                                                    <RefreshCw className="mr-1 h-4 w-4" aria-hidden="true" />
-                                                ) : (
-                                                    <Download className="mr-1 h-4 w-4" aria-hidden="true" />
-                                                )}
-                                                {busy.has(sv.id) ? 'Загрузка…' : have.length ? 'Обновить' : 'Загрузить'}
-                                            </Button>
-                                            {have.length > 0 && (
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    aria-label={`Удалить ${sv.name} с роутера`}
-                                                    disabled={busy.has(sv.id)}
-                                                    onClick={() => removeService(sv)}
-                                                >
-                                                    <Trash2 className="h-4 w-4" aria-hidden="true" />
-                                                </Button>
+                                        <div className="flex items-center justify-end gap-1">
+                                            {have.length === 0 ? (
+                                                /* Не кнопка, а обещание: файл скачает бэкенд в момент
+                                                   применения — человеку здесь делать нечего. */
+                                                <Hint tip="Списка ещё нет на роутере. Как только правило на него укажет и вы нажмёте «Применить», бэкенд скачает его сам.">
+                                                    <span className="text-xs text-muted-foreground">
+                                                        скачается сам
+                                                    </span>
+                                                </Hint>
+                                            ) : (
+                                                <>
+                                                    <Hint tip="Списки обновляются сами раз в сутки по расписанию. Кнопка — если свежая версия нужна прямо сейчас.">
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            aria-label={`Обновить ${sv.name}`}
+                                                            disabled={busy.has(sv.id)}
+                                                            onClick={() => fetchService(sv)}
+                                                        >
+                                                            <RefreshCw className={`h-4 w-4 ${busy.has(sv.id) ? 'animate-spin' : ''}`} aria-hidden="true" />
+                                                        </Button>
+                                                    </Hint>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        aria-label={`Удалить ${sv.name} с роутера`}
+                                                        className="hover:bg-destructive/10 hover:text-destructive"
+                                                        disabled={busy.has(sv.id)}
+                                                        onClick={() => removeService(sv)}
+                                                    >
+                                                        <Trash2 className="h-4 w-4" aria-hidden="true" />
+                                                    </Button>
+                                                </>
                                             )}
                                         </div>
                                     </td>
@@ -274,9 +261,8 @@ export default function CatalogTab({ onUseInRule }: Props) {
             </div>
 
             <p className="text-xs text-muted-foreground">
-                Здесь ничего не назначается: запись становится работающей, когда на неё укажет правило.
-                Манифест версии {manifest.version}. Загрузка и удаление — про то, лежит ли файл на
-                роутере, а не про маршрут.
+                Каталог — справка: запись начинает работать, когда на неё укажет правило. Нужные
+                списки скачиваются и обновляются сами. Манифест версии {manifest.version}.
             </p>
         </div>
     )

@@ -1,8 +1,11 @@
 import { lazy, Suspense, useState } from 'react'
 import { useLive } from '@/lib/live'
+import { usePending } from '@/lib/pending'
 import { type ServiceEntry } from '@/lib/model'
 import StatusRail from '@/components/StatusRail'
 import FirstRun from '@/components/FirstRun'
+import ApplyPill from '@/components/ApplyPill'
+import { Check } from 'lucide-react'
 
 /** Пульт: один экран вместо пары «мастер / эксперт».
  *
@@ -15,7 +18,10 @@ import FirstRun from '@/components/FirstRun'
  *  что-то набирал.
  *
  *  Живые данные читает ОДИН опрос на весь экран (lib/live.ts) — иначе колонка и вкладка
- *  показывали бы два разных мгновения, и оба были бы правдой. */
+ *  показывали бы два разных мгновения, и оба были бы правдой.
+ *
+ *  Сохранение автоматическое (lib/pending.ts): кнопок «Сохранить» на вкладках больше нет,
+ *  применение — одна плавающая пилюля (ApplyPill) на весь экран. */
 
 const RulesTab = lazy(() => import('@/components/tabs/RulesTab'))
 const OutboundsTab = lazy(() => import('@/components/tabs/OutboundsTab'))
@@ -39,6 +45,7 @@ const FALLBACK = <div className="p-5 text-sm text-muted-foreground">Загруз
 export default function Console() {
     const [tab, setTab] = useState<TabId>('rules')
     const live = useLive()
+    const { savedFlash } = usePending()
     /** Сервис, который попросили «в правило». Живёт здесь, а не в каталоге, потому что
      *  переход между вкладками — дело оболочки; каталог только просит. Считывается вкладкой
      *  правил один раз и сбрасывается: иначе повторный заход на вкладку снова открывал бы
@@ -61,25 +68,39 @@ export default function Console() {
                 <StatusRail live={live} onGoDiag={() => setTab('logs')} />
 
                 <main className="min-w-0">
-                    <nav className="mb-4 flex flex-wrap gap-1 border-b border-border" role="tablist">
-                        {TABS.map(({ id, label }) => (
-                            <button
-                                key={id}
-                                role="tab"
-                                aria-selected={tab === id}
-                                onClick={() => setTab(id)}
-                                className={[
-                                    'rounded-t-md px-4 py-2 text-sm transition-colors',
-                                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
-                                    tab === id
-                                        ? 'border-b-2 border-primary font-medium text-primary'
-                                        : 'border-b-2 border-transparent text-muted-foreground hover:text-foreground',
-                                ].join(' ')}
-                            >
-                                {label}
-                            </button>
-                        ))}
-                    </nav>
+                    <div className="mb-4 flex items-center justify-between gap-2 border-b border-border">
+                        <nav className="flex flex-wrap gap-1" role="tablist">
+                            {TABS.map(({ id, label }) => (
+                                <button
+                                    key={id}
+                                    role="tab"
+                                    aria-selected={tab === id}
+                                    onClick={() => setTab(id)}
+                                    className={[
+                                        'rounded-t-md px-4 py-2 text-sm transition-colors',
+                                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+                                        tab === id
+                                            ? 'border-b-2 border-primary font-medium text-primary'
+                                            : 'border-b-2 border-transparent text-muted-foreground hover:text-foreground',
+                                    ].join(' ')}
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                        </nav>
+                        {/* «Сохранено» — вспышка на полторы секунды после каждой правки.
+                            Взамен кнопки: подтверждение, что ничего нажимать не нужно. */}
+                        <span
+                            aria-hidden={!savedFlash}
+                            className={[
+                                'flex shrink-0 items-center gap-1.5 pb-1.5 text-xs text-muted-foreground',
+                                'transition-opacity duration-300',
+                                savedFlash ? 'opacity-100' : 'opacity-0',
+                            ].join(' ')}
+                        >
+                            <Check className="h-3.5 w-3.5 text-success" aria-hidden="true" /> Сохранено
+                        </span>
+                    </div>
 
                     <Suspense fallback={FALLBACK}>
                         {tab === 'rules' && (
@@ -115,6 +136,8 @@ export default function Console() {
                     </div>
                 </main>
             </div>
+
+            <ApplyPill />
         </div>
     )
 }

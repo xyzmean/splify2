@@ -10,6 +10,7 @@
         "splify2": [
           "status",
           "spec_get",
+          "applied_get",
           "explain",
           "lists",
           "devices",
