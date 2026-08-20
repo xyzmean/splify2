@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ArrowLeft, Search, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { rpc } from '@/lib/rpc'
+import { isCidr4, isIp4 } from '@/lib/validate'
 import { type Channel, type OutputStatus, type ServiceEntry } from '@/lib/model'
 
 /** Редактор правила — на месте таблицы, а не в модальном окне.
@@ -22,6 +23,20 @@ import { type Channel, type OutputStatus, type ServiceEntry } from '@/lib/model'
  *  «список скачан, а правило его не находит». */
 export function pathFor(file: string) {
     return `/etc/steer/lists/${file.replace(/^\/+/, '')}`
+}
+
+/** MAC ровно в том виде, в каком его понимает nft: шесть пар шестнадцатеричных цифр через
+ *  двоеточие. Своя проверка, а не из `lib/validate.ts`, потому что там валидаторов адресов
+ *  сети хватает, а MAC-адрес нигде больше в формах не набирают. Признак «есть двоеточие»
+ *  ниже отделяет MAC от адреса, а эта проверка говорит, правильно ли он написан: `aa:bb:cc`
+ *  проходит первый признак и не совпадает ни с одним пакетом. */
+const MAC = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i
+
+/** Устройства выхода: кандидаты, а если их нет — активное. То же правило, что в OutboundsTab,
+ *  и по той же причине (I-059): у выхода, ещё не применённого движком, активного нет вовсе,
+ *  а устройство он уже занимает. */
+function devList(o: OutputStatus): string[] {
+    return o.devices?.length ? o.devices : o.device ? [o.device] : []
 }
 
 /** Сервис выбран, если в правиле есть ХОТЯ БЫ ОДНА его часть.
@@ -48,25 +63,56 @@ interface Props {
     /** Пересечения с другими правилами — текстом, потому что решение принимает ПОРЯДОК, и
      *  прятать это нельзя: адрес достанется тому правилу, что выше. */
     clash: string | null
+    /** Сколько всего правил — чтобы «Правило 3» читалось как место в очереди, а не как
+     *  номер. Порядок здесь и есть приоритет, и в редакторе он был не виден вовсе. */
+    rulesTotal: number
+    /** Имена туннельных правил ВЫШЕ этого, забирающих те же записи. Пусто, если правило
+     *  ведёт в туннель: перекрытие важно именно для исключения — оно молча не срабатывает,
+     *  и выглядит это как «исключения не работают», а не как «правило стоит не там». */
+    coveredBy: string[]
     onChange: (ch: Channel) => void
     onClose: () => void
     onDelete: () => void
 }
 
 export default function RuleEditor({
-    ch, index, services, local, outputs, clash, onChange, onClose, onDelete,
+    ch, index, services, local, outputs, clash, rulesTotal, coveredBy, onChange, onClose, onDelete,
 }: Props) {
     const [q, setQ] = useState('')
     /** Аренды DHCP — чтобы устройства выбирали по имени, а не набирали MAC руками. Опечатка в
      *  MAC не совпадёт ни с чем и не пожалуется: правило просто не будет действовать. */
     const [leases, setLeases] = useState<{ mac: string; ip: string; name: string }[]>([])
+    /** Туннельные устройства роутера. Правило ведёт в ВЫХОД, а не в устройство, — но
+     *  человек ищет здесь именно устройство (splify2#12), и молчать про поднятый туннель,
+     *  которого нет ни в одном выходе, значит подтверждать вывод «второй туннель не
+     *  поддерживается». */
+    const [devices, setDevices] = useState<{ name: string; up: boolean; kind: string }[]>([])
     useEffect(() => {
         rpc.leases().then((r) => setLeases(r.leases || [])).catch(() => setLeases([]))
+        rpc.devices().then((d) => setDevices(d.devices || [])).catch(() => setDevices([]))
     }, [])
     const chosen = selectedIds(ch, services)
     const chosenEntries = services.filter((sv) => chosen.includes(sv.id))
     const outNames = Object.keys(outputs)
     const hasDomains = isDomains(ch)
+    /** Правило-исключение — это канал в выход `direct`, стоящий выше туннельных. Отдельной
+     *  сущности в движке нет и не нужно: метку раздаёт первое совпадение, поэтому верхнее
+     *  правило забирает сервис себе и оставляет его на обычном пути. */
+    const isException = outputs[ch.out]?.kind === 'direct'
+
+    /** Туннели, которые не ведёт ни один выход.
+     *
+     *  Показываем ТОЛЬКО когда туннельный выход ровно один — из двух вариантов снятия риска
+     *  (кнопка «не показывать» или условие) выбран второй: гасить подсказку значит хранить
+     *  ещё одно состояние и уметь его вернуть, а «выход один» описывает ровно ту ситуацию,
+     *  где подсказка полезна. Один выход — человек ещё не заводил второго ни разу, и
+     *  свободный туннель почти наверняка тот, который он ищет в этом списке. Когда выходов
+     *  два и больше, заводить их он умеет, и свободное устройство — скорее осознанный запас
+     *  под другую задачу; постоянная метка про него учила бы не смотреть на метки.
+     *  `up` обязателен: опущенный интерфейс — не свидетельство намерения. */
+    const tunnelOuts = outNames.filter((n) => outputs[n].kind !== 'direct')
+    const busy = new Set(outNames.flatMap((n) => devList(outputs[n])))
+    const orphans = tunnelOuts.length === 1 ? devices.filter((d) => d.up && !busy.has(d.name)) : []
 
     /** Включить или выключить сервис — сразу всеми его частями.
      *
@@ -112,7 +158,9 @@ export default function RuleEditor({
                         <ArrowLeft className="h-4 w-4" aria-hidden="true" /> Все правила
                     </button>
                     <span className="text-muted-foreground">/</span>
-                    <span className="font-medium">Правило {index + 1}</span>
+                    <span className="font-medium">
+                        Правило {index + 1} из {rulesTotal}
+                    </span>
                 </div>
                 <div className="font-mono text-xs text-muted-foreground">
                     {chosenEntries.length
@@ -311,6 +359,27 @@ export default function RuleEditor({
                                             </p>
                                         ) : null
                                     })()}
+                                    {/* Опечатка в адресе не отвергается, а МОЛЧА выпадает: наборы nft
+                                        строит shell, и битую запись он выбрасывает по дороге. Наружу это
+                                        выходит как «я добавил телефон, а правило его не касается» —
+                                        причём касается оно при этом всех остальных, и человек ищет
+                                        поломку в туннеле. Проверки те же, что на shell-стороне
+                                        (lib/validate.ts), сказанные до сохранения. */}
+                                    {(() => {
+                                        const bad = (ch.from || [])
+                                            .filter(Boolean)
+                                            .filter((x) =>
+                                                x.includes(':')
+                                                    ? !MAC.test(x.trim())
+                                                    : !isIp4(x) && !isCidr4(x),
+                                            )
+                                        return bad.length ? (
+                                            <p className="text-xs text-destructive">
+                                                Не адрес и не MAC: {bad.join(', ')} — такую запись движок
+                                                выбросит молча, и правило накроет не тех.
+                                            </p>
+                                        ) : null
+                                    })()}
                                 </>
                             )}
                         </div>
@@ -327,6 +396,12 @@ export default function RuleEditor({
                                     «Outbounds».
                                 </p>
                             )}
+                            {orphans.map((d) => (
+                                <p key={d.name} className="text-xs text-warning">
+                                    Туннель {d.name} поднят, но выхода на него нет — завести на вкладке
+                                    «Outbounds». Правило ведёт в выход, а не в устройство напрямую.
+                                </p>
+                            ))}
                             {outNames.map((n) => {
                                 const o = outputs[n]
                                 return (
@@ -358,6 +433,25 @@ export default function RuleEditor({
                                 )
                             })}
                         </div>
+                        {/* Исключение называется словом ровно там, где оно задаётся. Механизм в
+                            продукте был всегда — канал в direct выше туннельных, — но нигде так не
+                            назывался, и запрос «Spotify без VPN работает лучше» (splify2#3) не
+                            находил ответа. Заодно здесь единственное место, где видно, СРАБОТАЕТ ли
+                            оно: место в очереди решает всё. */}
+                        {isException && (
+                            <p className="mt-2 text-xs text-muted-foreground">
+                                Это исключение: выбранное пойдёт мимо туннеля. Работает, пока правило
+                                стоит выше туннельных — метку раздаёт первое совпадение. Сейчас оно{' '}
+                                {index + 1}-е из {rulesTotal}.
+                            </p>
+                        )}
+                        {isException && coveredBy.length > 0 && (
+                            <p className="mt-1 text-xs text-destructive">
+                                Исключение перекрыто: выше стоит «{coveredBy.join('», «')}» с теми же
+                                записями — трафик заберёт оно, и исключение не сработает. Поднимите его
+                                стрелкой ↑ в списке правил.
+                            </p>
+                        )}
                         {hasDomains && (
                             <label className="mt-3 flex flex-col gap-1 text-xs">
                                 Режим доменов

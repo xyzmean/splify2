@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
 import { pending } from '@/lib/pending'
-import { toCatalog, customServices, EMPTY_SPEC, type Channel, type ServiceEntry, type Spec } from '@/lib/model'
+import { toCatalog, customServices, EMPTY_SPEC, type Channel, type OutputStatus, type ServiceEntry, type Spec } from '@/lib/model'
 import { type Live } from '@/lib/live'
 import { Hint } from '@/components/ui/hint'
 import RuleEditor, { pathFor, selectedIds } from '@/components/tabs/RuleEditor'
@@ -41,6 +41,19 @@ function whoText(ch: Channel) {
     if (!ch.from?.length) return 'все устройства'
     if (ch.from.length === 1) return ch.from[0]
     return `${ch.from.length} адресов и подсетей`
+}
+
+/** Спорят ли два правила за одни и те же записи.
+ *
+ *  По путям файлов, а не по записям каталога: свой список каталогу неизвестен, а перекрыть
+ *  исключение он может не хуже. `any` пересекается со всем — правило «весь трафик» забирает и
+ *  то, что ниже названо по имени. Ограничение по устройствам (`from`) здесь СОЗНАТЕЛЬНО не
+ *  учитывается: правило, накрывающее только телефон, перекрывает исключение именно для
+ *  телефона, и «у меня на телефоне исключение не работает» — это тот же случай, а не другой. */
+function overlaps(a: Channel, b: Channel) {
+    if (a.match.any || b.match.any) return true
+    const fa = new Set([...(a.match.prefixes_files || []), ...(a.match.domains_files || [])])
+    return [...(b.match.prefixes_files || []), ...(b.match.domains_files || [])].some((f) => fa.has(f))
 }
 
 interface Props {
@@ -132,6 +145,42 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
         setOpen(spec.channels.length)
     }
 
+    /** Исключение: «этот сервис — мимо туннеля».
+     *
+     *  Отдельной сущности в движке нет и не требуется — исключение это канал в выход `direct`,
+     *  стоящий ВЫШЕ туннельных: метки раздаются по первому совпадению, поэтому верхнее правило
+     *  забирает записи себе и оставляет их на обычном пути. Механизм был в продукте с самого
+     *  начала, но нигде так не назывался, и человек с «у меня Spotify без VPN работает лучше»
+     *  (splify2#3) его не находил — искал настройку, которой нет, потому что она есть в виде
+     *  порядка строк. */
+    function addException() {
+        if (!spec) return
+        /* Выход в direct нужен как адрес назначения. Если его ещё нет — заводим здесь же: у
+         * этого выхода нет ни одной настройки, и отправлять за ним на другую вкладку значит
+         * превратить шаблон в инструкцию из двух шагов, то есть в то же скрытое знание. */
+        let outputs = spec.outputs
+        let out = Object.keys(outputs).find((n) => outputs[n].kind === 'direct')
+        if (!out) {
+            out = 'direct'
+            let d = 2
+            while (outputs[out]) out = `direct${d++}`
+            outputs = { ...outputs, [out]: { name: out, kind: 'direct' } }
+        }
+        const used = new Set(spec.channels.map((c) => c.name))
+        let name = 'исключение'
+        let n = 2
+        while (used.has(name)) name = `исключение ${n++}`
+        /* Место — перед первым туннельным правилом, а не в конец списка: исключение, попавшее
+         * ниже туннельного канала с теми же записями, не срабатывает вовсе. Не в самое начало
+         * тоже осознанно — так уже стоящие исключения сохраняют свой порядок между собой. */
+        const at = spec.channels.findIndex((c) => outputs[c.out]?.kind !== 'direct')
+        const idx = at < 0 ? spec.channels.length : at
+        const channels = spec.channels.slice()
+        channels.splice(idx, 0, { name, match: {}, out })
+        edit({ ...spec, outputs, channels })
+        setOpen(idx)
+    }
+
     /** Переключить правило. Одно поле спеки — и порядок, и видимость движку сохраняются. */
     function toggle(i: number, on: boolean) {
         if (!spec) return
@@ -143,7 +192,14 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
 
     if (!spec) return <div className="p-5 text-sm text-muted-foreground">Загрузка…</div>
 
-    const outputs = live.status?.outputs || {}
+    /** Выходы: спека плюс то, что о них знает движок.
+     *
+     *  Одних фактов движка мало — выход, заведённый минуту назад и ещё не применённый, в
+     *  status отсутствует: правило на него читалось бы как «не найден», а в редакторе такого
+     *  выхода не было бы в списке вовсе, то есть шаблон «Исключение» выглядел бы сломанным
+     *  ровно в тот момент, когда им пользуются впервые. Факты кладутся сверху: `up`, метку и
+     *  таблицу знает только движок. */
+    const outputs: Record<string, OutputStatus> = { ...spec.outputs, ...(live.status?.outputs || {}) }
 
     if (open !== null && spec.channels[open]) {
         const ch = spec.channels[open]
@@ -158,6 +214,21 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
                   ? `Совпавшее заберёт «${above[above.length - 1].o.name}» — оно выше.`
                   : 'Совпавшее заберёт это правило — оно выше.')
             : null
+        /* Перекрытие исключения — отдельно от `clash`: то говорит, кто заберёт общие записи,
+         * а это отвечает на вопрос «сработает ли вообще». Считается только для канала в
+         * direct и только по правилам ВЫШЕ, включённым и туннельным. */
+        const coveredBy =
+            outputs[ch.out]?.kind === 'direct'
+                ? spec.channels
+                      .filter(
+                          (o, k) =>
+                              k < open &&
+                              o.enabled !== false &&
+                              outputs[o.out]?.kind !== 'direct' &&
+                              overlaps(o, ch),
+                      )
+                      .map((o) => o.name)
+                : []
         return (
             <RuleEditor
                 ch={ch}
@@ -166,6 +237,8 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
                 local={local}
                 outputs={outputs}
                 clash={clash}
+                rulesTotal={spec.channels.length}
+                coveredBy={coveredBy}
                 onChange={(next) =>
                     edit({ ...spec, channels: spec.channels.map((c, k) => (k === open ? next : c)) })
                 }
@@ -183,14 +256,23 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-muted-foreground">
                     Сверху вниз — побеждает{' '}
-                    <Hint tip="steer раздаёт метки по первому совпадению: адрес достаётся самому верхнему правилу, остальное идёт напрямую. Стрелками меняется приоритет.">
+                    <Hint tip="steer раздаёт метки по первому совпадению: адрес достаётся самому верхнему правилу, остальное идёт напрямую. Стрелками меняется приоритет. Поэтому правило «Напрямую», стоящее ВЫШЕ туннельного, и есть исключение: оно забирает свои записи первым и оставляет их мимо VPN.">
                         первое совпадение
                     </Hint>
-                    . Изменения сохраняются сами.
+                    . Изменения сохраняются сами. Правило «Напрямую» выше туннельных — это
+                    исключение: выбранное пойдёт мимо VPN.
                 </p>
-                <Button onClick={add}>
-                    <Plus className="mr-1 h-4 w-4" aria-hidden="true" /> Новое правило
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                    {/* Без иконки и вторичной кнопкой: исключение — частный случай правила, а
+                        не второй способ его завести. Название кнопки и есть вся новизна — сам
+                        механизм в движке тот же. */}
+                    <Button variant="ghost" onClick={addException}>
+                        Исключение
+                    </Button>
+                    <Button onClick={add}>
+                        <Plus className="mr-1 h-4 w-4" aria-hidden="true" /> Новое правило
+                    </Button>
+                </div>
             </div>
 
             <div className="overflow-x-auto rounded-md border border-border bg-card shadow-card">
