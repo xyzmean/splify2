@@ -60,6 +60,12 @@ describe('обфускация транспорта', () => {
 
     it('говорит про Endpoint пира: это единственное место, где две настройки знают друг о друге', () => {
         render(<ObfsPanel output={WITH_OBFS} onChange={() => {}} />)
-        expect(screen.getByText(/Endpoint/)).toBeInTheDocument()
+        // Мест два, и оба нужны: подпись у поля и объяснение под ним. Спрашивать /Endpoint/
+        // одним getByText нельзя — он требует единственного совпадения, находит два и падает,
+        // из-за чего стенд был красным с самого своего появления (I-060). Спрашиваем каждое
+        // место по его собственному тексту, чтобы падение снова означало пропавшую подсказку,
+        // а не их количество.
+        expect(screen.getByText(/Локальный порт \(= Endpoint пира\)/)).toBeInTheDocument()
+        expect(screen.getByText(/В настройках пира WireGuard/)).toHaveTextContent('Endpoint')
     })
 })
