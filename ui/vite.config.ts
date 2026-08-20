@@ -55,7 +55,12 @@ export default defineConfig({
         manualChunks(id) {
           if (id.includes('node_modules')) return 'x'
           // Modules imported by BOTH the dashboard and the settings entry.
-          if (/[\\/]src[\\/]lib[\\/](notify|utils|i18n|rpc|uci|tw-merge)\./.test(id)) return 'x'
+          // `validate` попал сюда в запуске 46: до подключения валидаторов к формам его не
+          // импортировал никто, а теперь его читают и главный бандл (VlessPanel, ObfsPanel), и
+          // ленивая вкладка правил (RuleEditor) — то есть он стал общим, и rollup выделил его в
+          // собственный кусок `splify-validate.js`, у которого нет пина `?v=`. Барьер
+          // scripts/check-dist.mjs это и остановил.
+          if (/[\\/]src[\\/]lib[\\/](notify|utils|i18n|rpc|uci|tw-merge|validate)\./.test(id)) return 'x'
           if (/[\\/]src[\\/]components[\\/]ui[\\/]/.test(id)) return 'x'
           return undefined
         },
