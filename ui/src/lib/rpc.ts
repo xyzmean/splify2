@@ -13,6 +13,7 @@ import {
     type Status,
     type VlessNode,
     type VlessProbe,
+    type VlessSkip,
 } from './model'
 
 export { toCatalog }
@@ -285,7 +286,13 @@ export const rpc = {
         log: string[]
     }>('engine_state'),
 
-    /** Узлы подписки глазами движка, с причинами непригодности. */
+    /** Узлы подписки глазами движка, с причинами непригодности.
+     *
+     *  Оба поля опциональны, и по разным причинам. `skipped_reasons` новый движок
+     *  печатает всегда, в том числе пустым массивом, — но пакет обновляют не в один
+     *  день с интерфейсом, и на роутере со старым движком поля не будет вовсе.
+     *  `skipped_other` печатается только при переполнении набора причин (их больше
+     *  восьми) — то есть почти никогда. */
     vlessNodes: declare<{
         output: string
         sub_file: string
@@ -294,6 +301,8 @@ export const rpc = {
         skipped: number
         foreign: number
         nodes: VlessNode[]
+        skipped_reasons?: VlessSkip[]
+        skipped_other?: number
     }>('vless_nodes', ['output']),
 
     /** Проверить узел и замерить время ответа. По одному за вызов: проверка упирается в

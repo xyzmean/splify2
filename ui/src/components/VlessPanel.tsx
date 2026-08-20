@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
-import type { Output, VlessNode, VlessProbe } from '@/lib/model'
+import type { Output, VlessNode, VlessProbe, VlessSkip } from '@/lib/model'
 
 // Настройка выхода kind=vless: подписка и выбор узла.
 //
@@ -47,6 +47,8 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
     const [url, setUrl] = useState('')
     const [nodes, setNodes] = useState<VlessNode[] | null>(null)
     const [meta, setMeta] = useState<{ usable: number; skipped: number; foreign: number } | null>(null)
+    const [skips, setSkips] = useState<VlessSkip[]>([])
+    const [skipOther, setSkipOther] = useState(0)
     const [probes, setProbes] = useState<Record<number, VlessProbe>>({})
     const [busy, setBusy] = useState('')
 
@@ -62,6 +64,8 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
             .then((r) => {
                 setNodes(r.nodes || [])
                 setMeta({ usable: r.usable, skipped: r.skipped, foreign: r.foreign })
+                setSkips(r.skipped_reasons || [])
+                setSkipOther(r.skipped_other || 0)
             })
             .catch(() => setNodes(null))
     }, [name, saved, sub?.present])
@@ -136,6 +140,23 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
                         </>
                     )}
                 </div>
+            )}
+
+            {/* Почему узлы не попали в список. Движок знал причину и до запуска 45 её не
+              * говорил: человек с подпиской из tls-узлов видел «пригодно 0, пропущено
+              * 26» и делал единственный возможный вывод — «не подключается»
+              * (splicicd#16). Показывается и когда пригодные есть: «пропущено 3» без
+              * объяснения — это тот же вопрос, только тише. */}
+            {sub?.present && skips.length > 0 && (
+                <ul className="space-y-0.5 text-xs text-muted-foreground">
+                    {skips.map((s) => (
+                        <li key={s.reason}>
+                            {s.reason} — {s.count === 1 ? 'узел' : 'узлов'} {s.count}
+                            {s.example ? `, например «${s.example}»` : ''}
+                        </li>
+                    ))}
+                    {skipOther > 0 && <li>прочие причины — узлов {skipOther}</li>}
+                </ul>
             )}
 
             {!sub?.present && (
