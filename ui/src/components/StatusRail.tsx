@@ -5,7 +5,7 @@ import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
 import { useConfirm } from '@/components/ui/confirm'
 import { engineAction } from '@/lib/engine'
-import { human, type Live } from '@/lib/live'
+import { human, type DiagCheck, type Live } from '@/lib/live'
 import { Hint } from '@/components/ui/hint'
 
 /** Закреплённое состояние: то, что верно независимо от того, что человек делает справа.
@@ -17,20 +17,33 @@ import { Hint } from '@/components/ui/hint'
  *  Здесь нет ни одного своего мнения о работоспособности: всё, что показано, приходит от
  *  движка. Два ответа на «работает ли» — это на один ответ больше, чем нужно. */
 
+interface Verdict {
+    text: string
+    tone: 'good' | 'warn' | 'bad' | 'idle'
+    why: string
+    /** Сами советы, а не только их число: строку «советов: N» человек прочитал как вопрос
+     *  («что за совет?» — splify2#4, I-039), потому что содержания в ней не было. Возвращаются
+     *  при любом вердикте, чтобы у поля был один смысл на все ветки, но печатаются только там,
+     *  где счётчик и показывался. */
+    notes: DiagCheck[]
+}
+
 /** Итог по всему: сначала поломки движка, потом предупреждения, потом «работает».
  *
  *  Порядок именно такой, потому что зелёная надпись сверху при красной проверке ниже учит не
  *  верить надписи. */
-function verdict(live: Live) {
-    if (live.error) return { text: 'Движок не отвечает', tone: 'bad' as const, why: live.error }
-    if (live.diag?.fail) return { text: 'Есть поломки', tone: 'bad' as const, why: `проверок с отказом: ${live.diag.fail}` }
+
+function verdict(live: Live): Verdict {
+    /* Советы (note) в цвет не идут: они верны всегда, и красить ими состояние значило бы
+     * держать роутер вечно нездоровым. Полный перечень остаётся на вкладке диагностики. */
+    const notes = (live.diag?.checks || []).filter((c) => c.verdict === 'note')
+    if (live.error) return { text: 'Движок не отвечает', tone: 'bad', why: live.error, notes }
+    if (live.diag?.fail)
+        return { text: 'Есть поломки', tone: 'bad', why: `проверок с отказом: ${live.diag.fail}`, notes }
     if (live.diag?.warn)
-        return { text: 'Работает', tone: 'warn' as const, why: `есть о чём знать: ${live.diag.warn}` }
-    if (!live.status) return { text: 'Загрузка…', tone: 'idle' as const, why: '' }
-    /* Советы (note) сюда не приходят и цвет не меняют: они верны всегда, и красить ими
-     * состояние значило бы держать роутер вечно нездоровым. Их видно на вкладке диагностики. */
-    const notes = (live.diag?.checks || []).filter((c) => c.verdict === 'note').length
-    return { text: 'Работает', tone: 'good' as const, why: notes ? `советов: ${notes}` : '' }
+        return { text: 'Работает', tone: 'warn', why: `есть о чём знать: ${live.diag.warn}`, notes }
+    if (!live.status) return { text: 'Загрузка…', tone: 'idle', why: '', notes }
+    return { text: 'Работает', tone: 'good', why: notes.length ? `советов: ${notes.length}` : '', notes }
 }
 
 /** «4 ч 12 мин» — то, как об этом говорят. Секунды показываем только первую минуту: дальше они
@@ -84,6 +97,54 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
     const primary = activeEntries[0]
     const tunnelDev = primary?.[1].device
     const tunnel = tunnelDev ? live.devs?.[tunnelDev] : undefined
+
+    /* R-064: «движок стоит, а туннеля нет». Состояние, при котором интерфейс работает, правила
+     * на месте, счётчики идут — а наружу не уходит ничего, потому что выхода нет ни одного
+     * (splify2#5). До этой строки такая настройка выглядела исправной, и человеку оставалось
+     * догадываться, что именно не настроено.
+     *
+     * Выходом считается всё, кроме `direct`: `direct` не уводит трафик, он оставляет пакет на
+     * обычном пути, и роутер с одним таким выходом ровно так же никуда не маршрутизирует. */
+    const routed = outputs.filter(([, o]) => o.kind !== 'direct')
+    /* Устройство проверяется ТОЛЬКО у kind=interface: устройство vless-выхода создаёт сам
+     * движок при подъёме, и его отсутствие значит «движок не поднялся» — про это говорят
+     * предупреждения steer и проверки состояния, а не эта строка. */
+    const named = outputs
+        .filter(([, o]) => o.kind === 'interface')
+        .map(([name, o]) => ({ name, want: o.devices?.length ? o.devices : o.device ? [o.device] : [] }))
+    /* Список туннельных устройств системы. Спрашивается не по кругу, а когда меняется САМ
+     * вопрос — набор устройств, названных выходами: ответ читается из /sys/class/net, и гонять
+     * его каждые пять секунд ради неменяющегося списка незачем. */
+    const wantKey = named.map((n) => `${n.name}:${n.want.join('|')}`).join(',')
+    const [sysDevs, setSysDevs] = useState<Set<string> | null>(null)
+    useEffect(() => {
+        if (!wantKey) return
+        let stop = false
+        rpc.devices()
+            .then((r) => { if (!stop) setSysDevs(new Set((r.devices || []).map((d) => d.name))) })
+            /* Не знаем — молчим: предупреждение по неполученному ответу было бы тревогой на
+             * исправном роутере, а это ровно то, чего в R-064 велено не делать. */
+            .catch(() => { if (!stop) setSysDevs(null) })
+        return () => { stop = true }
+    }, [wantKey])
+    /* Двумя источниками, и это не перестраховка. `rpc.devices()` отбирает ТУННЕЛЬНЫЕ устройства
+     * (ARPHRD_NONE/TUNNEL), поэтому по нему одному мост или физический порт выглядел бы
+     * «отсутствующим в системе» — а он в системе есть, и сказать так значило бы соврать.
+     * `live.devs` — полный список интерфейсов из общего опроса, он же и снимает устаревание:
+     * туннель, поднявшийся после запроса, виден в нём через пять секунд, и предупреждение
+     * гаснет само, без перезагрузки страницы. */
+    const inSystem = (d: string) => (sysDevs?.has(d) ?? false) || d in (live.devs || {})
+    /* Молчим, пока систему знаем не целиком, и пока состояние не пришло: пустой `outputs` до
+     * первого ответа движка — это «ещё не знаем», а не «выходов нет». */
+    const known = live.status !== null && !live.error
+    const dead =
+        known && sysDevs !== null && live.devs !== null
+            ? named.filter((n) => n.want.length > 0 && n.want.every((d) => !inSystem(d)))
+            : []
+    /* Выход есть, а устройства ему не назначено вовсе — тот же результат и без списка
+     * устройств: маршрутизировать нечем. */
+    const noDevice = known ? named.filter((n) => n.want.length === 0) : []
+    const nowhere = known && routed.length === 0
 
     async function probeAll() {
         setPinging(true)
@@ -160,7 +221,23 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                     <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${DOT[v.tone]}`} aria-hidden="true" />
                     <h2 className="text-lg font-semibold">{v.text}</h2>
                 </div>
-                {v.why && <p className="mt-1 text-xs text-muted-foreground">{v.why}</p>}
+                {/* R-030/I-039: «советов: N» было счётчиком без содержания и без дороги к
+                    нему — обработчик перехода в этом же компоненте уже был, но висел только на
+                    кнопке движка. Теперь строка называет первый совет и ведёт туда, где лежат
+                    остальные. Перечень целиком по-прежнему на вкладке диагностики: в колонке он
+                    занял бы весь экран. */}
+                {v.tone === 'good' && v.notes.length > 0 ? (
+                    <button
+                        type="button"
+                        onClick={onGoDiag}
+                        className="mt-1 block w-full text-left text-xs text-muted-foreground underline decoration-dotted"
+                    >
+                        {v.notes.length > 1 ? `${v.why}: ` : 'совет: '}
+                        {v.notes[0].what}
+                    </button>
+                ) : (
+                    v.why && <p className="mt-1 text-xs text-muted-foreground">{v.why}</p>
+                )}
                 {/* Время работы — движка, а не роутера: применение настройки туннель не
                     перезапускает, и человек спрашивает именно про процесс. */}
                 {live.net && uptimeText(live.net.uptime) && (
@@ -352,6 +429,48 @@ export default function StatusRail({ live, onGoDiag }: { live: Live; onGoDiag: (
                             </li>
                         ))}
                     </ul>
+                </div>
+            )}
+
+            {/* «Трафику некуда идти» — R-064. Рядом с предупреждениями движка и по той же
+                причине: это не совет и не подсказка, а названная словами причина, по которой
+                настроенный роутер не выпускает ни одного пакета.
+
+                Условие узкое нарочно: либо выходов нет вовсе, либо устройство, названное
+                выходом, отсутствует в системе (проверено по списку устройств, а не по
+                «выглядит не так»). Постоянного значка из этого не получается — на роутере с
+                поднятым туннелем ни одна из веток не срабатывает. */}
+            {(nowhere || noDevice.length > 0 || dead.length > 0) && (
+                <div className="rounded-md border border-warning/40 bg-warning/10 p-4">
+                    <h3 className="flex items-center gap-2 text-sm font-semibold text-warning">
+                        <AlertTriangle className="h-4 w-4" aria-hidden="true" /> Трафику некуда идти
+                    </h3>
+                    {nowhere ? (
+                        <p className="mt-2 text-xs">
+                            Выходов нет: ни один туннель не заведён, поэтому правилам некуда вести
+                            трафик — он идёт напрямую, как будто ничего не настроено. Выход
+                            создаётся на вкладке Outbounds, а само туннельное устройство — в
+                            настройках сети роутера.
+                        </p>
+                    ) : (
+                        <ul className="mt-2 space-y-2 text-xs">
+                            {noDevice.map((n) => (
+                                <li key={n.name}>
+                                    Выход <span className="font-medium">{n.name}</span> не поднят:
+                                    устройство ему не назначено, маршрутизировать нечем.
+                                </li>
+                            ))}
+                            {dead.map((n) => (
+                                <li key={n.name}>
+                                    Выход <span className="font-medium">{n.name}</span> не поднят:{' '}
+                                    {n.want.length > 1 ? 'устройств' : 'устройства'}{' '}
+                                    <span className="font-mono">{n.want.join(', ')}</span> нет в
+                                    системе. Туннель создаётся в настройках сети роутера — пока
+                                    устройства нет, трафик этого выхода не уходит никуда.
+                                </li>
+                            ))}
+                        </ul>
+                    )}
                 </div>
             )}
 
