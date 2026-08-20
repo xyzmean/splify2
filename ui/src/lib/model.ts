@@ -199,19 +199,22 @@ export interface ListEntry {
     same_as_ip?: string[]
 }
 
-/** Издатель зеркалит доменные списки из чужого репозитория и перезаписывает их целиком.
+/** Признак источника доменного списка. Форма одна на оба случая, а имя ключа в манифесте
+ *  разное: `upstream` — список зеркалится из чужого репозитория и перезаписывается целиком,
+ *  `maintained_here` — список ведёт сам издатель, и домен предлагают ему.
  *
  *  Поле необязательное: манифест на уже установленных роутерах его не несёт, и его
  *  отсутствие значит «не знаем», а не «список наш». */
-export interface Upstream {
-    /** `owner/repo` у издателя апстрима — то, что показывается человеку. */
+export interface ListOrigin {
+    /** `owner/repo`, где список ведётся, — то, что показывается человеку. */
     repo?: string
     folder?: string
     file?: string
     url?: string
     /** Куда предлагать домен. Единственная ссылка, по которой человеку есть что сделать. */
     suggest_url?: string
-    /** false — дописанное на нашей стороне исчезнет при следующей синхронизации. */
+    /** Переживёт ли обновление дописанное в этот список. У зеркала false: файл
+     *  перезаписывается целиком, и правка исчезнет при следующей синхронизации. */
     editable_locally?: boolean
 }
 
@@ -250,7 +253,15 @@ export interface RawManifest {
          *  double the memory, and two channels arguing over one destination. */
         same_as_ip?: string[]
         overlaps?: { with: string; domains: number; percent: number }[]
-        upstream?: Upstream
+        upstream?: ListOrigin
+        /** Список ведёт сам издатель: `editable_locally: true`, ссылки в его репозиторий.
+         *  Признак у списка ровно один — он либо зеркалится, либо ведётся там. */
+        maintained_here?: ListOrigin
+        /** Зеркальные списки, которые дополняет этот (стоит у СВОЕГО списка), и свои
+         *  списки, дополняющие этот (стоит у ЗЕРКАЛЬНОГО). Издатель называет связь с обеих
+         *  сторон — интерфейс её только читает, а не выводит по именам файлов. */
+        complements?: string[]
+        complemented_by?: string[]
     }[]
 }
 
@@ -300,7 +311,18 @@ export interface ServiceEntry {
      *  нельзя. Берётся у первой доменной части с таким признаком: у издателя все они
      *  приходят из одного репозитория, а разойдись это — правдой останется адрес репозитория,
      *  а не наша догадка о нём. */
-    upstream?: Upstream
+    upstream?: ListOrigin
+    /** Доменная часть записи — список самого издателя: недостающий домен есть куда
+     *  предложить, и предложенное переживёт обновление. Обратная сторона `upstream`,
+     *  берётся так же — у первой доменной части, объявившей признак. */
+    maintained?: ListOrigin
+    /** Связь «зеркало + дополняющий его свой список», как её назвал издатель.
+     *
+     *  `names` — человеческие названия записей на другом конце связи, `ours` различает
+     *  два разных сообщения: true — ЭТА запись и есть дополнение (она названа в
+     *  `complements`), false — эту запись дополняет чужая строка каталога. Смысл в обоих
+     *  случаях один: включать надо обе, потому что дополнение не заменяет зеркало. */
+    complement?: { names: string[]; ours: boolean }
 }
 
 export interface Catalog {
@@ -352,6 +374,7 @@ export function toCatalog(m: RawManifest): Catalog {
         put('d:' + d.id, { id: d.id, kind: 'domains', name: d.name_ru, file: d.file, count: d.count }, d.file)
 
     const catName = new Map(cats.map((c) => [c.id, c.name_ru]))
+    const domName = new Map(doms.map((d) => [d.id, d.name_ru]))
 
     /** Двойники по адресам — то, что заявил издатель, ничего не вычисляя.
      *
@@ -376,15 +399,49 @@ export function toCatalog(m: RawManifest): Catalog {
         }
     }
 
-    /** Первая доменная часть, которую издатель объявил зеркалом. `editable_locally: true`
-     *  снимает признак: тогда файл наш, и предлагать домен некому. */
-    const upstreamOf = (g: ServiceEntry) =>
-        doms.find(
-            (d) =>
-                d.upstream &&
-                d.upstream.editable_locally !== true &&
-                g.parts.some((p) => p.kind === 'domains' && p.id === d.id),
-        )?.upstream
+    /** Признак источника доменных частей записи — тот, что назвал издатель, и ничего сверх.
+     *
+     *  `mine` выбирает, о чём спрашиваем: о своём списке издателя (`maintained_here`) или
+     *  о зеркале (`upstream`). `editable_locally` здесь не украшение, а сама суть признака,
+     *  поэтому запись, спорящая со своим же ключом (зеркало с `true`, свой список с
+     *  `false`), пропускается молча — врать про судьбу дописанного домена хуже, чем
+     *  промолчать. Берётся у ПЕРВОЙ подходящей части: у издателя все они приходят из
+     *  одного репозитория, а разойдись это — правдой останется адрес репозитория, а не
+     *  наша догадка о нём. */
+    const originOf = (g: ServiceEntry, mine: boolean) => {
+        const part = doms.find((d) => {
+            const o = mine ? d.maintained_here : d.upstream
+            if (!o) return false
+            if (mine ? o.editable_locally === false : o.editable_locally === true) return false
+            return g.parts.some((p) => p.kind === 'domains' && p.id === d.id)
+        })
+        return mine ? part?.maintained_here : part?.upstream
+    }
+
+    /** Свой список издателя и зеркало, которое он дополняет: `complements` у своего,
+     *  `complemented_by` у зеркального.
+     *
+     *  Связь названа с обеих сторон, поэтому и читается с обеих: без пометки на СТРОКЕ
+     *  ЗЕРКАЛА человек включает только его и снова не получает домена, которого там нет
+     *  (splify2#7) — дополнение лежит отдельной строкой каталога, и догадаться о нём
+     *  неоткуда. Записи, которых в этом манифесте нет, и части этой же записи
+     *  пропускаются: связывать строку с самой собой нечем. */
+    const complementOf = (g: ServiceEntry) => {
+        const mine = new Set(g.parts.filter((p) => p.kind === 'domains').map((p) => p.id))
+        for (const key of ['complements', 'complemented_by'] as const) {
+            const ids = new Set(
+                [...mine]
+                    .flatMap((id) => doms.find((d) => d.id === id)?.[key] || [])
+                    .filter((other) => domName.has(other) && !mine.has(other)),
+            )
+            if (ids.size)
+                return {
+                    names: [...ids].map((id) => domName.get(id) as string),
+                    ours: key === 'complements',
+                }
+        }
+        return undefined
+    }
 
     const services = [...groups.values()].map((g) => {
         /* Имя обычно берём у АДРЕСНЫХ частей: у издателя они названы полнее — «Google
@@ -407,7 +464,9 @@ export function toCatalog(m: RawManifest): Catalog {
             name: [...new Set(names)].join(' · '),
             description: cats.find((c) => c.id === g.parts[0].id)?.description_ru,
             same_prefixes: twinsOf(g),
-            upstream: upstreamOf(g),
+            upstream: originOf(g, false),
+            maintained: originOf(g, true),
+            complement: complementOf(g),
         }
     })
     /* Порядок как у издателя: сначала адресные категории, потом чисто доменные. Алфавит здесь

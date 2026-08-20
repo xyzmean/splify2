@@ -5,7 +5,7 @@ import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
 import CustomLists from '@/components/CustomLists'
 import { Hint } from '@/components/ui/hint'
-import { toCatalog, type Catalog, type ServiceEntry, type Spec } from '@/lib/model'
+import { toCatalog, type Catalog, type ListOrigin, type ServiceEntry, type Spec } from '@/lib/model'
 
 /** Каталог: что доступно, сколько записей, где используется. ТОЛЬКО справка.
  *
@@ -20,6 +20,42 @@ interface Props {
     /** Открыть редактор правила с этим сервисом. Переключает вкладку — каталог не умеет
      *  назначать сам, и это ровно то разделение, ради которого он переписан. */
     onUseInRule: (s: ServiceEntry) => void
+}
+
+/** Признак источника доменной части: откуда список берётся и что делать с недостающим
+ *  доменом. Форма у зеркала и у своего списка издателя одна, разное — единственное, что
+ *  человеку и важно: переживёт ли обновление то, что он добавит, и куда идти с доменом.
+ *
+ *  Выросло из splify2#7: категория «18+» включена, нужного сайта в ней нет, и узнать
+ *  почему было негде. */
+function SourceNote({ origin, ours, mixed }: { origin: ListOrigin; ours: boolean; mixed: boolean }) {
+    const label = ours ? 'список наш' : 'список внешний'
+    return (
+        <div className="mt-0.5 text-xs text-muted-foreground">
+            <Hint
+                tip={
+                    ours
+                        ? `Список наш${origin.repo ? ` (${origin.repo})` : ''}: не хватает домена — предложите его сюда, он попадёт в список и переживёт обновление. Дописанное прямо на роутере всё равно исчезнет: файл перезаписывается целиком.`
+                        : `Список внешний: чтобы добавить домен, предложите его апстриму${origin.repo ? ` (${origin.repo})` : ''} или используйте свой список — кнопка «Свой список» выше. Дописанное на роутере исчезнет при следующем обновлении: файл перезаписывается целиком.`
+                }
+            >
+                {mixed ? `домены — ${label}` : label}
+            </Hint>
+            {origin.suggest_url && (
+                <>
+                    {' · '}
+                    <a
+                        href={origin.suggest_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline decoration-dotted hover:text-foreground"
+                    >
+                        предложить домен
+                    </a>
+                </>
+            )}
+        </div>
+    )
 }
 
 export default function CatalogTab({ onUseInRule }: Props) {
@@ -223,27 +259,28 @@ export default function CatalogTab({ onUseInRule }: Props) {
                                             </div>
                                         )}
                                         {sv.upstream && (
-                                            /* splify2#7: домена нет в списке — и узнать, что дописать
-                                               его сюда нельзя, было негде. */
-                                            <div className="mt-0.5 text-xs text-muted-foreground">
+                                            <SourceNote origin={sv.upstream} ours={false} mixed={sv.prefixes.length > 0} />
+                                        )}
+                                        {sv.maintained && (
+                                            <SourceNote origin={sv.maintained} ours mixed={sv.prefixes.length > 0} />
+                                        )}
+                                        {sv.complement && (
+                                            /* Вторая половина splify2#7: домена нет в зеркале, он есть
+                                               в дополнении — но дополнение это ОТДЕЛЬНАЯ строка
+                                               каталога. Промолчать здесь значит оставить человека с
+                                               включённым зеркалом и тем же отсутствующим доменом. */
+                                            <div className="mt-0.5 text-xs text-warning">
                                                 <Hint
-                                                    tip={`Список внешний: чтобы добавить домен, предложите его апстриму${sv.upstream.repo ? ` (${sv.upstream.repo})` : ''} или используйте свой список — кнопка «Свой список» выше. Дописанное на роутере исчезнет при следующем обновлении: файл перезаписывается целиком.`}
+                                                    tip={
+                                                        sv.complement.ours
+                                                            ? `Эта запись дополняет «${sv.complement.names.join('», «')}», а не заменяет её: в ней только домены, которых там нет. Включать имеет смысл обе — по отдельности каждая неполна.`
+                                                            : `Рядом есть наш список «${sv.complement.names.join('», «')}»: он дополняет эту запись, а не заменяет её — в нём домены, которых здесь нет. Включать имеет смысл обе, иначе добавленный домен в туннель не попадёт.`
+                                                    }
                                                 >
-                                                    {sv.prefixes.length ? 'домены — список внешний' : 'список внешний'}
+                                                    {sv.complement.ours
+                                                        ? `дополняет «${sv.complement.names.join('», «')}» — включайте оба`
+                                                        : `рядом наш список «${sv.complement.names.join('», «')}» — включайте оба`}
                                                 </Hint>
-                                                {sv.upstream.suggest_url && (
-                                                    <>
-                                                        {' · '}
-                                                        <a
-                                                            href={sv.upstream.suggest_url}
-                                                            target="_blank"
-                                                            rel="noreferrer"
-                                                            className="underline decoration-dotted hover:text-foreground"
-                                                        >
-                                                            предложить домен
-                                                        </a>
-                                                    </>
-                                                )}
                                             </div>
                                         )}
                                     </td>
