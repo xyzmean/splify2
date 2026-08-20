@@ -1,4 +1,5 @@
 import Console from '@/components/Console'
+import BackupCard from '@/components/BackupCard'
 
 /** Один экран, один режим.
  *
@@ -10,5 +11,15 @@ import Console from '@/components/Console'
  *  Теперь режим один: состояние закреплено слева, работа справа, а глубина открывается по мере
  *  надобности — редактор правила раскрывается на месте таблицы, каталог ищется поиском. */
 export default function App() {
-    return <Console />
+    return (
+        <>
+            <Console />
+            {/* Бекап настроек — под пультом и на всю ширину (R-005). Не во вкладке: он не про
+                маршрутизацию, а про весь экран целиком, и нужен он в том числе тогда, когда
+                настройка ещё не работает — например при переносе на новый роутер. */}
+            <div className="sp-root mt-4 text-foreground">
+                <BackupCard />
+            </div>
+        </>
+    )
 }

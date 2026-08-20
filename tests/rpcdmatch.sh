@@ -105,35 +105,64 @@ exit 0
 EOF
 
 # jsonfilter: поддерживаются те выражения, которые встречаются на проверяемых путях.
+# Выражений в одном вызове бывает НЕСКОЛЬКО (-e ... -e ...), и настоящий jsonfilter
+# печатает совпадения по всем. Пока заглушка запоминала только последнее, проверка
+# недоверенной спеки смотрела бы на одно поле из пяти — то есть была бы зелёной по
+# недосмотру заглушки, а не по существу.
 cat > "$T/bin/jsonfilter" <<'EOF'
 #!/bin/sh
-file=""; str=""; expr=""
+file=""; str=""; exprs=""
 while [ $# -gt 0 ]; do
     case "$1" in
         -i) file="$2"; shift 2 ;;
         -s) str="$2"; shift 2 ;;
-        -e) expr="$2"; shift 2 ;;
+        -e) exprs="$exprs$2
+"; shift 2 ;;
         *) shift ;;
     esac
 done
-python3 - "$file" "$str" "$expr" <<'PY'
-import json, re, sys
-path, raw, expr = sys.argv[1], sys.argv[2], sys.argv[3]
+# Выражения уезжают переменной окружения, а не потоком: программу python читает как раз
+# со стандартного ввода (`python3 -` плюс heredoc), и труба до неё не доходит.
+EXPRS="$exprs" python3 - "$file" "$str" <<'PY'
+import json, os, re, sys
+path, raw = sys.argv[1], sys.argv[2]
 try:
     d = json.loads(raw) if raw else json.load(open(path, encoding='utf-8'))
 except Exception:
     sys.exit(1)
-m = re.match(r"@\.(categories|domain_lists)\[@\.id='([^']*)'\]\.file$", expr)
-if m:
-    for e in d.get(m.group(1), []):
-        if e.get('id') == m.group(2):
-            print(e['file'])
-    sys.exit(0)
-m = re.match(r'@\.([A-Za-z_]+)$', expr)
-if m:
-    v = d.get(m.group(1))
-    if v is not None:
-        print(v if not isinstance(v, bool) else ('true' if v else 'false'))
+
+def render(v):
+    if isinstance(v, bool):          return 'true' if v else 'false'
+    if isinstance(v, (dict, list)):  return json.dumps(v, ensure_ascii=False)
+    return str(v)
+
+def walk(cur, parts):
+    if not parts:
+        if cur is not None:
+            yield cur
+        return
+    p, rest = parts[0], parts[1:]
+    if p == '*':
+        items = cur if isinstance(cur, list) else list(cur.values()) if isinstance(cur, dict) else []
+        for it in items:
+            yield from walk(it, rest)
+    elif isinstance(cur, dict) and p in cur:
+        yield from walk(cur[p], rest)
+
+for expr in os.environ.get('EXPRS', '').splitlines():
+    if not expr:
+        continue
+    m = re.match(r"@\.(categories|domain_lists)\[@\.id='([^']*)'\]\.file$", expr)
+    if m:
+        for e in d.get(m.group(1), []):
+            if e.get('id') == m.group(2):
+                print(e['file'])
+        continue
+    # Общий обход: точки — шаги пути, [*] — «все элементы массива или все значения
+    # объекта». Ровно тот набор выражений, который встречается в скрипте.
+    parts = [x for x in expr.replace('@.', '', 1).replace('[*]', '.*').split('.') if x]
+    for v in walk(d, parts):
+        print(render(v))
 PY
 EOF
 
@@ -157,7 +186,15 @@ echo "$url" >> "$SANDBOX/curl.log"
 [ -n "$out" ] && printf 'remote.example\n10.1.0.0/16\n' > "$out"
 exit 0
 EOF
-printf '#!/bin/sh\nexit 0\n' > "$T/bin/steer"
+# steer: журналирует, ЧЕМ его позвали, и умеет отказать. Нужно ровно для одной мысли —
+# восстановление из архива проверяет спеку компилятором (`apply --dry-run`) и НЕ применяет
+# её (`apply --spec` без dry-run). Различить это можно только по журналу вызовов.
+cat > "$T/bin/steer" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$SANDBOX/steer.log"
+[ -n "${STEER_ERR:-}" ] && echo "$STEER_ERR" >&2
+exit "${STEER_RC:-0}"
+EOF
 chmod +x "$T/bin"/*
 
 # ---- фикстуры ----------------------------------------------------------------
@@ -193,6 +230,13 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         RPCD_INITD="$T/bin/initd-rpcd" \
         OPENWRT_RELEASE="${OPENWRT_RELEASE_FIXTURE:-$T/etc/openwrt_release}" \
         VLESS_DIRTY="$T/var/vless-dirty" \
+        OBFS_DIRTY="$T/var/obfs-dirty" \
+        APPLIED="$T/etc/spec.applied.json" \
+        BACKUP_OUT="$T/var/backup.out" \
+        BACKUP_IN="$T/var/backup.in" \
+        BACKUP_MAX_BYTES="${BACKUP_MAX_BYTES:-262144}" \
+        STEER_RC="${STEER_RC:-0}" \
+        STEER_ERR="${STEER_ERR:-}" \
         APK_ADD_RC="${APK_ADD_RC:-0}" \
         APK_ADD_OUT="${APK_ADD_OUT:-}" \
         ENGINE_ENABLED="${ENGINE_ENABLED:-0}" \
@@ -545,20 +589,249 @@ check "apply пересобирает экземпляры на instances" "yes"
 # загрузки, а её место: перед каждой проверкой.
 check "доскачивание вынесено в общую функцию" "yes" \
       "$(grep -q '^fetch_missing_lists()' "$SCRIPT" && echo yes || echo no)"
-check "функция вызывается дважды: в spec_set и в apply" "2" \
+# Мест стало три: к spec_set и apply добавилось восстановление из архива (backup_put) —
+# оно тоже проверяет спеку компилятором, а на чистом роутере зеркал категорий ещё нет, и в
+# архив они намеренно не едут. Проверка на число, а не на перечень имён: имена ниже.
+check "функция вызывается трижды: spec_set, apply, backup_put" "3" \
       "$(grep -c 'fetch_missing_lists "' "$SCRIPT")"
 set_line=$(grep -n 'set_warn="$(fetch_missing_lists' "$SCRIPT" | cut -d: -f1)
 dry_line=$(grep -n 'apply --dry-run --spec "$tmp"' "$SCRIPT" | cut -d: -f1)
 check "в spec_set загрузка идёт ДО проверки движком" "yes" \
       "$([ -n "$set_line" ] && [ -n "$dry_line" ] && [ "$set_line" -lt "$dry_line" ] && echo yes || echo no)"
-apply_fetch=$(grep -n 'fetch_warn="$(fetch_missing_lists' "$SCRIPT" | cut -d: -f1)
-apply_run=$(grep -n 'apply --spec "$SPEC" 2>&1)"; rc=' "$SCRIPT" | cut -d: -f1)
+# Порядок ищется ВНУТРИ ветки, а не по всему файлу: `fetch_warn=` встречается и в apply, и
+# в backup_put, и общий `grep -n` отдал бы два номера строк, на которых `[` спотыкается о
+# «Illegal number». Расхождение такого рода стенд однажды уже прятал.
+apply_body="$(sed -n '/^    apply)/,/^        ;;/p' "$SCRIPT")"
+apply_fetch=$(printf '%s\n' "$apply_body" | grep -n 'fetch_missing_lists' | head -1 | cut -d: -f1)
+apply_run=$(printf '%s\n' "$apply_body" | grep -n 'apply --spec "$SPEC" 2>&1)"; rc=' | head -1 | cut -d: -f1)
 check "в apply загрузка идёт ДО применения" "yes" \
       "$([ -n "$apply_fetch" ] && [ -n "$apply_run" ] && [ "$apply_fetch" -lt "$apply_run" ] && echo yes || echo no)"
+put_body="$(sed -n '/^    backup_put)/,/^        ;;/p' "$SCRIPT")"
+put_fetch=$(printf '%s\n' "$put_body" | grep -n 'fetch_missing_lists' | head -1 | cut -d: -f1)
+put_dry=$(printf '%s\n' "$put_body" | grep -n 'apply --dry-run --spec "$D/spec"' | head -1 | cut -d: -f1)
+check "в восстановлении загрузка идёт ДО проверки движком" "yes" \
+      "$([ -n "$put_fetch" ] && [ -n "$put_dry" ] && [ "$put_fetch" -lt "$put_dry" ] && echo yes || echo no)"
 # Сообщение об отказе обязано называть ПРИЧИНУ, а не только следствие: «cannot read a
 # channel's list» отправляет искать испорченный файл, которого никогда не было.
 check "при неудачной загрузке причина ставится перед ошибкой движка" "yes" \
       "$(grep -q 'fail "${set_warn:+$set_warn; }' "$SCRIPT" && echo yes || echo no)"
+
+# ---- R-005: архив настроек ----------------------------------------------------
+# Бекапа и переноса настроек не было вовсе, а штатный архив системы настройки splify2 не
+# содержит (I-037). Проверяются обе половины: ЧТО уезжает в архив (и чего в нём быть не
+# должно) и разбор ПРИСЛАННОГО файла — недоверенного ввода.
+#
+# Отдельный вход: собрать запрос из документа. Экранирует его python — руками собирать JSON
+# с переводами строк значило бы проверять своё экранирование, а не скрипт.
+backup_req() {  # < ДОКУМЕНТ на stdin
+    python3 -c 'import json,sys; print(json.dumps({"text": sys.stdin.read(), "append": False, "final": True}))'
+}
+backup_put() {  # < ДОКУМЕНТ на stdin
+    rpcd backup_put "$(backup_req)"
+}
+
+# Значение поля БЕЗ добавленного перевода строки: куски архива склеиваются байт в байт, и
+# лишний перевод строки на каждой границе испортил бы файл ровно так, как это незаметно.
+jraw() {  # ПОЛЕ < JSON
+    python3 -c 'import json,sys
+d = json.load(sys.stdin)
+v = d.get(sys.argv[1])
+sys.stdout.write("" if v is None else v if isinstance(v, str) else str(v))' "$1"
+}
+
+# Прочитать архив целиком, склеивая куски. Число кусков пишется В ФАЙЛ, а не в переменную:
+# функцию зовут через подстановку, то есть в подоболочке, откуда переменная не вернётся.
+backup_doc() {
+    off=0; n=0
+    : > "$T/doc-all.txt"
+    while [ "$n" -lt 64 ]; do
+        r="$(rpcd backup_get "{\"offset\":$off}")"
+        printf '%s' "$r" | jraw text >> "$T/doc-all.txt"
+        n=$((n + 1))
+        [ "$(printf '%s' "$r" | jget eof)" = true ] && break
+        nxt="$(printf '%s' "$r" | jget next)"
+        [ "$nxt" -gt "$off" ] || break
+        off="$nxt"
+    done
+    printf '%s' "$n" > "$T/doc-parts"
+    cat "$T/doc-all.txt"
+}
+
+# Фикстуры этого раздела ставятся с нуля: свои списки выше оставили после себя в том числе
+# «grow» размером под мегабайт, и проверять на нём состав архива значило бы проверять
+# последствия чужой проверки.
+rm -rf "$T/lists/custom"
+mkdir -p "$(dirname "$(custom_domains_path x)")" "$(dirname "$(custom_prefixes_path x)")"
+printf '10.9.0.0/16\n' > "$(custom_prefixes_path mine-a)"
+printf 'own.example\n' > "$(custom_domains_path mine-d)"
+printf 'vless://k@h:443#node\n' > "$T/etc/sub.txt"
+# Свой список, который заведомо не влезает в один кусок ubus: без него протокол смещений
+# проверялся бы на архиве, приезжающем целиком, то есть не проверялся бы вовсе.
+awk 'BEGIN { for (i = 0; i < 1200; i++) printf "host%d.example\n", i }' > "$(custom_domains_path mine-big)"
+
+doc="$(backup_doc)"
+check "архив приезжает несколькими кусками и склеивается" "yes" \
+      "$([ "$(cat "$T/doc-parts")" -gt 1 ] && echo yes || echo no)"
+check "склеенный архив не потерял ни строки на границах кусков" "1200" \
+      "$(printf '%s\n' "$doc" | grep -c '^host[0-9]*\.example$')"
+check "архив начинается своим заголовком с версией" "splify2-backup 1" \
+      "$(printf '%s\n' "$doc" | head -1)"
+check "в архиве есть спека, подписка и оба своих списка" "yes" \
+      "$(printf '%s\n' "$doc" | grep -q '^\[spec\]$' &&
+         printf '%s\n' "$doc" | grep -q '^\[sub\]$' &&
+         printf '%s\n' "$doc" | grep -q '^\[list prefixes mine-a\]$' &&
+         printf '%s\n' "$doc" | grep -q '^\[list domains mine-d\]$' && echo yes || echo no)"
+# Главное свойство экспорта: 284 КБ зеркал категорий издателя в него не едут. Проверяется не
+# размер, а состав — списка издателя нет ни заголовком, ни содержимым.
+check "зеркал категорий издателя в архиве нет (284 КБ, I-037)" "no" \
+      "$(printf '%s\n' "$doc" | grep -qE '^(\[list (prefixes|domains) news\]|10\.0\.0\.0/8|example\.org)$' && echo yes || echo no)"
+check "в архиве есть и большой свой список, и оба маленьких" "yes" \
+      "$(printf '%s\n' "$doc" | grep -q '^\[list domains mine-big\]$' && echo yes || echo no)"
+
+# Экспорт не отдаёт файл, который его же импорт откажется принять: иначе человек узнал бы
+# об этом в тот день, когда бекап понадобился.
+out="$(BACKUP_MAX_BYTES=1024 rpcd backup_get '{"offset":0}')"
+check "слишком большой архив не отдаётся, а объясняется" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'не влезают в архив' && echo yes || echo no)"
+
+# ---- разбор недоверенного файла -----------------------------------------------
+# Каждая проверка ниже — про отказ, и про отказ ДО записи на диск. Импорт делает spec.json
+# источником, которого не касался root (I-003), поэтому «принять, а посмотреть потом» здесь
+# не годится: спека уезжает в командные строки и движка, и этого самого скрипта.
+out="$(printf 'просто текст\n' | backup_put)"
+check "чужой файл не принимается" "false" "$(printf '%s' "$out" | jget ok)"
+check "причина отказа названа словами" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'не файл настроек' && echo yes || echo no)"
+
+out="$(printf '%s\n' 'splify2-backup 1' '[evil]' 'x' | backup_put)"
+check "непонятный раздел отвергает файл целиком" "false" "$(printf '%s' "$out" | jget ok)"
+
+out="$(printf '%s\n' 'splify2-backup 9' '[options]' 'sub_kind=none' | backup_put)"
+check "архив чужой версии не разбирается наугад" "false" "$(printf '%s' "$out" | jget ok)"
+
+out="$(printf '%s\n' 'splify2-backup 1' 'строка вне раздела' | backup_put)"
+check "строка вне раздела отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+
+# Путь за пределы каталогов настроек. Спека несёт пути к файлам списков и к файлу подписки,
+# то есть присланный файл может попросить движок читать что угодно.
+out="$(printf '%s\n' 'splify2-backup 1' '[spec]' \
+  '{"schema":1,"outputs":{},"channels":[{"name":"c","out":"direct","match":{"prefixes_files":["/etc/shadow"]}}]}' |
+  backup_put)"
+check "список вне каталога списков отвергается" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'вне каталога' && echo yes || echo no)"
+
+out="$(printf '%s\n' 'splify2-backup 1' '[spec]' \
+  '{"schema":1,"outputs":{},"channels":[{"name":"c","out":"direct","match":{"domains_file":"/etc/steer/lists/../../shadow"}}]}' |
+  backup_put)"
+check "путь с .. отвергается и в коротком написании поля" "false" "$(printf '%s' "$out" | jget ok)"
+
+out="$(printf '%s\n' 'splify2-backup 1' '[spec]' \
+  '{"schema":1,"outputs":{"vpn":{"kind":"vless","sub_file":"/etc/passwd"}},"channels":[]}' | backup_put)"
+check "файл подписки вне каталогов настроек отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+
+# I-003: движок подставляет lan_device в popen("ip -4 -o addr show ...") без фильтрации. Пока
+# спеку писал только root, это была теоретическая слабость; принятый файл делает её входом.
+out="$(printf '%s\n' 'splify2-backup 1' '[spec]' \
+  '{"schema":1,"lan_device":"br-lan; reboot","outputs":{},"channels":[]}' | backup_put)"
+check "lan_device с метасимволами отвергается (I-003)" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'lan_device' && echo yes || echo no)"
+
+# Имя выхода уезжает в командную строку этого же скрипта: `ubus call service signal
+# {"instance":"vless_$o"}` и ensure_vless_zone.
+out="$(printf '%s\n' 'splify2-backup 1' '[spec]' \
+  '{"schema":1,"outputs":{"vpn; reboot":{"kind":"direct"}},"channels":[]}' | backup_put)"
+check "имя выхода с метасимволами отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+
+out="$(printf '%s\n' 'splify2-backup 1' '[spec]' \
+  '{"schema":1,"outputs":{},"channels":[{"name":"a\nb","out":"direct","match":{"any":true}}]}' | backup_put)"
+check "экранированный перевод строки в спеке отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+
+out="$(printf '%s\n' 'splify2-backup 1' '[sub]' 'http://example.org/list' | backup_put)"
+check "подписка не из vless:// и не base64 отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+
+out="$(printf '%s\n' 'splify2-backup 1' '[options]' 'sub_url=https://x/$(reboot)' | backup_put)"
+check "ссылка подписки с подстановкой отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+
+out="$(printf '%s\n' 'splify2-backup 1' '[options]' 'root_password=x' | backup_put)"
+check "неизвестное поле настроек отвергается" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'непонятная настройка' && echo yes || echo no)"
+
+# Управляющий байт внутри строки: ровно то, чем можно спрятать строку от построчного
+# разборщика. Собирается python-ом, потому что в тексте стенда его быть не должно.
+req="$(python3 -c 'import json; print(json.dumps({"text":"splify2-backup 1\n[sub]\nvless://" + chr(1) + "\n","append":False,"final":True}))')"
+out="$(rpcd backup_put "$req")"
+check "двоичные данные в архиве отвергаются" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'двоичные' && echo yes || echo no)"
+
+# Предел считается по НАКОПЛЕННОМУ, а не по куску: иначе он обходится двадцатью кусками по
+# пределу каждый (ровно эта ошибка уже была в list_put). Предел на время проверки уменьшается
+# швом — иначе фикстурой была бы четверть мегабайта текста.
+req="$(python3 -c 'import json; print(json.dumps({"text":"splify2-backup 1\n","append":False,"final":False}))')"
+out="$(BACKUP_MAX_BYTES=40 rpcd backup_put "$req")"
+check "первый кусок в пределах предела принимается" "true" "$(printf '%s' "$out" | jget ok)"
+req="$(python3 -c 'import json; print(json.dumps({"text":"[options]\nsub_kind=none\n","append":True,"final":True}))')"
+out="$(BACKUP_MAX_BYTES=40 rpcd backup_put "$req")"
+check "предел считается по накопленному, а не по куску" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'больше' && echo yes || echo no)"
+
+# ---- годный архив восстанавливается -------------------------------------------
+rm -f "$T/var/backup.in" "$T/etc/spec.applied.json" "$T/var/vless-dirty"
+: > "$T/steer.log"
+printf '{"schema":1,"outputs":{},"channels":[]}\n' > "$T/etc/spec.json"
+out="$(printf '%s\n' \
+  'splify2-backup 1' \
+  '# комментарий' \
+  '[spec]' \
+  '{"schema":1,"lan_device":"br-lan","outputs":{"direct":{"kind":"direct"}},"channels":[]}' \
+  '[sub]' \
+  'vless://key@host:443#node' \
+  '[list domains mine-d]' \
+  'Example.ORG' \
+  'это не домен вовсе' \
+  '[list prefixes mine-a]' \
+  '10.9.0.0/16' \
+  '10.9.0.256' \
+  '[options]' \
+  'sub_kind=links' | backup_put)"
+check "годный архив принимается" "true" "$(printf '%s' "$out" | jget ok)"
+check "спека из архива легла на место" "yes" \
+      "$(grep -q 'br-lan' "$T/etc/spec.json" && echo yes || echo no)"
+check "подписка из архива легла на место" "yes" \
+      "$(grep -q '^vless://key@host:443#node$' "$T/etc/sub.txt" && echo yes || echo no)"
+# Списки проходят ТЕМ ЖЕ санитайзером, что и list_put: домен приводится к нижнему регистру,
+# негодные строки отбрасываются и считаются числом.
+check "свой доменный список восстановлен и приведён к нижнему регистру" "example.org" \
+      "$(cat "$(custom_domains_path mine-d)")"
+check "негодные строки списков отброшены и сосчитаны" "2" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys; print(sum(l["dropped"] for l in json.load(sys.stdin)["lists"]))')"
+# Главное свойство импорта: он НЕ применяет. Компилятор спрашивается (--dry-run), применение
+# остаётся за человеком — модель проекта «сохранено ≠ применено».
+check "спека проверена компилятором" "1" "$(grep -c 'apply --dry-run' "$T/steer.log")"
+check "восстановление ничего не применяет" "0" "$(grep -c 'apply --spec' "$T/steer.log")"
+# Без снимка применённого пилюля «Применить · N» показала бы ноль: applied_get в его
+# отсутствие отдаёт саму спеку, то есть восстановленное выглядело бы применённым.
+check "снимок применённого снят с ПРЕЖНЕЙ спеки" "yes" \
+      "$([ -s "$T/etc/spec.applied.json" ] && ! grep -q 'br-lan' "$T/etc/spec.applied.json" && echo yes || echo no)"
+check "туннели помечены к пересборке" "instances" "$(cat "$T/var/vless-dirty" 2>/dev/null)"
+check "накопленный файл убран за собой" "no" \
+      "$([ -f "$T/var/backup.in" ] && echo yes || echo no)"
+
+# Отказ компилятора не выдаётся за успех, и в ответе сказано, что списки уже восстановлены:
+# порядок записи (списки и подписка раньше спеки) продиктован тем, что движок читает их при
+# dry-run, и умалчивать об этом было бы нечестно.
+: > "$T/steer.log"
+printf '%s\n' 'splify2-backup 1' '[spec]' '{"schema":1,"outputs":{},"channels":[]}' > "$T/doc.txt"
+out="$(STEER_RC=1 STEER_ERR='cannot read a channel list' rpcd backup_put "$(backup_req < "$T/doc.txt")")"
+check "отказ компилятора не выдаётся за восстановление" "false" "$(printf '%s' "$out" | jget ok)"
+check "в отказе сказано, что списки и подписка уже восстановлены" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'уже восстановлены' && echo yes || echo no)"
+
+# Архив, собранный экспортом, обязан приниматься импортом. Круг замкнут: разойдись эти два
+# конца — бекап остался бы файлом, который некуда вернуть.
+: > "$T/steer.log"
+backup_doc > "$T/roundtrip.txt"
+out="$(rpcd backup_put "$(backup_req < "$T/roundtrip.txt")")"
+check "свой же архив принимается обратно (круг замкнут)" "true" "$(printf '%s' "$out" | jget ok)"
 
 # ---- бэкенд знает оба менеджера пакетов ------------------------------------------
 # Установщик ставит .ipk через opkg на OpenWrt 23.05, и бэкенд обязан уметь то же:

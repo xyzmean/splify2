@@ -49,6 +49,8 @@ const specGetRaw = declare<Spec>('spec_get')
 const appliedGetRaw = declare<Spec>('applied_get')
 const listPutRaw = declare<unknown>('list_put', ['name', 'kind', 'text', 'url', 'append'])
 const listRemoveByName = declare<unknown>('list_remove', ['name', 'kind'])
+const backupGetRaw = declare<unknown>('backup_get', ['offset'])
+const backupPutRaw = declare<unknown>('backup_put', ['text', 'append', 'final'])
 
 export const rpc = {
     /** Live engine state: outputs with up/nat, per-channel counters, warnings. */
@@ -217,6 +219,52 @@ export const rpc = {
     /** Задать источник узлов: ссылка на подписку ЛИБО одна или несколько ссылок vless://.
      *  Одно поле на оба случая — различает их бэкенд по схеме, а не человек выбором режима. */
     subSet: declare<{ ok: boolean; error?: string; kind?: string; bytes?: number }>('sub_set', ['url']),
+
+    /** Архив настроек: отдать его строкой, кусками по 16 КБ (R-005).
+     *
+     *  Файл собирается в БРАУЗЕРЕ, а не отдаётся ссылкой: второго пути наружу (cgi-io,
+     *  свой обработчик uhttpd) в проекте нет, и заводить его ради одной кнопки значило бы
+     *  вторые права и вторую проверку формата — тот же довод, по которому свой список
+     *  грузится через list_put, а не загрузкой файла.
+     *
+     *  offset и next — БАЙТЫ, которые считает роутер, а не символы строки в браузере.
+     *  Поэтому следующий кусок запрашивается ровно тем `next`, который приехал, и ничего
+     *  не пересчитывается на этой стороне: в UTF-8 символ бывает длиннее байта, и любая
+     *  своя арифметика здесь разъехалась бы с бэкендом на первой же русской букве. */
+    backupGet: (offset: number) =>
+        backupGetRaw(offset) as Promise<{
+            ok: boolean
+            error?: string
+            format?: number
+            total?: number
+            offset?: number
+            next?: number
+            eof?: boolean
+            text?: string
+        }>,
+
+    /** Принять архив и восстановить настройки. Кусками, как файл списка: ubus не резиновый.
+     *
+     *  Булевы поля — настоящими булевыми, а не 1/0. Метод объявлен в бэкенде как
+     *  `json_add_boolean append` / `json_add_boolean final`, то есть политика ubus для них
+     *  BOOL, а число приезжает как INT32 и blobmsg_parse молча ОТБРАСЫВАЕТ атрибут с чужим
+     *  типом. Здесь это стоило бы дороже, чем в list_put: без `append` каждый кусок замещал
+     *  бы предыдущий, а без `final` разбор не начался бы вовсе. Разобранная в подробностях та же
+     *  ловушка — в комментарии к listPut выше; барьер на неё стоит в tests/pkgmatch.sh.
+     *
+     *  spec/sub/lists в ответе — что именно восстановлено. Отдельными полями, а не одним
+     *  «ок»: архив может не содержать спеки, и «восстановлено» без перечня не отличает
+     *  «вернули всё» от «вернули один список». */
+    backupPut: (p: { text: string; append: boolean; final: boolean }) =>
+        backupPutRaw(p.text, p.append, p.final) as Promise<{
+            ok: boolean
+            error?: string
+            bytes?: number
+            spec?: boolean
+            sub?: boolean
+            lists?: { name: string; kind: string; count: number; dropped: number }[]
+            warn?: string
+        }>,
 
     /** Память мастера: непрозрачная строка, формат принадлежит мастеру.
      *
