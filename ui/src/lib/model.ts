@@ -199,6 +199,22 @@ export interface ListEntry {
     same_as_ip?: string[]
 }
 
+/** Издатель зеркалит доменные списки из чужого репозитория и перезаписывает их целиком.
+ *
+ *  Поле необязательное: манифест на уже установленных роутерах его не несёт, и его
+ *  отсутствие значит «не знаем», а не «список наш». */
+export interface Upstream {
+    /** `owner/repo` у издателя апстрима — то, что показывается человеку. */
+    repo?: string
+    folder?: string
+    file?: string
+    url?: string
+    /** Куда предлагать домен. Единственная ссылка, по которой человеку есть что сделать. */
+    suggest_url?: string
+    /** false — дописанное на нашей стороне исчезнет при следующей синхронизации. */
+    editable_locally?: boolean
+}
+
 /** Exactly what the publisher ships. Address categories and domain lists live under
  *  separate keys because they have different shapes and different purposes — and
  *  keeping them separate means an older consumer does not break on the new one. */
@@ -213,6 +229,13 @@ export interface RawManifest {
         count?: number
         default_on?: boolean
         is_geoblock?: boolean
+        /** Категории, чей файл адресов совпадает с этим ПОБАЙТОВО (общая автономная
+         *  система: meta = whatsapp, google = youtube). Издатель не склеивает файлы —
+         *  на их имена ссылаются уже настроенные роутеры, — а говорит правду полем. */
+        same_prefixes_as?: string[]
+        /** Причина совпадения человеческим языком, как её написал издатель. Интерфейс её
+         *  показывает и НЕ разбирает: своей формулировки у него быть не должно. */
+        same_prefixes_reason_ru?: string
     }[]
     domain_lists?: {
         id: string
@@ -227,6 +250,7 @@ export interface RawManifest {
          *  double the memory, and two channels arguing over one destination. */
         same_as_ip?: string[]
         overlaps?: { with: string; domains: number; percent: number }[]
+        upstream?: Upstream
     }[]
 }
 
@@ -263,6 +287,20 @@ export interface ServiceEntry {
     count: number
     /** Составные части, чтобы каталог мог сказать, из чего сервис собран. */
     parts: { id: string; kind: ListKind; name: string; file: string; count?: number }[]
+    /** Адресный список этой записи совпадает с чужим — так говорит издатель.
+     *
+     *  `names` — человеческие названия категорий-двойников, `reason` — причина издателя.
+     *  `within` различает два разных сообщения: false — двойник лежит в ДРУГОЙ записи
+     *  каталога (google и youtube: человек видит две строки и думает, что одна узкая),
+     *  true — двойники оказались частями этой же записи (meta и whatsapp: их связал один
+     *  доменный список, и второй адресный файл в правиле не добавляет ни одного адреса).
+     *  Двойники вне записи важнее, поэтому при обоих видах сразу называются они. */
+    same_prefixes?: { names: string[]; reason?: string; within: boolean }
+    /** Доменная часть записи — зеркало чужого репозитория, дописать домен на нашей стороне
+     *  нельзя. Берётся у первой доменной части с таким признаком: у издателя все они
+     *  приходят из одного репозитория, а разойдись это — правдой останется адрес репозитория,
+     *  а не наша догадка о нём. */
+    upstream?: Upstream
 }
 
 export interface Catalog {
@@ -313,6 +351,41 @@ export function toCatalog(m: RawManifest): Catalog {
     for (const d of doms)
         put('d:' + d.id, { id: d.id, kind: 'domains', name: d.name_ru, file: d.file, count: d.count }, d.file)
 
+    const catName = new Map(cats.map((c) => [c.id, c.name_ru]))
+
+    /** Двойники по адресам — то, что заявил издатель, ничего не вычисляя.
+     *
+     *  Считать совпадение самим здесь нечем: интерфейс видит только `count`, а равные
+     *  счётчики — не равные файлы. Поэтому источник один: `same_prefixes_as` издателя,
+     *  и неизвестная категория в нём молча пропускается. */
+    const twinsOf = (g: ServiceEntry) => {
+        const mine = new Set(g.parts.filter((p) => p.kind === 'prefixes').map((p) => p.id))
+        const twins = new Map<string, string | undefined>()
+        for (const id of mine) {
+            const c = cats.find((x) => x.id === id)
+            for (const other of c?.same_prefixes_as || [])
+                if (catName.has(other) && other !== id) twins.set(other, c?.same_prefixes_reason_ru)
+        }
+        const outside = [...twins.keys()].filter((id) => !mine.has(id))
+        const picked = outside.length ? outside : [...twins.keys()]
+        if (!picked.length) return undefined
+        return {
+            names: picked.map((id) => catName.get(id) as string),
+            reason: twins.get(picked[0]),
+            within: outside.length === 0,
+        }
+    }
+
+    /** Первая доменная часть, которую издатель объявил зеркалом. `editable_locally: true`
+     *  снимает признак: тогда файл наш, и предлагать домен некому. */
+    const upstreamOf = (g: ServiceEntry) =>
+        doms.find(
+            (d) =>
+                d.upstream &&
+                d.upstream.editable_locally !== true &&
+                g.parts.some((p) => p.kind === 'domains' && p.id === d.id),
+        )?.upstream
+
     const services = [...groups.values()].map((g) => {
         /* Имя обычно берём у АДРЕСНЫХ частей: у издателя они названы полнее — «Google
          * (Meet/Play/AI)» против «Google Play».
@@ -333,6 +406,8 @@ export function toCatalog(m: RawManifest): Catalog {
             id: g.parts.map((p) => p.id).sort().join('+'),
             name: [...new Set(names)].join(' · '),
             description: cats.find((c) => c.id === g.parts[0].id)?.description_ru,
+            same_prefixes: twinsOf(g),
+            upstream: upstreamOf(g),
         }
     })
     /* Порядок как у издателя: сначала адресные категории, потом чисто доменные. Алфавит здесь

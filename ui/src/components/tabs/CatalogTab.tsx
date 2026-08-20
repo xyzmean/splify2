@@ -201,6 +201,51 @@ export default function CatalogTab({ onUseInRule }: Props) {
                                                   : 'только адреса'}
                                             {sv.parts.length > 1 && ` · частей ${sv.parts.length}`}
                                         </div>
+                                        {sv.same_prefixes && (
+                                            /* Прочитать это надо ДО включения: адресный список у пары
+                                               совпадает побайтово, и второй выбор не добавляет ни
+                                               одного адреса. Причина — издателя, не наша. */
+                                            <div className="mt-0.5 text-xs text-warning">
+                                                <Hint
+                                                    /* Причина — строка издателя, и она вставляется
+                                                       как есть: своей формулировки у интерфейса
+                                                       здесь быть не должно. */
+                                                    tip={`${sv.same_prefixes.reason ? `Причина: ${sv.same_prefixes.reason}. ` : ''}${
+                                                        sv.same_prefixes.within
+                                                            ? 'Это одна и та же группа адресов, вошедшая в запись двумя файлами: второй не добавляет ни одного адреса.'
+                                                            : 'Включать обе записи одновременно бессмысленно: вторая не добавляет ни одного адреса, а расход памяти удваивается.'
+                                                    }`}
+                                                >
+                                                    {sv.same_prefixes.within
+                                                        ? `один список адресов: «${sv.same_prefixes.names.join('» = «')}»`
+                                                        : `тот же список адресов, что у «${sv.same_prefixes.names.join('», «')}»`}
+                                                </Hint>
+                                            </div>
+                                        )}
+                                        {sv.upstream && (
+                                            /* splify2#7: домена нет в списке — и узнать, что дописать
+                                               его сюда нельзя, было негде. */
+                                            <div className="mt-0.5 text-xs text-muted-foreground">
+                                                <Hint
+                                                    tip={`Список внешний: чтобы добавить домен, предложите его апстриму${sv.upstream.repo ? ` (${sv.upstream.repo})` : ''} или используйте свой список — кнопка «Свой список» выше. Дописанное на роутере исчезнет при следующем обновлении: файл перезаписывается целиком.`}
+                                                >
+                                                    {sv.prefixes.length ? 'домены — список внешний' : 'список внешний'}
+                                                </Hint>
+                                                {sv.upstream.suggest_url && (
+                                                    <>
+                                                        {' · '}
+                                                        <a
+                                                            href={sv.upstream.suggest_url}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            className="underline decoration-dotted hover:text-foreground"
+                                                        >
+                                                            предложить домен
+                                                        </a>
+                                                    </>
+                                                )}
+                                            </div>
+                                        )}
                                     </td>
                                     <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
                                         {(localCount || sv.count || 0).toLocaleString('ru-RU')}
