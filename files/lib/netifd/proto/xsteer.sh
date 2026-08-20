@@ -38,6 +38,10 @@ proto_xsteer_init_config() {
 	proto_config_add_array 'addresses:list(cidr4)'
 	# Имя устройства можно задать явно; иначе берётся имя интерфейса с приставкой.
 	proto_config_add_string device_name
+	# Транспорт. Умолчание — поддельный TCP; режим потока нужен там, где он невозможен
+	# (провайдер режет сырые сокеты, нет прав на nft) или где хаб слушает только его.
+	proto_config_add_boolean stream
+	proto_config_add_int stream_port
 }
 
 # Одна секция пира в файл. Пиры живут в секциях `config xsteer_<интерфейс>` — то же
@@ -75,10 +79,10 @@ xsteer_peer() {
 
 proto_xsteer_setup() {
 	local config="$1"
-	local private_key sni mtu device_name
+	local private_key sni mtu device_name stream stream_port
 	local addresses
 
-	json_get_vars private_key sni mtu device_name
+	json_get_vars private_key sni mtu device_name stream stream_port
 	json_get_values addresses addresses
 
 	[ -n "$private_key" ] || {
@@ -92,7 +96,9 @@ proto_xsteer_setup() {
 	local dev="${device_name:-xs-$config}"
 	# MTU задавать НЕ НУЖНО: движок согласует его сам — берёт минимум из пределов сторон и
 	# проверяет настоящий путь пробами (см. src/ext/xswire.h). Поэтому устройство создаётся с
-	# безопасным низом, а движок поднимет его до подтверждённого значения.
+	# безопасным низом, а движок поднимет его до подтверждённого значения. В режиме потока
+	# вторая ступень не нужна вовсе (сегментацией распоряжается ядро), и значение ставится
+	# сразу после рукопожатия — низ в этом случае живёт доли секунды.
 	#
 	# Если человек всё же задал MTU в настройках, это ПРЕДЕЛ: согласование не поднимет выше.
 	# Нужно там, где путь заведомо уже, чем удаётся выяснить пробой (например, дальше стоит
@@ -148,8 +154,16 @@ proto_xsteer_setup() {
 		ip tuntap add dev "$dev" mode tun multi_queue
 	ip link set dev "$dev" mtu "$start_mtu" up
 
+	# Режим потока передаётся КЛЮЧОМ, а не через файл конфигурации: транспорт — свойство
+	# запуска, а не звезды, и в файле, который носят между роутером и десктопом, ему места нет
+	# (там он на каждой стороне свой). Порт без режима смысла не имеет и не передаётся.
+	local xs_args=""
+	[ "$stream" = 1 ] && xs_args="--stream"
+	[ "$stream" = 1 ] && [ -n "$stream_port" ] && xs_args="$xs_args --stream-port $stream_port"
+
+	# shellcheck disable=SC2086
 	proto_run_command "$config" /usr/sbin/steer xsteer \
-		--config "$XSTEER_CONF" --device "$dev"
+		--config "$XSTEER_CONF" --device "$dev" $xs_args
 
 	proto_init_update "$dev" 1
 	local a
