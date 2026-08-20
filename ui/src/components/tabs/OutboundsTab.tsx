@@ -49,7 +49,14 @@ export default function OutboundsTab({ live }: { live: Live }) {
 
     function addInterface() {
         if (!spec) return
-        const taken = new Set(Object.values(spec.outputs).map((o) => o.device))
+        /* Занятое считается по ВСЕМ кандидатам выхода, а не по активному устройству.
+         * `device` ставит движок, когда failover выберет активное, — у выхода, только
+         * что созданного здесь, этого поля нет вовсе, и множество занятых состояло из
+         * одного `undefined`. Второе нажатие снова брало первое устройство: человек с
+         * двумя туннелями получал два выхода в один и тот же, а второй туннель не
+         * появлялся ни в одном правиле (splify2#12). Кандидаты в запасе тоже заняты —
+         * выход, ведущий в устройство при отказе основного, владеет им не меньше. */
+        const taken = new Set(Object.values(spec.outputs).flatMap((o) => devList(o)))
         const free = devices.find((d) => !taken.has(d.name))
         if (!free) {
             notify('Свободных туннельных устройств нет — поднимите туннель (wireguard, ' +
