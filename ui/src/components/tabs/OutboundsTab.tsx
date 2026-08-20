@@ -194,7 +194,7 @@ export default function OutboundsTab({ live }: { live: Live }) {
                         <p className="text-xs text-muted-foreground">
                             Установленный движок без VLESS. Чтобы выходы VLESS стали доступны, нужен
                             пакет <code>steer-extended</code> — он заменяет <code>steer</code> и весит
-                            примерно втрое больше.
+                            примерно вдвое больше: ~500 КБ на флеше против ~250 КБ.
                         </p>
                     )}
 
