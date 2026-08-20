@@ -63,12 +63,24 @@ class PendingStore {
     edit(next: Spec) {
         this.saved = next
         this.dirty = true
+        this.emit()
+        if (this.timer) clearTimeout(this.timer)
+        this.timer = setTimeout(() => void this.flush(), 500)
+    }
+
+    /** Галочка «Сохранено» — на полторы секунды и только по факту записи.
+     *
+     *  Прежде она вспыхивала прямо в edit(), то есть за 500 мс до того, как запрос
+     *  вообще отправлялся. Отказ здесь не редкость, а штатная ветка: spec_set отвергает
+     *  спеку целиком, если её не принял dry-run компилятора. Порядок событий получался
+     *  обратный смыслу — сначала «✓ Сохранено», потом тост с причиной, — а взамен
+     *  кнопки «Сохранить» эта галочка единственная, по чему человек судит, уехала
+     *  правка или нет. */
+    private flash() {
         if (this.flashTimer) clearTimeout(this.flashTimer)
         this.savedFlash = true
         this.flashTimer = setTimeout(() => { this.savedFlash = false; this.emit() }, 1800)
         this.emit()
-        if (this.timer) clearTimeout(this.timer)
-        this.timer = setTimeout(() => void this.flush(), 500)
     }
 
     /** Дописать на роутер всё, что ещё не уехало. Последовательно: два spec_set
@@ -89,12 +101,15 @@ class PendingStore {
                     notify(('error' in r && r.error) || 'не удалось сохранить', 'error')
                     this.dirty = true
                     this.emit()
-                } else if ('warn' in r && r.warn) {
-                    /* Сохранение прошло, но список не скачался — значит его канал не
-                     * поднимется. Молчать нельзя: человек выбрал сервис, интерфейс мигнул
-                     * «Сохранено», а работать оно не будет, и связь между этими событиями
-                     * восстановить нечем. */
-                    notify(String(r.warn), 'error')
+                } else {
+                    /* Записано — теперь и только теперь галочка. */
+                    this.flash()
+                    if ('warn' in r && r.warn)
+                        /* Сохранение прошло, но список не скачался — значит его канал не
+                         * поднимется. Молчать нельзя: человек выбрал сервис, интерфейс мигнул
+                         * «Сохранено», а работать оно не будет, и связь между этими событиями
+                         * восстановить нечем. */
+                        notify(String(r.warn), 'error')
                 }
             } finally {
                 /* В finally, а не в трёх ветках: признак «в полёте» обязан сниматься при любом
