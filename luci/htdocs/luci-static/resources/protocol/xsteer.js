@@ -210,106 +210,147 @@ return network.registerProtocol('xsteer', {
 
 		/* ---- загрузка готовой конфигурации ------------------------------------
 		 *
-		 * Кнопка есть у wireguard и amneziawg, и здесь она нужна БОЛЬШЕ, чем там: конфигурацию
-		 * пира печатает установщик хаба (server/xs_install.sh), и без этой кнопки её пришлось
-		 * бы разносить по семи полям руками, сверяя ключи по 44 символа глазами.
+		 * Конфигурацию пира печатает установщик хаба (server/xs_install.sh), и без этой формы её
+		 * пришлось бы разносить по семи полям руками, сверяя ключи по 44 символа глазами.
 		 *
-		 * Окно делается через ui.showModal, а не вставкой панели в страницу, как в amneziawg.js.
-		 * Там так сделано потому, что кнопка живёт ВНУТРИ модального окна пира (второе модальное
-		 * окно поверх первого LuCI не умеет), а наша — на самой странице интерфейса. Модальное
-		 * окно проще и не завязано на внутреннее устройство form.js: та вставка ищет соседние
-		 * узлы по структуре разметки и ломается от её изменения между версиями LuCI.
+		 * ЗДЕСЬ НЕТ ui.showModal, И ЭТО ГЛАВНОЕ В ЭТОМ БЛОКЕ. Настройки интерфейса в LuCI сами
+		 * живут в модальном окне, а окно у LuCI ровно одно: showModal, вызванный изнутри, не
+		 * открывает второе, а ЗАМЕНЯЕТ содержимое первого — «Invoking showModal() while a modal
+		 * dialog is already open will replace the open dialog with a new one» (ui.js), причём
+		 * содержимое ставится через dom.content(), то есть прежние узлы уничтожаются. Разметка
+		 * формы интерфейса умирает вместе с ними, и первое же обращение к полю падает:
+		 * s.formvalue(sid, 'private_key') → getUIElement → findClassInstance(undefined) →
+		 * «Cannot read properties of undefined (reading '_class')». Обработчик кнопки завёрнут в
+		 * ui.createHandlerFn, который ждёт обещание, а исключение его отклоняет — значок ожидания
+		 * с кнопки уже не снимается, и снаружи это выглядит как «применение висит вечно».
+		 *
+		 * Поэтому текст вставляется в поле САМОЙ формы, на своей вкладке: разметка живая, все
+		 * поля на месте, заменять нечего. Побочно стало лучше: при ошибке разбора вставленный
+		 * текст остаётся в поле, а не пропадает вместе с закрытым окном.
 		 */
-		o = s.taboption('general', form.Button, '_import',
-			_('Импорт конфигурации'),
-			_('Вставить конфигурацию, которую напечатал установщик хаба (<code>xs_install.sh</code>), — поля заполнятся сами.'));
-		o.inputtitle = _('Загрузка конфигурации…');
-		o.inputstyle = 'action';
-		o.onclick = function() {
-			var textarea = E('textarea', {
-				'placeholder': _('Вставьте сюда конфигурацию пира или перетащите файл .conf…'),
-				'style': 'height:14em;width:100%;white-space:pre;font-family:monospace'
+		try {
+			s.tab('import', _('Импорт'),
+				_('Вставьте конфигурацию, которую напечатал установщик хаба, — поля на остальных вкладках заполнятся сами. Само по себе это ничего не применяет: проверьте значения и нажмите «Сохранить и применить», как обычно.'));
+		} catch (e) {}
+
+		o = s.taboption('import', form.TextValue, '_paste', null,
+			_('Формат в стиле WireGuard: секция <code>[Interface]</code> с приватным ключом и адресом, секция <code>[Peer]</code> с ключом хаба и его адресом. Ровно один пир — хаб звезды. Файл можно перетащить прямо в поле.'));
+		o.rows = 12;
+		o.monospace = true;
+		o.placeholder = '[Interface]\nPrivateKey = …\nAddress = 10.77.0.2/24\n\n[Peer]\nPublicKey = …\nEndpoint = 203.0.113.7:443\nAllowedIPs = 10.77.0.0/24';
+		/* Поле формы, но НЕ поле uci: приватный ключ уже лежит в private_key, и вторая его копия
+		 * в /etc/config/network была бы вторым местом, откуда его можно прочитать. */
+		o.cfgvalue = function() { return ''; };
+		o.write = function() {};
+		o.remove = function() {};
+		/* Перетаскивание файла: конфигурацию чаще приносят файлом, чем из буфера обмена.
+		 * Обработчики ставятся на узел, который вернул родительский renderWidget, — событие от
+		 * textarea всплывает до него, и внутреннее устройство разметки знать не нужно.
+		 *
+		 * Родительский метод берётся из прототипа, а не через this.super(): у super() в разных
+		 * версиях LuCI разная подпись (массив аргументов против перечисления), и ошибка в ней
+		 * проявилась бы только в браузере. */
+		var superRenderWidget = form.TextValue.prototype.renderWidget;
+		o.renderWidget = function(section_id, option_index, cfgvalue) {
+			var node = superRenderWidget.call(this, section_id, option_index, cfgvalue);
+			var self = this;
+			node.addEventListener('dragover', function(ev) {
+				ev.stopPropagation();
+				ev.preventDefault();
+				ev.dataTransfer.dropEffect = 'copy';
 			});
-			var problem = E('div', { 'class': 'alert-message warning', 'style': 'display:none' }, ['']);
-
-			/* Перетаскивание файла — как в эталоне: конфигурацию чаще всего приносят файлом,
-			 * а не из буфера обмена. */
-			var drop = E('div', {
-				'dragover': function(ev) { ev.stopPropagation(); ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; },
-				'drop': function(ev) {
-					ev.stopPropagation(); ev.preventDefault();
-					var file = ev.dataTransfer.files[0];
-					if (!file) return;
-					var reader = new FileReader();
-					reader.onload = function(rev) { textarea.value = String(rev.target.result).trim(); };
-					reader.readAsText(file);
-				}
-			}, [textarea]);
-
-			var apply = function() {
-				var parsed = parseXsteerConfig(textarea.value);
-				if (typeof parsed == 'string') {
-					/* Ошибку показываем В ТОМ ЖЕ окне и окно не закрываем: закрыть его значит
-					 * потерять вставленный текст, и человек будет вставлять заново, чтобы
-					 * прочитать сообщение второй раз. */
-					problem.firstChild.data = parsed;
-					problem.style.display = '';
+			node.addEventListener('drop', function(ev) {
+				ev.stopPropagation();
+				ev.preventDefault();
+				var file = ev.dataTransfer.files[0];
+				if (!file)
 					return;
-				}
-				var sid = s.section;
-				var have = s.formvalue(sid, 'private_key') || uci.get('network', sid, 'private_key');
-				if (have && have != parsed.private_key &&
-				    !confirm(_('Заменить настройки этого интерфейса вставленной конфигурацией?')))
-					return;
+				var reader = new FileReader();
+				reader.onload = function(rev) {
+					var el = self.getUIElement(section_id);
+					if (el)
+						el.setValue(String(rev.target.result).trim());
+				};
+				reader.readAsText(file);
+			});
+			return node;
+		};
 
-				s.getOption('private_key').getUIElement(sid).setValue(parsed.private_key);
-				s.getOption('addresses').getUIElement(sid).setValue(parsed.addresses);
-				s.getOption('sni').getUIElement(sid).setValue(parsed.sni);
-				/* MTU переносим только если он в файле ЕСТЬ. Пустое значение здесь означает
-				 * «согласуй сам», и подставить в него число значило бы запретить движку
-				 * поднимать предел выше — то есть тихо ухудшить туннель. */
-				if (parsed.mtu)
-					s.getOption('mtu').getUIElement(sid).setValue(parsed.mtu);
+		o = s.taboption('import', form.Button, '_import', null,
+			_('Разбирает вставленный текст и заполняет поля. Значения после этого стоит просмотреть: страница не знает, тот ли это хаб, который вы имели в виду.'));
+		o.inputtitle = _('Заполнить поля из текста');
+		o.inputstyle = 'action';
+		/* section_id приходит вторым аргументом от LuCI (form.js, CBIButtonValue.renderWidget) —
+		 * берём его, а не s.section: у кнопки нет причин знать, как секция называется снаружи. */
+		o.onclick = function(ev, section_id) {
+			var sid = section_id || s.section;
 
-				/* Хаб заменяется, а не добавляется: пиру нужен ровно один хаб, и оставленный
-				 * второй означал бы, что часть трафика идёт мимо звезды. */
-				uci.sections('network', 'xsteer_%s'.format(sid), function(old) {
-					uci.remove('network', old['.name']);
-				});
-				var psid = uci.add('network', 'xsteer_%s'.format(sid));
-				uci.set('network', psid, 'public_key', parsed.public_key);
-				uci.set('network', psid, 'allowed_ips', parsed.allowed_ips);
-				uci.set('network', psid, 'endpoint_host', parsed.endpoint_host);
-				uci.set('network', psid, 'endpoint_port', parsed.endpoint_port);
-				if (parsed.persistent_keepalive)
-					uci.set('network', psid, 'persistent_keepalive', parsed.persistent_keepalive);
+			var text = s.formvalue(sid, '_paste');
+			if (!text || !String(text).trim().length) {
+				ui.addNotification(null, E('p', _('Поле пустое: вставьте конфигурацию пира.')), 'warning');
+				return;
+			}
 
-				ui.hideModal();
-				/* Предупреждения показываем УВЕДОМЛЕНИЕМ, а не в окне: окно закрывается, и
-				 * написанное в нём человек уже не прочтёт. Применение они не отменяют — файл
-				 * годен, просто часть его на роутере ничего не делает. */
-				if (parsed.warnings && parsed.warnings.length)
-					ui.addNotification(null, parsed.warnings.map(function(w) {
-						return E('p', w);
-					}), 'warning');
-				/* Сохраняем и перерисовываем: секции пира созданы в обход карты, и без этого их
-				 * на странице не видно до перезагрузки. */
-				return s.map.save(null, true);
+			var parsed = parseXsteerConfig(text);
+			if (typeof parsed == 'string') {
+				/* Ошибку показываем уведомлением, а текст оставляем в поле: читать сообщение и
+				 * править вставленное человек будет одновременно. */
+				ui.addNotification(null, E('p', parsed), 'danger');
+				return;
+			}
+
+			var have = s.formvalue(sid, 'private_key') || uci.get('network', sid, 'private_key');
+			if (have && have != parsed.private_key &&
+			    !confirm(_('Заменить настройки этого интерфейса вставленной конфигурацией?')))
+				return;
+
+			/* Значение ставится в живое поле, если оно нарисовано, и прямо в uci, если нет.
+			 * Молча пропустить поле — худший из вариантов: интерфейс выглядел бы настроенным
+			 * наполовину, а какая половина потерялась, снаружи не видно. */
+			var setField = function(name, value) {
+				var opt = s.getOption(name);
+				var el = opt ? opt.getUIElement(sid) : null;
+				if (el)
+					el.setValue(value);
+				else
+					uci.set('network', sid, name, value);
 			};
 
-			ui.showModal(_('Загрузка конфигурации xsteer'), [
-				E('p', _('Конфигурация в стиле WireGuard: секция <code>[Interface]</code> с приватным ключом и адресом, секция <code>[Peer]</code> с ключом хаба и его адресом. Ровно один пир — хаб звезды.')),
-				drop,
-				problem,
-				E('div', { 'class': 'right' }, [
-					E('button', { 'class': 'btn', 'click': ui.hideModal }, [ _('Отмена') ]),
-					' ',
-					E('button', { 'class': 'btn cbi-button-positive', 'click': ui.createHandlerFn(this, apply) },
-						[ _('Применить') ])
-				])
-			]);
-			textarea.focus();
-			return false;
+			setField('private_key', parsed.private_key);
+			setField('addresses', parsed.addresses);
+			setField('sni', parsed.sni);
+			/* MTU переносим только если он в файле ЕСТЬ. Пустое значение здесь означает
+			 * «согласуй сам», и подставить в него число значило бы запретить движку поднимать
+			 * предел выше — то есть тихо ухудшить туннель. */
+			if (parsed.mtu)
+				setField('mtu', parsed.mtu);
+
+			/* Хаб заменяется, а не добавляется: пиру нужен ровно один хаб, и оставленный второй
+			 * означал бы, что часть трафика идёт мимо звезды. */
+			uci.sections('network', 'xsteer_%s'.format(sid), function(old) {
+				uci.remove('network', old['.name']);
+			});
+			var psid = uci.add('network', 'xsteer_%s'.format(sid));
+			uci.set('network', psid, 'public_key', parsed.public_key);
+			uci.set('network', psid, 'allowed_ips', parsed.allowed_ips);
+			uci.set('network', psid, 'endpoint_host', parsed.endpoint_host);
+			uci.set('network', psid, 'endpoint_port', parsed.endpoint_port);
+			if (parsed.persistent_keepalive)
+				uci.set('network', psid, 'persistent_keepalive', parsed.persistent_keepalive);
+
+			/* Предупреждения — уведомлением: файл годен, просто часть его на роутере ничего не
+			 * делает, и об этом надо сказать, не мешая импорту. */
+			if (parsed.warnings && parsed.warnings.length)
+				ui.addNotification(null, parsed.warnings.map(function(w) {
+					return E('p', w);
+				}), 'warning');
+			ui.addNotification(null, E('p',
+				_('Поля заполнены. Проверьте их и нажмите «Сохранить и применить».')), 'info');
+
+			/* Перерисовываем: секция хаба создана в обход карты, и без этого её на вкладке не
+			 * видно до перезагрузки страницы. Возвращаем обещание — ui.createHandlerFn снимет с
+			 * кнопки значок ожидания ровно тогда, когда перерисовка закончится. */
+			return s.map.save(null, true);
 		};
 
 		o = s.taboption('advanced', form.Value, 'sni',

@@ -93,6 +93,41 @@ WARN_CASES = [
 ]
 
 
+# Устройство формы импорта — не косметика, а то, из-за чего страница однажды зависла насмерть.
+# Настройки интерфейса в LuCI сами живут в модальном окне, а окно у LuCI РОВНО ОДНО: showModal,
+# вызванный изнутри, не открывает второе, а заменяет содержимое первого через dom.content() —
+# то есть уничтожает разметку формы интерфейса. После этого первое же обращение к полю
+# (s.formvalue → getUIElement → findClassInstance) падает на undefined, обработчик кнопки
+# завёрнут в ui.createHandlerFn и ждёт обещание, исключение его отклоняет — и значок ожидания с
+# кнопки уже не снимается. Снаружи это выглядело как «применение висит вечно», и по коду это
+# было не видно вовсе: и showModal, и formvalue сами по себе законны.
+#
+# Поэтому проверяется контракт, а не текст: страница не открывает модальных окон, поле импорта
+# живёт в самой форме и не пишется в uci, а section_id берётся у LuCI, а не угадывается.
+STRUCTURE = [
+    ("модальных окон страница не открывает", r"ui\.showModal\s*\(", False),
+    ("и не закрывает (значит и не открывала)", r"ui\.hideModal", False),
+    ("поле импорта — на своей вкладке", r"s\.tab\('import'", True),
+    ("поле импорта — текстовое поле формы", r"form\.TextValue,\s*'_paste'", True),
+    ("поле импорта не пишется в uci", r"o\.write = function\(\) \{\};", True),
+    ("и не читается из uci", r"o\.cfgvalue = function\(\) \{ return ''; \};", True),
+    ("section_id берётся у LuCI", r"o\.onclick = function\(ev, section_id\)", True),
+    ("родитель renderWidget берётся из прототипа, а не через super()",
+     r"form\.TextValue\.prototype\.renderWidget", True),
+]
+
+
+def check_structure(src):
+    """Проверки устройства страницы: то, что в quickjs без DOM не проверить."""
+    bad = 0
+    for name, pattern, want in STRUCTURE:
+        found = re.search(pattern, src) is not None
+        if found != want:
+            print("ПРОВАЛ %-34s %s" % (name, "найдено, а не должно" if found else "не найдено"))
+            bad += 1
+    return bad
+
+
 def load_parser():
     """Вырезать из страницы только разбор и подготовить его к запуску без браузера."""
     src = open(PAGE, encoding="utf-8").read()
@@ -131,6 +166,7 @@ def main():
         return 0
 
     fails = 0
+    fails += check_structure(open(PAGE, encoding="utf-8").read())
     for name, text, want in CASES:
         out = json.loads(run(text))
         got_err = out.get("err")
@@ -195,7 +231,7 @@ def main():
     if fails:
         print("ЕСТЬ ПРОВАЛЫ: %d" % fails)
         return 1
-    print("все %d проверок прошли" % (len(CASES) + len(WARN_CASES) + len(expect) + 1))
+    print("все %d проверок прошли" % (len(CASES) + len(WARN_CASES) + len(expect) + len(STRUCTURE) + 1))
     return 0
 
 
