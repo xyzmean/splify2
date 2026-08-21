@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import EngineCard from '@/components/EngineCard'
 import SelfUpdateCard from '@/components/SelfUpdateCard'
+import BackupCard from '@/components/BackupCard'
 import { rpc } from '@/lib/rpc'
 import { human, type Live } from '@/lib/live'
 
@@ -263,6 +264,9 @@ export default function LogsTab({ live }: { live: Live }) {
 
             <EngineCard engine={live.build} releases={live.releases} onInstalled={live.refresh} />
             <SelfUpdateCard info={live.selfUpdate} onInstalled={live.refresh} />
+            {/* Архив настроек — здесь, а не под пультом на всех экранах: он про коробку
+                целиком, как движок и самообновление рядом, а не про маршрутизацию. */}
+            <BackupCard />
         </div>
     )
 }
