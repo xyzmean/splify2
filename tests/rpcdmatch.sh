@@ -168,7 +168,13 @@ EOF
 
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/logger"
 printf '#!/bin/sh\nexit 1\n' > "$T/bin/uci"
-printf '#!/bin/sh\nexit 1\n' > "$T/bin/ubus"
+# ubus: код возврата прежний (на машине разработчика его нет, и скрипт обязан это
+# переживать), но вызовы теперь протоколируются — сигнал экземпляру виден только так.
+cat > "$T/bin/ubus" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$SANDBOX/ubus.log"
+exit 1
+EOF
 # curl: им ходит download(), то есть и списки издателя, и «свой список по ссылке».
 # Протокол отдельный от wget: через wget идут пакеты и GitHub API, и смешивать их в
 # одном журнале значило бы проверять «что-то скачалось» вместо «скачалось это».
@@ -189,10 +195,40 @@ EOF
 # steer: журналирует, ЧЕМ его позвали, и умеет отказать. Нужно ровно для одной мысли —
 # восстановление из архива проверяет спеку компилятором (`apply --dry-run`) и НЕ применяет
 # её (`apply --spec` без dry-run). Различить это можно только по журналу вызовов.
+#
+# Подкоманда `outputs` отвечает ПО СПЕКЕ, а не молчанием, и это не украшение стенда:
+# имена выходов скрипт узнаёт только отсюда, поэтому на молчащей заглушке любая проверка
+# признака пересборки туннелей была бы зелёной при любом поведении скрипта.
 cat > "$T/bin/steer" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$SANDBOX/steer.log"
 [ -n "${STEER_ERR:-}" ] && echo "$STEER_ERR" >&2
+if [ "$1" = outputs ]; then
+    spec=""; kind=""; obfs=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --spec) spec="$2"; shift 2 ;;
+            --kind) kind="$2"; shift 2 ;;
+            --obfs) obfs=1; shift ;;
+            *) shift ;;
+        esac
+    done
+    [ -s "$spec" ] && KIND="$kind" OBFS="$obfs" python3 - "$spec" <<'PYEOF'
+import json, os, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit(0)
+for name, o in (d.get('outputs') or {}).items():
+    if not isinstance(o, dict):
+        continue
+    if os.environ.get('OBFS') == '1':
+        if o.get('obfs'):
+            print(name)
+    elif not os.environ.get('KIND') or o.get('kind') == os.environ['KIND']:
+        print(name)
+PYEOF
+fi
 exit "${STEER_RC:-0}"
 EOF
 chmod +x "$T/bin"/*
@@ -575,10 +611,94 @@ check "list_fetch объявляет kind" "yes" \
 # переименованного выхода экземпляра ещё нет, и сигналить некому. Для обфускации это
 # давно различается (params против instances), для vless — не различалось, и новый
 # туннель не поднимался до перезагрузки на конфигурации с доменными каналами.
-check "spec_set помечает смену НАБОРА выходов vless как instances" "instances" \
-      "$(grep -A4 'vless_before_n" != "\$vless_after_n' "$SCRIPT" | grep -o 'instances' | head -1)"
-check "apply пересобирает экземпляры на instances" "yes" \
-      "$(grep -A22 'if \[ -f "\$VLESS_DIRTY" \]' "$SCRIPT" | grep -q '"\$INITD" start' && echo yes || echo no)"
+#
+# Признак читает apply, а пишет spec_set — и это ДВА РАЗНЫХ вызова, между которыми
+# сохранений бывает много: автосохранение зовёт spec_set после каждой правки, а применение
+# нажимают один раз. Пока признак перезаписывался, «instances» терялось первой же
+# следующей правкой того же выхода (выбор узла даёт params), и apply сигналил экземпляру,
+# которого нет: туннель не поднимался до перезапуска движка. Поэтому проверки ниже — про
+# поведение стенда, а не про текст скрипта: два сохранения подряд, потом apply.
+spec_req() {  # СПЕКА_JSON → запрос spec_set
+    python3 -c 'import json,sys; print(json.dumps({"spec": sys.argv[1]}))' "$1"
+}
+vless_spec() {  # [НОМЕР_УЗЛА] → спека с одним выходом kind=vless
+    python3 -c 'import json,sys
+o = {"kind": "vless", "sub_file": sys.argv[1]}
+if len(sys.argv) > 2 and sys.argv[2]:
+    o["node"] = int(sys.argv[2])
+print(json.dumps({"schema": 1, "outputs": {"vpn": o}, "channels": []}))' "$T/etc/sub.txt" "${1:-}"
+}
+
+rm -f "$T/var/vless-dirty" "$T/var/obfs-dirty"
+printf 'vless://key@host:443#node\n' > "$T/etc/sub.txt"
+printf '{"schema":1,"outputs":{},"channels":[]}\n' > "$T/etc/spec.json"
+out="$(rpcd spec_set "$(spec_req "$(vless_spec)")")"
+check "выход vless завёлся — признак instances" "true;instances" \
+      "$(printf '%s' "$out" | jget ok);$(cat "$T/var/vless-dirty" 2>/dev/null)"
+# Вторая правка ТОГО ЖЕ выхода: имя выхода не изменилось, изменился узел — сам по себе это
+# случай params. Но применения между двумя сохранениями не было, значит экземпляра всё ещё
+# нет, и повод пересобрать набор никуда не делся.
+out="$(rpcd spec_set "$(spec_req "$(vless_spec 1)")")"
+check "выбор узла у нового выхода не затирает instances" "yes" \
+      "$(grep -qx instances "$T/var/vless-dirty" 2>/dev/null && echo yes || echo no)"
+: > "$T/initd.log"; : > "$T/ubus.log"
+out="$(rpcd apply)"
+check "apply пересобирает набор экземпляров" "yes" \
+      "$(grep -qx start "$T/initd.log" && echo yes || echo no)"
+check "признак снят после применения" "no" \
+      "$([ -f "$T/var/vless-dirty" ] && echo yes || echo no)"
+# Смена узла у выхода, экземпляр которого уже есть, лечится сигналом — и `start` его не
+# заменяет: командная строка экземпляра от номера узла не зависит, procd видит описание
+# неизменившимся и процесс не трогает, то есть подписку заново никто не читает.
+out="$(rpcd spec_set "$(spec_req "$(vless_spec 2)")")"
+check "смена узла у существующего выхода — params" "params" \
+      "$(cat "$T/var/vless-dirty" 2>/dev/null)"
+: > "$T/initd.log"; : > "$T/ubus.log"
+out="$(rpcd apply)"
+check "apply сигналит экземпляру, а набор не пересобирает" "yes;no" \
+      "$(grep -q 'vless_vpn' "$T/ubus.log" && echo yes || echo no);$(grep -qx start "$T/initd.log" && echo yes || echo no)"
+
+# Новая подписка тоже перечитывается клиентом только при перезапуске, и sub_set помечал это
+# ПУСТЫМ файлом. Пустой признак — не «параметры», а отсутствие слова: он затирал instances
+# ровно так же, как params, а прочитать его как instances нельзя (тогда любая смена
+# подписки пересобирала бы набор вместо сигнала).
+rm -f "$T/var/vless-dirty"
+printf '{"schema":1,"outputs":{},"channels":[]}\n' > "$T/etc/spec.json"
+out="$(rpcd spec_set "$(spec_req "$(vless_spec)")")"
+out="$(rpcd sub_set '{"url":"vless://key@host:443#node"}')"
+check "смена подписки не затирает instances" "yes" \
+      "$(grep -qx instances "$T/var/vless-dirty" 2>/dev/null && echo yes || echo no)"
+check "смена подписки помечена и как params" "yes" \
+      "$(grep -qx params "$T/var/vless-dirty" 2>/dev/null && echo yes || echo no)"
+: > "$T/initd.log"; : > "$T/ubus.log"
+out="$(rpcd apply)"
+check "apply делает и то и другое: сигнал существующим, сборка набора" "yes;yes" \
+      "$(grep -q 'vless_vpn' "$T/ubus.log" && echo yes || echo no);$(grep -qx start "$T/initd.log" && echo yes || echo no)"
+
+# Обфускация: тот же признак и та же ошибка. Проверяется на той же паре сохранений —
+# выход с obfs появился, затем у него сменился порт.
+obfs_spec() {  # ПОРТ_LISTEN
+    python3 -c 'import json,sys
+print(json.dumps({"schema": 1, "outputs": {"wg": {"kind": "interface", "device": "wg0",
+      "obfs": {"mode": "wg-over-tcp", "server": "203.0.113.10:4567",
+               "listen": "127.0.0.1:" + sys.argv[1]}}}, "channels": []}))' "$1"
+}
+rm -f "$T/var/obfs-dirty" "$T/var/vless-dirty"
+printf '{"schema":1,"outputs":{},"channels":[]}\n' > "$T/etc/spec.json"
+out="$(rpcd spec_set "$(spec_req "$(obfs_spec 8443)")")"
+check "выход с обфускацией завёлся — признак instances" "instances" \
+      "$(cat "$T/var/obfs-dirty" 2>/dev/null)"
+out="$(rpcd spec_set "$(spec_req "$(obfs_spec 8444)")")"
+check "смена порта у нового обфускатора не затирает instances" "yes" \
+      "$(grep -qx instances "$T/var/obfs-dirty" 2>/dev/null && echo yes || echo no)"
+: > "$T/initd.log"
+out="$(rpcd apply)"
+check "apply пересобирает набор обфускаторов" "yes" \
+      "$(grep -qx start "$T/initd.log" && echo yes || echo no)"
+
+# Фикстуры возвращаются к исходным: проверки ниже писаны против них.
+printf '{"schema":1,"outputs":{},"channels":[]}\n' > "$T/etc/spec.json"
+rm -f "$T/var/vless-dirty" "$T/var/obfs-dirty" "$T/etc/spec.applied.json"
 
 # ---- списки доскачиваются перед КАЖДОЙ проверкой спеки ----------------------------
 # Движок умирает на отсутствующем файле списка, и делает это в ДВУХ местах: при
@@ -812,7 +932,11 @@ check "восстановление ничего не применяет" "0" "$
 # отсутствие отдаёт саму спеку, то есть восстановленное выглядело бы применённым.
 check "снимок применённого снят с ПРЕЖНЕЙ спеки" "yes" \
       "$([ -s "$T/etc/spec.applied.json" ] && ! grep -q 'br-lan' "$T/etc/spec.applied.json" && echo yes || echo no)"
-check "туннели помечены к пересборке" "instances" "$(cat "$T/var/vless-dirty" 2>/dev/null)"
+# Оба повода сразу: восстановление меняет и НАБОР выходов (экземпляра для появившегося
+# ещё нет — instances), и подписку у тех, что могли остаться под тем же именем (их
+# экземпляр работает и обязан перечитать узлы — params).
+check "туннели помечены к пересборке по обоим поводам" "yes;yes" \
+      "$(grep -qx instances "$T/var/vless-dirty" && echo yes || echo no);$(grep -qx params "$T/var/vless-dirty" && echo yes || echo no)"
 check "накопленный файл убран за собой" "no" \
       "$([ -f "$T/var/backup.in" ] && echo yes || echo no)"
 
