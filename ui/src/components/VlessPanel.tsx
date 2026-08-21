@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
-import { isHttpUrl } from '@/lib/validate'
+import { isSubSource } from '@/lib/validate'
 import type { Output, VlessNode, VlessProbe, VlessSkip } from '@/lib/model'
 
 // Настройка выхода kind=vless: подписка и выбор узла.
@@ -108,7 +108,7 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
         setUrlTried(true)
         // Сообщение об ошибке — рядом с полем, а не всплывашкой: всплывашка уезжает и не
         // показывает, В КАКОМ поле опечатка, а править нужно именно это.
-        if (!urlText || !isHttpUrl(urlText)) return
+        if (!urlText || !isSubSource(urlText)) return
         setBusy('sub')
         try {
             const r = await rpc.subSet(urlText)
@@ -203,12 +203,13 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
 
     const chosen = output.node ?? -1
     const urlText = url.trim()
-    // Пустое поле isHttpUrl считает годным («выключено»), поэтому пустоту проверяем
-    // отдельно: здесь ссылка обязательна.
-    const urlBad = urlText.length > 0 && !isHttpUrl(urlText)
+    // Пустое поле isSubSource считает годным («ещё не ввели»), поэтому пустоту проверяем
+    // отдельно: здесь источник обязателен.
+    const urlBad = urlText.length > 0 && !isSubSource(urlText)
     const urlErr = urlBad
-        ? 'Нужна ссылка вида https://… — подписку скачивает роутер, других схем он не умеет.'
-        : urlTried && !urlText ? 'Вставьте ссылку на подписку.' : ''
+        ? 'Нужна ссылка вида https://… на подписку либо одна или несколько ссылок vless:// '
+          + 'через пробел. Смешивать эти две формы нельзя: роутер возьмёт только одну.'
+        : urlTried && !urlText ? 'Вставьте ссылку на подписку или ссылку vless://.' : ''
     const listOpen = open ?? (nodes ? nodes.length <= FOLD_FROM : true)
     const chosenName = chosen < 0
         ? 'первый рабочий'
@@ -224,13 +225,13 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
 
             <div className="flex flex-wrap items-end gap-2">
                 <label className="flex flex-1 flex-col gap-1 text-xs">
-                    Ссылка на подписку
+                    Ссылка на подписку или vless://
                     <input
                         value={url}
                         onChange={(e) => setUrl(e.currentTarget.value)}
-                        placeholder="https://example.com/sub/xxxxx"
+                        placeholder="https://example.com/sub/xxxxx  —  или  vless://…"
                         className="w-full rounded-md border border-border bg-background px-2 py-1 text-sm"
-                        aria-label="Ссылка на подписку"
+                        aria-label="Ссылка на подписку или vless://"
                         aria-invalid={urlBad || undefined}
                         aria-describedby={urlErr ? `sub-url-err-${name}` : undefined}
                     />

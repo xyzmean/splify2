@@ -240,7 +240,7 @@ describe('свёртка списка узлов', () => {
 describe('ссылка на подписку проверяется до вызова', () => {
     it('строка без схемы объясняется рядом с полем, и sub_set не вызывается', async () => {
         mount(2)
-        const field = await screen.findByLabelText('Ссылка на подписку')
+        const field = await screen.findByLabelText('Ссылка на подписку или vless://')
         fireEvent.input(field, { target: { value: 'example.com/sub/xxxx' } })
         const err = await screen.findByRole('alert')
         expect(err).toHaveTextContent(/Нужна ссылка вида https/)
@@ -253,7 +253,7 @@ describe('ссылка на подписку проверяется до выз�
 
     it('пустое поле объясняется в форме, а не молчаливым бездействием', async () => {
         mount(2)
-        const field = await screen.findByLabelText('Ссылка на подписку')
+        const field = await screen.findByLabelText('Ссылка на подписку или vless://')
         fireEvent.input(field, { target: { value: '   ' } })
         fireEvent.click(screen.getByRole('button', { name: /Обновить|Загрузить/ }))
         // Именно в форме и именно у поля: всплывашка (так было до R-011) уезжает через
@@ -267,7 +267,7 @@ describe('ссылка на подписку проверяется до выз�
     it('годная ссылка уходит в sub_set обрезанной по краям', async () => {
         h.subSet.mockResolvedValue({ ok: true, bytes: 2048, kind: 'url' })
         mount(2)
-        const field = await screen.findByLabelText('Ссылка на подписку')
+        const field = await screen.findByLabelText('Ссылка на подписку или vless://')
         fireEvent.input(field, { target: { value: '  https://p.example/sub/abc  ' } })
         expect(screen.queryByText(/Нужна ссылка вида https/)).toBeNull()
         fireEvent.click(screen.getByRole('button', { name: /Обновить|Загрузить/ }))
