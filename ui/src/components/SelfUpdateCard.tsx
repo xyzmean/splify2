@@ -26,6 +26,10 @@ export default function SelfUpdateCard({
 }) {
     const [ver, setVer] = useState('')
     const [busy, setBusy] = useState(false)
+    /** Что сказал установщик. Держится на экране, а не всплывашкой: там бывает
+     *  требование перезапустить сеть руками, и уехавший через пять секунд тост означал бы,
+     *  что требование не выполнят. */
+    const [notes, setNotes] = useState('')
 
     const versions = info?.versions ?? []
     const latest = versions.length ? versions[0] : null
@@ -45,6 +49,11 @@ export default function SelfUpdateCard({
             const r = await rpc.splify2Install(ver)
             if (!r.ok) throw new Error(r.error || t('не установилось'))
             notify(`${t('Интерфейс обновлён')}: ${r.installed}. ${t('Перезагрузите страницу.')}`)
+            /* Слова установщика — на экран, дословно и целиком. Сокращать нельзя по той же
+               причине, по которой не сокращаются предупреждения движка: там названа
+               причина, а не оформление. Пустой вывод (штатная установка, менять нечего)
+               блок не рисует. */
+            setNotes((r.output || '').trim())
             onInstalled()
         } catch (e) {
             notify(String(e instanceof Error ? e.message : e), 'error')
@@ -90,6 +99,18 @@ export default function SelfUpdateCard({
                         {label}
                     </Button>
                 </div>
+
+                {/* Сказанное установщиком. Единственное место, где текст приходит от
+                    менеджера пакетов как есть — и единственный канал, которым post-install
+                    может о чём-то попросить человека с браузером. */}
+                {notes && (
+                    <div className="rounded-md border border-warning/40 bg-warning/10 p-3">
+                        <p className="text-xs font-semibold text-warning">{t('Установщик сказал')}:</p>
+                        <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs">
+                            {notes}
+                        </pre>
+                    </div>
+                )}
             </CardContent>
         </Card>
     )
