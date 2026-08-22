@@ -2011,16 +2011,33 @@ splify2: набор обфускаторов изменился — экземп
         # rx у туннельного устройства — это то, что движок ОТДАЛ клиентам, то есть
         # скачанное; tx — то, что он у них забрал. Для wireguard и amneziawg смысл тот же,
         # считает ядро.
+        # Счётчики читаются ВСТРОЕННЫМ read, а не cat, и это самый частый метод из всех:
+        # интерфейс зовёт его раз в пять секунд, всё время, пока открыта страница.
+        #
+        # Было четыре подстановки команды на устройство, то есть четыре fork+exec. На типовой
+        # коробке устройств десять-четырнадцать (br-lan, lan1..4, wan, eth0, wlan0, wlan1,
+        # туннели) — сорок с лишним процессов на вызов. Замер в busybox sh на шести
+        # устройствах: 27,8 мс через cat против 1,8 мс через read, в пятнадцать раз; на
+        # 880 МГц каждый fork заметен и сам.
+        #
+        # Разбор имени в строке ниже уже сделан через ${} — приём тут же, рядом, просто не был
+        # применён к чтению. Умолчание задаётся ДО read: при отказе чтения переменная должна
+        # остаться нулём, а не сохранить значение предыдущего устройства.
         json_init
         json_add_object devices
         for d in /sys/class/net/*/statistics; do
             n="${d%/statistics}"; n="${n##*/}"
             [ "$n" = lo ] && continue
+            rxb=0; txb=0; rxp=0; txp=0
+            read -r rxb < "$d/rx_bytes" 2>/dev/null || rxb=0
+            read -r txb < "$d/tx_bytes" 2>/dev/null || txb=0
+            read -r rxp < "$d/rx_packets" 2>/dev/null || rxp=0
+            read -r txp < "$d/tx_packets" 2>/dev/null || txp=0
             json_add_object "$n"
-            json_add_string rx "$(cat "$d/rx_bytes" 2>/dev/null || echo 0)"
-            json_add_string tx "$(cat "$d/tx_bytes" 2>/dev/null || echo 0)"
-            json_add_string rx_packets "$(cat "$d/rx_packets" 2>/dev/null || echo 0)"
-            json_add_string tx_packets "$(cat "$d/tx_packets" 2>/dev/null || echo 0)"
+            json_add_string rx "$rxb"
+            json_add_string tx "$txb"
+            json_add_string rx_packets "$rxp"
+            json_add_string tx_packets "$txp"
             json_close_object
         done
         json_close_object
