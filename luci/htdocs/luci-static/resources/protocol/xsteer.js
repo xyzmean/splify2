@@ -150,6 +150,10 @@ function parseXsteerConfig(data) {
 network.registerPatternVirtual(/^xs-.+$/);
 network.registerErrorCode('NO_PRIVATE_KEY', _('Приватный ключ не задан'));
 network.registerErrorCode('INVALID_CONFIG', _('Движок отверг настройки: смотрите системный журнал'));
+/* Коды устройства. Без записи здесь LuCI показывает человеку сырой код вместо причины, а
+   причина у обоих одна и та же по смыслу: устройства нет, поднимать нечего. */
+network.registerErrorCode('DEVICE_NAME_TOO_LONG', _('Имя устройства длиннее 15 символов (предел ядра)'));
+network.registerErrorCode('DEVICE_SETUP_FAILED', _('Устройство туннеля не создалось: смотрите системный журнал'));
 
 return network.registerProtocol('xsteer', {
 	getI18n: function() {

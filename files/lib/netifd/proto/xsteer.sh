@@ -27,7 +27,12 @@
 	init_proto "$@"
 }
 
-XSTEER_RUN=/var/run/xsteer
+# Каталог с конфигурацией и путь к движку — швами, а не литералами. Причина не в красоте:
+# обработчик исполняется netifd от root и целиком состоит из обращений к системе, поэтому
+# проверять его можно только подменой окружения, а подменить абсолютный путь снаружи нечем
+# (пространства имён пользователя в сборочной среде запрещены). Умолчания те же, что были.
+XSTEER_RUN="${XSTEER_RUN:-/var/run/xsteer}"
+STEER_BIN="${STEER_BIN:-/usr/sbin/steer}"
 
 proto_xsteer_init_config() {
 	available=1
@@ -94,6 +99,25 @@ proto_xsteer_setup() {
 	}
 
 	local dev="${device_name:-xs-$config}"
+	# Имя устройства обязано влезать в IFNAMSIZ — 15 значащих символов. Проверяем ЗДЕСЬ, а не
+	# надеемся на отказ `ip tuntap add`, потому что дальше отказа не будет вовсе: движок
+	# копирует имя через snprintf(ifr.ifr_name, IFNAMSIZ, ...) и молча срезает лишнее
+	# (steer/src/ext/tun.c, queue_open — измерено). То есть `ip` откажет на 16 символах, а
+	# движок создаст устройство с ДРУГИМ именем, короче на символ, и поднимет на нём рабочий
+	# туннель. Адрес и зона firewall при этом уедут на имя, которого не существует: процесс
+	# жив, интерфейс «поднят», трафика нет, и сказать об этом некому.
+	#
+	# Умолчание `xs-<интерфейс>` даёт предел в 12 символов на имя интерфейса. Отдельного
+	# `device_name` это касается так же: на странице протокола у поля нет ни datatype, ни
+	# предела длины.
+	if [ "${#dev}" -gt 15 ]; then
+		echo "xsteer: имя устройства \"$dev\" — ${#dev} символов, ядро принимает не больше 15" \
+			"(IFNAMSIZ). Задайте короче в «Имя устройства» или переименуйте интерфейс" \
+			"(умолчание xs-<интерфейс> оставляет на имя 12 символов)." >&2
+		proto_notify_error "$config" DEVICE_NAME_TOO_LONG
+		proto_block_restart "$config"
+		return 1
+	fi
 	# MTU задавать НЕ НУЖНО: движок согласует его сам — берёт минимум из пределов сторон и
 	# проверяет настоящий путь пробами (см. src/ext/xswire.h). Поэтому устройство создаётся с
 	# безопасным низом, а движок поднимет его до подтверждённого значения. В режиме потока
@@ -136,13 +160,14 @@ proto_xsteer_setup() {
 	# Проверяем конфигурацию ДО создания устройства: движок скажет о неверном ключе или
 	# пересечении префиксов внятной строкой, и лучше получить её здесь, чем увидеть интерфейс,
 	# который «поднялся и молчит».
-	if ! /usr/sbin/steer xsteer-check --config "$XSTEER_CONF" 2>/tmp/xsteer-$config.err; then
-		echo "xsteer: $(cat /tmp/xsteer-$config.err)" >&2
+	if ! "$STEER_BIN" xsteer-check --config "$XSTEER_CONF" 2>"$XSTEER_RUN/$config.err"; then
+		echo "xsteer: $(cat "$XSTEER_RUN/$config.err")" >&2
 		proto_notify_error "$config" INVALID_CONFIG
 		proto_block_restart "$config"
-		rm -f "$XSTEER_CONF"
+		rm -f "$XSTEER_CONF" "$XSTEER_RUN/$config.err"
 		return 1
 	fi
+	rm -f "$XSTEER_RUN/$config.err"
 
 	# Устройство: создаём, если его ещё нет. Повторный подъём интерфейса не должен падать на
 	# «File exists» — netifd делает setup после teardown не всегда.
@@ -150,9 +175,29 @@ proto_xsteer_setup() {
 	# многопоточность (см. src/ext/xsclient.c). Устройство без него отдаст одну очередь, все
 	# потоки будут читать её же, и второе ядро останется без работы — молча, потому что
 	# туннель при этом полностью работоспособен.
-	ip link show dev "$dev" >/dev/null 2>&1 || \
-		ip tuntap add dev "$dev" mode tun multi_queue
-	ip link set dev "$dev" mtu "$start_mtu" up
+	#
+	# Результат проверяется, а не предполагается. Раньше не проверялся, и это обходилось
+	# дорого: `ip tuntap add` отказывает не только на длинном имени, но и когда нет
+	# kmod-tun или имя занято чужим устройством, — а обработчик всё равно доходил до
+	# proto_send_update и объявлял интерфейс поднятым. netifd после этого ставит адрес на
+	# устройство, которого нет; в «Состоянии» интерфейс выглядит настроенным.
+	if ! ip link show dev "$dev" >/dev/null 2>&1; then
+		if ! ip tuntap add dev "$dev" mode tun multi_queue 2>"$XSTEER_RUN/$config.err"; then
+			echo "xsteer: устройство $dev не создалось: $(cat "$XSTEER_RUN/$config.err")" >&2
+			rm -f "$XSTEER_CONF" "$XSTEER_RUN/$config.err"
+			proto_notify_error "$config" DEVICE_SETUP_FAILED
+			proto_block_restart "$config"
+			return 1
+		fi
+		rm -f "$XSTEER_RUN/$config.err"
+	fi
+	if ! ip link set dev "$dev" mtu "$start_mtu" up; then
+		echo "xsteer: устройство $dev не поднялось (mtu $start_mtu)" >&2
+		rm -f "$XSTEER_CONF"
+		proto_notify_error "$config" DEVICE_SETUP_FAILED
+		proto_block_restart "$config"
+		return 1
+	fi
 
 	# Режим потока передаётся КЛЮЧОМ, а не через файл конфигурации: транспорт — свойство
 	# запуска, а не звезды, и в файле, который носят между роутером и десктопом, ему места нет
@@ -162,7 +207,7 @@ proto_xsteer_setup() {
 	[ "$stream" = 1 ] && [ -n "$stream_port" ] && xs_args="$xs_args --stream-port $stream_port"
 
 	# shellcheck disable=SC2086
-	proto_run_command "$config" /usr/sbin/steer xsteer \
+	proto_run_command "$config" "$STEER_BIN" xsteer \
 		--config "$XSTEER_CONF" --device "$dev" $xs_args
 
 	proto_init_update "$dev" 1
@@ -187,7 +232,7 @@ proto_xsteer_teardown() {
 	# интерфейс, а оставленный файл — это приватный ключ в tmpfs после того, как туннель
 	# выключили.
 	ip link del dev "$dev" 2>/dev/null
-	rm -f "$XSTEER_RUN/$config.conf"
+	rm -f "$XSTEER_RUN/$config.conf" "$XSTEER_RUN/$config.err"
 }
 
 [ -n "$INCLUDE_ONLY" ] || add_protocol xsteer

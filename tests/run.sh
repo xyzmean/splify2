@@ -32,6 +32,9 @@ run pkgmatch   sh "$ROOT/tests/pkgmatch.sh"
 run installmatch sh "$ROOT/tests/installmatch.sh"
 # Разбор конфигурации на странице протокола xsteer. Пропускается вслух, если нет quickjs.
 run protomatch python3 "$ROOT/tests/protomatch.py"
+# Обработчик протокола netifd: 193 строки, которые netifd исполняет от root на каждой
+# настройке интерфейса. Заглушки в PATH и швы в самом обработчике, ядро не нужно.
+run protohandler sh "$ROOT/tests/protohandler.sh"
 
 # Интерфейс. Пропускается вслух, а не молча: молчаливый пропуск читается как «прошло», и
 # ровно так стенд однажды и превратился в фикцию.
