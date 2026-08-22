@@ -41,6 +41,11 @@ const FLEX_DIRECTION = new Set(['row', 'row-reverse', 'col', 'col-reverse'])
 const FLEX_WRAP = new Set(['wrap', 'wrap-reverse', 'nowrap'])
 const OVERFLOW_VALUES = new Set(['auto', 'hidden', 'clip', 'visible', 'scroll'])
 const WHITESPACE = new Set(['normal', 'nowrap', 'pre', 'pre-line', 'pre-wrap', 'break-spaces'])
+// `break-words` и родня — семейство word-break/overflow-wrap. Отдельным набором, а не по
+// приставке `break-`, потому что ту же приставку носят классы разрыва страницы
+// (break-before-*, break-inside-*, break-after-*), а это другое свойство CSS: свалив их в
+// одну группу, мы бы дали последнему затирать первое без всякой на то причины.
+const WORD_BREAK = new Set(['normal', 'words', 'all', 'keep'])
 const SHADOW_SIZES = new Set(['sm', 'md', 'lg', 'xl', '2xl', 'inner', 'none', ''])
 
 // A value is "sizey" (width/spacing/etc.) rather than a colour when it is a
@@ -182,6 +187,9 @@ function groupOf(cls) {
   }
   if (cls.startsWith('whitespace-')) {
     return WHITESPACE.has(cls.slice(11)) ? 'whitespace' : null
+  }
+  if (cls.startsWith('break-')) {
+    return WORD_BREAK.has(cls.slice(6)) ? 'word-break' : null
   }
   // border-*: width vs colour vs style, optionally per side.
   if (cls.startsWith('border-')) {

@@ -65,7 +65,10 @@ function latencyTone(ms: number): 'default' | 'secondary' | 'destructive' {
 }
 
 export default function VlessPanel({ name, output, onChange, saved }: Props) {
-    const [sub, setSub] = useState<{ url?: string; present: boolean; bytes?: number; mtime?: number } | null>(null)
+    /* Тип берётся у САМОГО вызова, а не переписывается здесь. Рукописный дубль формы ответа
+     * уже разошёлся с ней: в rpc.ts у sub_info появились kind и hwid, а здесь их не было, и
+     * сборка падала на tsc — то есть панель читала поля, которых по её же типу не бывает. */
+    const [sub, setSub] = useState<Awaited<ReturnType<typeof rpc.subInfo>> | null>(null)
     const [url, setUrl] = useState('')
     const [nodes, setNodes] = useState<VlessNode[] | null>(null)
     const [meta, setMeta] = useState<{ usable: number; skipped: number; foreign: number } | null>(null)
