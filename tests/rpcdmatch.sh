@@ -266,6 +266,7 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         RPCD_INITD="$T/bin/initd-rpcd" \
         OPENWRT_RELEASE="${OPENWRT_RELEASE_FIXTURE:-$T/etc/openwrt_release}" \
         VLESS_DIRTY="$T/var/vless-dirty" \
+        UCI_SPLIFY2="${UCI_SPLIFY2_FIXTURE:-$T/etc/config/splify2}" \
         OBFS_DIRTY="$T/var/obfs-dirty" \
         APPLIED="$T/etc/spec.applied.json" \
         BACKUP_OUT="$T/var/backup.out" \
@@ -699,6 +700,26 @@ check "apply пересобирает набор обфускаторов" "yes"
 # Фикстуры возвращаются к исходным: проверки ниже писаны против них.
 printf '{"schema":1,"outputs":{},"channels":[]}\n' > "$T/etc/spec.json"
 rm -f "$T/var/vless-dirty" "$T/var/obfs-dirty" "$T/etc/spec.applied.json"
+
+# ---- файл настройки uci заводится, не убивая метод -------------------------------
+# Отказ перенаправления у СПЕЦИАЛЬНОЙ встроенной команды (`: > файл`) завершает оболочку
+# целиком — так требует POSIX и так делает ash. Значит там, где каталога нет или на overlay
+# кончилось место, метод умирал БЕЗ ОТВЕТА: ни ok, ни ошибки, а интерфейс показывал «нет
+# ответа» на пустом месте. Урок записан в запуске 46 у backup_put и там же исправлен, а
+# sub_set и ui_set остались с прежней строкой — до этого стенда их ответ не проверялся вовсе,
+# потому что у пути /etc/config/splify2 не было шва.
+check "путь файла настройки — шов, а не литерал" "1" \
+      "$(grep -c '^UCI_SPLIFY2=' "$SCRIPT")"
+check "прямых путей /etc/config/splify2 в коде не осталось" "1" \
+      "$(grep -c '/etc/config/splify2' "$SCRIPT")"
+check "файл заводится одной функцией на все места" "3" \
+      "$(grep -c '^ *uci_file ||' "$SCRIPT")"
+check "перенаправлением файл больше не заводится" "0" \
+      "$(grep -c ': > "\?/etc/config' "$SCRIPT")"
+# И поведением: на недоступном каталоге метод обязан ОТВЕТИТЬ отказом, а не умереть.
+out="$(UCI_SPLIFY2_FIXTURE=/proc/nonexistent/splify2 rpcd sub_set '{"url":"vless://k@h:443#n"}')"
+check "недоступный файл настройки — отказ с причиной, а не тишина" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'кончилось место' && echo yes || echo no)"
 
 # ---- списки доскачиваются перед КАЖДОЙ проверкой спеки ----------------------------
 # Движок умирает на отсутствующем файле списка, и делает это в ДВУХ местах: при
