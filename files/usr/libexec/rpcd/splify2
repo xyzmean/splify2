@@ -376,10 +376,8 @@ fetch_missing_lists() {  # ПУТЬ_К_СПЕКЕ
 # способ — попасть в зону. А зоны — это uci, то есть управляющий слой. Движок про это
 # честно предупреждает («not mentioned by the firewall at all»), но починить не может.
 #
-# masquerade НЕ включается, и это не забывчивость: клиент VLESS завершает TCP у себя и
-# соединяется с сервером обычным сокетом, поэтому адрес клиента наружу не уезжает вовсе.
-# Включить NAT здесь значило бы добавить трансляцию, которой нечего транслировать.
-ZONE=steer_vless
+# Имена зон и их политики — ниже, у FW_ZONES: их две, и различает их нужда в трансляции
+# адресов, а не вкус.
 
 # Файл настройки uci. Пакет его не кладёт, а `uci set` в несуществующий файл молча ничего не
 # делает — ссылка подписки «сохранялась» и пропадала, причём метод отвечал ok. Тихая потеря
@@ -465,47 +463,229 @@ vless_names() {  # ФАЙЛ_СПЕКИ
     "$STEER" outputs --kind vless --spec "$1" 2>/dev/null | tr '\n' ' '
 }
 
-zone_index() {
-    uci show firewall 2>/dev/null | sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.name='$ZONE'$/\1/p" | head -1
+# Расписка: что в фаерволе сделали МЫ, а что было до нас.
+#
+# Файл, а не пометка в самой зоне: fw4 на незнакомую опцию в секции ругается («specifies
+# unknown option») при каждой перезагрузке правил, и человек читал бы это как дефект. А судить
+# по одному имени нельзя: зону с тем же именем мог сделать руками и человек — тогда она его.
+#
+# Записи двух видов, и вторая не менее важна первой:
+#   zone ЗОНА           — зону создали мы, значит нам её и убирать;
+#   dev ЗОНА УСТРОЙСТВО — это устройство в эту зону добавили мы.
+#
+# Учёт ПО КАЖДОМУ устройству нужен затем же, зачем и учёт зоны: в нашу зону человек мог руками
+# положить своё устройство, а правило «убрать всё, чего нет в спеке» вынесло бы его молча.
+FW_OWNED="${FW_OWNED:-/etc/splify2/fw-owned}"
+
+fw_note() {  # СТРОКА
+    mkdir -p "$(dirname "$FW_OWNED")" 2>/dev/null
+    grep -qxF "$1" "$FW_OWNED" 2>/dev/null || printf '%s\n' "$1" >> "$FW_OWNED"
+}
+fw_noted() { grep -qxF "$1" "$FW_OWNED" 2>/dev/null; }
+fw_unnote() {  # СТРОКА
+    [ -f "$FW_OWNED" ] || return 0
+    grep -vxF "$1" "$FW_OWNED" > "$FW_OWNED.tmp" 2>/dev/null
+    mv "$FW_OWNED.tmp" "$FW_OWNED" 2>/dev/null || rm -f "$FW_OWNED.tmp"
 }
 
-ensure_vless_zone() {  # список устройств
-    devs="$1"
-    [ -n "$devs" ] || return 0
+# ДВЕ зоны, а не одна, и различает их НУЖДА В ТРАНСЛЯЦИИ АДРЕСОВ.
+#
+# steer_vless — устройства, которые создаёт сам движок (kind=vless и kind=xsteer). NAT там не
+# нужен и вреден: клиент завершает TCP у себя и соединяется с сервером обычным сокетом, адрес
+# клиента наружу не уезжает вовсе, а трансляция на входе в устройство подменила бы адреса, по
+# которым движок и различает клиентов.
+#
+# steer_iface — устройства выходов kind=interface, то есть WireGuard, AmneziaWG и всё, что
+# поднимает netifd. Здесь наоборот: пакет уходит в туннель как есть и уносит адрес из локальной
+# сети, а обратно не возвращается ничего. Движок это и говорит своим «no masquerade/snat rule
+# found for wgN: packets leave with LAN addresses and the channel goes quiet while its counter
+# still rises». Значит masq здесь обязателен — и именно поэтому зона отдельная: смешав их, мы
+# либо оставили бы wg без NAT, либо навязали NAT туннелю движка.
+#
+# Имя steer_vless сохранено, хотя теперь оно уже не про один vless: на него могли сослаться
+# собственные правила человека, а переименование сломало бы их молча.
+FW_ZONES="steer_vless:vless,xsteer:0 steer_iface:interface:1"
+
+zone_index() {  # ИМЯ_ЗОНЫ
+    uci show firewall 2>/dev/null | sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.name='$1'$/\1/p" | head -1
+}
+
+# В какой зоне уже лежит это устройство. Пусто — ни в какой.
+#
+# Нужно потому, что устройство в ДВУХ зонах fw4 не прощает, а устройство выхода kind=interface
+# человек мог назначить в зону сам — страница интерфейса в LuCI это предлагает. Молча добавив
+# его во вторую, мы получили бы отказ перезагрузки правил и неработающий фаервол целиком.
+fw_zone_of_device() {  # ИМЯ_УСТРОЙСТВА
+    uci show firewall 2>/dev/null |
+        sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.device=.*'\?$1'\?.*$/\1/p" | head -1
+}
+
+# Устройства выходов перечисленных видов. Имена спрашиваются у движка флагом --devices, а не
+# берутся как имена выходов: устройство выводится из имени выхода, НО может быть задано в спеке
+# явно, и тогда «имя выхода» — это молча неверный список ровно там, где по нему настраивают
+# фаервол. kind=direct отсеивается сам: устройства у него нет, и --devices ничего не печатает.
+fw_devices_of() {  # ВИДЫ_ЧЕРЕЗ_ЗАПЯТУЮ
+    for k in $(printf '%s' "$1" | tr ',' ' '); do
+        "$STEER" outputs --kind "$k" --devices --spec "$SPEC" 2>/dev/null
+    done | grep . | sort -u
+}
+
+fw_zone_devices() {  # ИНДЕКС
+    uci -q get "firewall.@zone[$1].device" 2>/dev/null | tr ' ' '\n' | grep . | sort -u
+}
+
+# Принять существующую зону за свою, если отличить её от нашей нельзя.
+#
+# Зона steer_vless заводилась и прежними версиями, когда расписок ещё не было. Без принятия она
+# навсегда осталась бы «чужой» и перестала бы убираться вместе с последним туннельным выходом —
+# ровно та накопительная беда, от которой и просили избавить.
+#
+# Условие строгое: в зоне нет НИ ОДНОГО устройства, которого мы не завели бы сами. Есть
+# постороннее — значит зону правили руками, и она чужая: дополняем, но не чистим и не удаляем.
+fw_adopt_if_ours() {  # ЗОНА ИНДЕКС СПИСОК_НУЖНЫХ
+    fw_noted "zone $1" && return 0
+    for d in $(fw_zone_devices "$2"); do
+        printf '%s\n' "$3" | grep -qx "$d" || return 1
+    done
+    fw_note "zone $1"
+    for d in $(fw_zone_devices "$2"); do fw_note "dev $1 $d"; done
+    return 0
+}
+
+# Одна зона: создать, дополнить, убрать ушедшее, удалить саму зону, когда её устройств не
+# осталось. Удаляет ТОЛЬКО записанное за нами. Печатает, что сделала; код 1 — изменения были.
+fw_zone_sync() {  # ЗОНА ВИДЫ MASQ
+    _z="$1"; _kinds="$2"; _masq="$3"
+    want="$(fw_devices_of "$_kinds")"
+    idx="$(zone_index "$_z")"
     changed=0
-    idx="$(zone_index)"
+    msg=""
+    skipped=""
+
+    # Устройства, которым зона УЖЕ назначена человеком, отсеиваются здесь — до решения
+    # создавать нашу. Иначе на роутере, где все туннели человек развёл по своим зонам,
+    # оставалась бы пустая зона с пробросом в неё: мусор, который выглядит как недоделка.
+    #
+    # Отсев именно тут, а не при добавлении: там мы бы уже создали зону, а отменять
+    # созданное — лишний путь, на котором легко оставить половину.
+    if [ -n "$want" ]; then
+        _keep=""
+        for d in $want; do
+            other="$(fw_zone_of_device "$d")"
+            if [ -n "$other" ] && { [ -z "$idx" ] || [ "$other" != "$idx" ]; }; then
+                skipped="$skipped $d"
+                continue
+            fi
+            _keep="$_keep$d
+"
+        done
+        want="$(printf '%s' "$_keep" | grep . | sort -u)"
+    fi
+    # Говорится СРАЗУ, а не в конце: после отсева зона может оказаться ненужной вовсе, и
+    # тогда работа кончится раньше, а человек так и не узнает, почему его туннель в нашу
+    # зону не попал. Молчание здесь читается как «сделали и не помогло».
+    [ -n "$skipped" ] &&
+        echo "устройства$skipped уже в своих зонах фаервола — оставлены как есть"
+
+    if [ -z "$want" ]; then
+        [ -n "$idx" ] || { fw_unnote "zone $_z"; return 0; }
+        fw_adopt_if_ours "$_z" "$idx" "" || return 0
+        # Сначала правила проброса на зону, потом сама зона: удалив зону первой, мы оставили бы
+        # forwarding, ссылающийся в пустоту, и fw4 отказался бы перезагружаться.
+        while :; do
+            f="$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.\(@forwarding\[[0-9]*\]\)\.dest='$_z'$/\1/p" | head -1)"
+            [ -n "$f" ] || break
+            uci -q delete "firewall.$f" || break
+            changed=1
+        done
+        for d in $(fw_zone_devices "$idx"); do fw_unnote "dev $_z $d"; done
+        uci -q delete "firewall.@zone[$idx]" && changed=1
+        if [ "$changed" = 1 ]; then
+            uci -q commit firewall
+            fw_unnote "zone $_z"
+            echo "зона $_z удалена — выходов с такими устройствами в спеке больше нет"
+        fi
+        return "$changed"
+    fi
+
     if [ -z "$idx" ]; then
         uci -q add firewall zone >/dev/null
-        uci -q set firewall.@zone[-1].name="$ZONE"
-        # input REJECT: зона нужна для транзита, а не для доступа к самому роутеру со
-        # стороны туннеля. forward ACCEPT — иначе смысла в ней нет.
+        uci -q set firewall.@zone[-1].name="$_z"
+        # input REJECT: зона нужна для транзита, а не для доступа к самому роутеру со стороны
+        # туннеля. forward ACCEPT — иначе смысла в ней нет.
         uci -q set firewall.@zone[-1].input='REJECT'
         uci -q set firewall.@zone[-1].output='ACCEPT'
         uci -q set firewall.@zone[-1].forward='ACCEPT'
-        uci -q set firewall.@zone[-1].masq='0'
+        uci -q set firewall.@zone[-1].masq="$_masq"
         uci -q set firewall.@zone[-1].mtu_fix='1'
-        idx="$(zone_index)"
+        idx="$(zone_index "$_z")"
+        [ -n "$idx" ] || return 0
+        fw_note "zone $_z"
         changed=1
+        msg="зона $_z создана (NAT: $_masq)"
+    else
+        fw_adopt_if_ours "$_z" "$idx" "$want" || true
     fi
-    [ -n "$idx" ] || return 1
-    for d in $devs; do
-        uci -q get "firewall.@zone[$idx].device" 2>/dev/null | grep -qw "$d" || {
-            uci -q add_list "firewall.@zone[$idx].device"="$d"
-            changed=1
-        }
+
+    have="$(fw_zone_devices "$idx")"
+    added=""
+    for d in $want; do
+        printf '%s\n' "$have" | grep -qx "$d" && continue
+        uci -q add_list "firewall.@zone[$idx].device"="$d"
+        fw_note "dev $_z $d"
+        added="$added $d"
+        changed=1
     done
-    # Разрешение lan -> зона. Без него зона есть, а трафик всё равно не идёт: политика
-    # forward у fw4 применяется к паре зон, а не к одной.
-    uci show firewall 2>/dev/null | grep -q "\.dest='$ZONE'" || {
+
+    # Убираем только записанное за нами: устройство, положенное в эту зону руками, спека не
+    # описывает и описывать не должна — вынести его значило бы поломать чужую настройку молча.
+    removed=""
+    for d in $have; do
+        printf '%s\n' "$want" | grep -qx "$d" && continue
+        fw_noted "dev $_z $d" || continue
+        uci -q del_list "firewall.@zone[$idx].device"="$d"
+        fw_unnote "dev $_z $d"
+        removed="$removed $d"
+        changed=1
+    done
+
+    # Разрешение lan -> зона. Без него зона есть, а трафик всё равно не идёт: политика forward
+    # у fw4 применяется к паре зон, а не к одной.
+    uci show firewall 2>/dev/null | grep -q "\.dest='$_z'" || {
         uci -q add firewall forwarding >/dev/null
         uci -q set firewall.@forwarding[-1].src='lan'
-        uci -q set firewall.@forwarding[-1].dest="$ZONE"
+        uci -q set firewall.@forwarding[-1].dest="$_z"
         changed=1
+        msg="${msg:+$msg, }проброс lan -> $_z добавлен"
     }
+
     if [ "$changed" = 1 ]; then
         uci -q commit firewall
+        [ -n "$added" ] && msg="${msg:+$msg, }добавлены устройства:$added"
+        [ -n "$removed" ] && msg="${msg:+$msg, }убраны ушедшие устройства:$removed"
+        fw_noted "zone $_z" || msg="$msg (зона $_z не наша — только дополняем, ничего не удаляем)"
+        echo "$msg"
+    fi
+    return "$changed"
+}
+
+# Привести фаервол в соответствие со спекой. Перезагрузка правил ОДНА на все зоны: fw4 reload
+# перестраивает набор целиком, и звать его на каждую зону значило бы дважды уронить транзит.
+fw_sync() {
+    any=0
+    for z in $FW_ZONES; do
+        _n="${z%%:*}"; _rest="${z#*:}"
+        _k="${_rest%%:*}"; _m="${_rest##*:}"
+        out="$(fw_zone_sync "$_n" "$_k" "$_m")" || any=1
+        # По строке: fw_zone_sync печатает и «что сделали», и «что не тронули», а один
+        # printf на многострочное значение оставил бы вторую строку без имени того, кто
+        # говорит, — в общем выводе apply она читалась бы как сообщение движка.
+        [ -n "$out" ] && printf '%s\n' "$out" | while IFS= read -r l; do
+            [ -n "$l" ] && printf 'splify2: %s\n' "$l"
+        done
+    done
+    if [ "$any" = 1 ]; then
         fw4 reload >/dev/null 2>&1 || /etc/init.d/firewall reload >/dev/null 2>&1
-        echo "splify2: устройства $devs добавлены в зону $ZONE (иначе fw4 не пропускает транзит)"
     fi
 }
 
@@ -746,8 +926,9 @@ BACKUP_IN="${BACKUP_IN:-/tmp/splify2-backup.in}"
 # каналов. Проверяется потому, что импорт делает спеку МЕНЕЕ доверенным источником, а на
 # том конце её строки попадают в командные строки: движок подставляет lan_device в
 # popen("ip -4 -o addr show ...") без фильтрации (I-003), а этот самый скрипт подставляет
-# имена выходов vless в `ubus call service signal {"instance":"vless_$o"}` и в
-# ensure_vless_zone. Пока спеку писал только root через spec_set, это была теоретическая
+# имена выходов vless в `ubus call service signal {"instance":"vless_$o"}`, а имена их
+# устройств — в настройку зоны фаервола (fw_sync). Пока спеку писал только root через
+# spec_set, это была теоретическая
 # слабость; принятый файл делает её входом.
 backup_safe_word() {  # СТРОКА
     case "$1" in
@@ -1150,9 +1331,11 @@ call)
         ;;
 
     apply)
-        # Зона для устройств vless — ДО apply: иначе первый же прогон объявит, что
-        # устройство никому не известно, и будет прав.
-        zone_msg="$(ensure_vless_zone "$("$STEER" outputs --kind vless --spec "$SPEC" 2>/dev/null | tr '\n' ' ')" 2>&1)"
+        # Зона туннельных устройств приводится в порядок ДО apply: иначе первый же прогон
+        # объявит, что устройство никому не известно, и будет прав. Синхронизация в обе
+        # стороны — добавить появившееся и убрать ушедшее вместе с самой зоной, когда
+        # туннельных выходов не осталось (см. fw_sync).
+        zone_msg="$(fw_sync 2>&1)"
         # То же доскачивание, что и при сохранении: спеку могли положить на диск в обход
         # интерфейса (splify2 spec_set — не единственный способ), да и файл мог быть удалён
         # уборкой между сохранением и применением.
