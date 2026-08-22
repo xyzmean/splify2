@@ -180,17 +180,29 @@ EOF
 # одном журнале значило бы проверять «что-то скачалось» вместо «скачалось это».
 cat > "$T/bin/curl" <<'EOF'
 #!/bin/sh
-out=""; url=""
+out=""; url=""; dump=""
 while [ $# -gt 0 ]; do
     case "$1" in
         -o) out="$2"; shift 2 ;;
+        # Заголовки ЗАПРОСА протоколируются отдельным файлом: подписка уходит с
+        # идентификатором устройства, и проверить это можно только так — в URL его нет.
+        -H) echo "$2" >> "$SANDBOX/curl.hdrs"; shift 2 ;;
+        # -D: сюда curl складывает заголовки ОТВЕТА. Стенд подставляет их через
+        # CURL_RESP_HDRS — иначе сигналы панели («HWID не назван», «лимит устройств»)
+        # нечем воспроизвести.
+        -D) dump="$2"; shift 2 ;;
         http*) url="$1"; shift ;;
         *) shift ;;
     esac
 done
 echo "$url" >> "$SANDBOX/curl.log"
-[ -n "$out" ] && printf 'remote.example\n10.1.0.0/16\n' > "$out"
-exit 0
+[ -n "$dump" ] && printf 'HTTP/2 200\r\n%s\r\n' "${CURL_RESP_HDRS:-}" > "$dump"
+if [ -n "$out" ]; then
+    if [ -n "${CURL_BODY:-}" ]; then printf '%s\n' "$CURL_BODY" > "$out"
+    else printf 'remote.example\n10.1.0.0/16\n' > "$out"
+    fi
+fi
+exit "${CURL_RC:-0}"
 EOF
 # steer: журналирует, ЧЕМ его позвали, и умеет отказать. Нужно ровно для одной мысли —
 # восстановление из архива проверяет спеку компилятором (`apply --dry-run`) и НЕ применяет
@@ -250,6 +262,16 @@ EOF
 printf '10.0.0.0/8\n'  > "$T/lists/news.lst"
 printf 'example.org\n' > "$T/lists/domains/news.lst"
 
+# Поддельное /sys/class/net. Три случая нарочно: физический порт с постоянным MAC (он и
+# должен победить), мост с ТЕМ ЖЕ адресом и без ссылки `device` (виртуальное — не наше) и
+# физический wifi с адресом «назначен локально» (такой ядро выдумывает, после перезагрузки
+# он другой).
+mkdir -p "$T/sys/class/net/eth0/device" "$T/sys/class/net/br-lan" "$T/sys/class/net/wlan0/device"
+printf '9C:53:22:1F:0A:BC\n' > "$T/sys/class/net/eth0/address"
+printf '9c:53:22:1f:0a:bc\n' > "$T/sys/class/net/br-lan/address"
+printf '0a:11:22:33:44:55\n' > "$T/sys/class/net/wlan0/address"
+printf 'Xiaomi AX3000T\n'    > "$T/etc/sysinfo-model"
+
 # ---- вызов настоящего скрипта -------------------------------------------------
 # Один вход на все проверки: разница между ними — только в фикстурах и переменных.
 rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; для перечня методов есть rpcd_list
@@ -266,8 +288,13 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         RPCD_INITD="$T/bin/initd-rpcd" \
         OPENWRT_RELEASE="${OPENWRT_RELEASE_FIXTURE:-$T/etc/openwrt_release}" \
         VLESS_DIRTY="$T/var/vless-dirty" \
-        UCI_SPLIFY2="${UCI_SPLIFY2_FIXTURE:-$T/etc/config/splify2}" \
         OBFS_DIRTY="$T/var/obfs-dirty" \
+        HWID_SYSNET="${HWID_SYSNET_FIXTURE:-$T/sys/class/net}" \
+        UCI_SPLIFY2="${UCI_SPLIFY2_FIXTURE:-$T/etc/config/splify2}" \
+        SYSINFO_MODEL="$T/etc/sysinfo-model" \
+        CURL_RESP_HDRS="${CURL_RESP_HDRS:-}" \
+        CURL_BODY="${CURL_BODY:-}" \
+        CURL_RC="${CURL_RC:-0}" \
         APPLIED="$T/etc/spec.applied.json" \
         BACKUP_OUT="$T/var/backup.out" \
         BACKUP_IN="$T/var/backup.in" \
@@ -707,7 +734,7 @@ rm -f "$T/var/vless-dirty" "$T/var/obfs-dirty" "$T/etc/spec.applied.json"
 # кончилось место, метод умирал БЕЗ ОТВЕТА: ни ok, ни ошибки, а интерфейс показывал «нет
 # ответа» на пустом месте. Урок записан в запуске 46 у backup_put и там же исправлен, а
 # sub_set и ui_set остались с прежней строкой — до этого стенда их ответ не проверялся вовсе,
-# потому что у пути /etc/config/splify2 не было шва.
+# потому что пути /etc/config/splify2 не было шва.
 check "путь файла настройки — шов, а не литерал" "1" \
       "$(grep -c '^UCI_SPLIFY2=' "$SCRIPT")"
 check "прямых путей /etc/config/splify2 в коде не осталось" "1" \
@@ -720,6 +747,77 @@ check "перенаправлением файл больше не заводи�
 out="$(UCI_SPLIFY2_FIXTURE=/proc/nonexistent/splify2 rpcd sub_set '{"url":"vless://k@h:443#n"}')"
 check "недоступный файл настройки — отказ с причиной, а не тишина" "yes" \
       "$(printf '%s' "$out" | jget error | grep -q 'кончилось место' && echo yes || echo no)"
+
+# ---- идентификатор устройства для панели подписки (HWID) --------------------------
+# Панель, привязывающая подписку к устройствам, требует заголовок `x-hwid`. Клиенту без него
+# она отвечает не отказом, а ЗАГЛУШКОЙ: HTTP 200 и пара законных ссылок vless:// на
+# 0.0.0.0:1, где сообщение спрятано в имя узла. То есть подписка «скачалась», узлы «есть»,
+# туннель не поднимется никогда.
+rm -f "$T/curl.hdrs" "$T/etc/sub.txt"
+out="$(rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
+check "подписка скачалась" "true" "$(printf '%s' "$out" | jget ok)"
+check "запрос несёт идентификатор устройства" "yes" \
+      "$(grep -qi '^x-hwid: splify2-' "$T/curl.hdrs" && echo yes || echo no)"
+# Постоянство — главное свойство: идентификатор считается из MAC, а не из файла, потому что
+# сброс к заводским настройкам стирает overlay целиком, а MAC живёт в устройстве.
+h1="$(grep -i '^x-hwid:' "$T/curl.hdrs" | head -1)"
+rm -f "$T/curl.hdrs"
+out="$(rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
+check "тот же роутер — тот же идентификатор" "$h1" \
+      "$(grep -i '^x-hwid:' "$T/curl.hdrs" | head -1)"
+# Берётся ФИЗИЧЕСКИЙ порт с постоянным адресом: мост исключён отсутствием ссылки `device`,
+# wifi — битом «назначен локально». Проверяется значением: sha256 от 'splify2:<mac>'.
+want="splify2-$(printf 'splify2:9c:53:22:1f:0a:bc' | sha256sum | cut -c1-20)"
+check "идентификатор выведен из MAC физического порта" "x-hwid: $want" \
+      "$(grep -i '^x-hwid:' "$T/curl.hdrs" | head -1 | tr -d '\r')"
+check "MAC наружу не уходит" "no" \
+      "$(grep -qi '9c:53:22' "$T/curl.hdrs" && echo yes || echo no)"
+check "устройство названо честно, а не выдуманным телефоном" "yes;yes" \
+      "$(grep -qi '^x-device-os: OpenWrt' "$T/curl.hdrs" && echo yes || echo no);$(grep -qi '^x-device-model: Xiaomi AX3000T' "$T/curl.hdrs" && echo yes || echo no)"
+check "sub_info отдаёт идентификатор до всякого скачивания" "$want" \
+      "$(rpcd sub_info | jget hwid)"
+
+# Сигналы панели читаются из ответных заголовков: без них отказ выглядел бы как «подписка
+# скачалась, узлы не работают».
+out="$(CURL_RESP_HDRS='x-hwid-active: true
+x-hwid-not-supported: true' rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
+check "«панель не увидела HWID» названо словами" "yes" \
+      "$(printf '%s' "$out" | jget warn | grep -q 'не увидела идентификатора' && echo yes || echo no)"
+out="$(CURL_RESP_HDRS='x-hwid-limit: true' rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
+check "«лимит устройств» назван вместе со следующим шагом" "yes" \
+      "$(printf '%s' "$out" | jget warn | grep -q 'освободите слот' && echo yes || echo no)"
+out="$(rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
+check "на исправном ответе предупреждения нет" "" "$(printf '%s' "$out" | jget warn)"
+
+# Роутер без пригодного MAC (только мост и локально назначенный wifi) — идентификатор не
+# выдумывается: пустая строка честнее случайного числа, которое после перезагрузки станет
+# другим устройством.
+rm -rf "$T/sys-nomac"; mkdir -p "$T/sys-nomac/br-lan" "$T/sys-nomac/wlan0/device"
+printf 'aa:bb:cc:dd:ee:ff\n' > "$T/sys-nomac/br-lan/address"
+printf '02:11:22:33:44:55\n' > "$T/sys-nomac/wlan0/address"
+check "без постоянного MAC идентификатор не выдумывается" "" \
+      "$(HWID_SYSNET_FIXTURE="$T/sys-nomac" rpcd sub_info | jget hwid)"
+rm -f "$T/curl.hdrs"
+out="$(HWID_SYSNET_FIXTURE="$T/sys-nomac" rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
+check "и заголовок тогда не уходит" "no" \
+      "$([ -f "$T/curl.hdrs" ] && echo yes || echo no)"
+check "но об этом сказано" "yes" \
+      "$(printf '%s' "$out" | jget warn | grep -q 'не ушёл' && echo yes || echo no)"
+
+# Вставленные руками ссылки vless:// никуда не ходят, значит и устройство называть некому.
+rm -f "$T/curl.hdrs"
+out="$(rpcd sub_set '{"url":"vless://key@host:443#node"}')"
+check "для ссылок vless:// запроса нет вовсе" "links;no" \
+      "$(printf '%s' "$out" | jget kind);$([ -f "$T/curl.hdrs" ] && echo yes || echo no)"
+
+# И обратное свойство: за СПИСКАМИ идентификатор устройства не уходит. Издателю списков
+# незачем знать, какой у человека роутер, — это другой сервер и другая надобность.
+rm -f "$T/curl.hdrs"
+rpcd list_fetch '{"id":"news","kind":"prefixes"}' >/dev/null
+check "за списками идентификатор устройства не уходит" "no" \
+      "$([ -s "$T/curl.hdrs" ] && echo yes || echo no)"
+printf '{"schema":1,"outputs":{},"channels":[]}\n' > "$T/etc/spec.json"
+rm -f "$T/var/vless-dirty" "$T/var/obfs-dirty"
 
 # ---- списки доскачиваются перед КАЖДОЙ проверкой спеки ----------------------------
 # Движок умирает на отсутствующем файле списка, и делает это в ДВУХ местах: при

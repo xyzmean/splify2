@@ -101,3 +101,43 @@ describe('validate.ts: isSubSource — две формы одного поля',
         expect(isSubSource('https://p.example/sub vless://u@a:443#x')).toBe(false)
     })
 })
+
+// Панели, привязывающие подписку к устройствам (Remnawave и родня), отвечают клиенту без
+// идентификатора НЕ отказом, а заглушкой: HTTP 200 и пара законных ссылок vless:// на
+// 0.0.0.0:1, где сообщение человеку спрятано в ИМЯ узла («Неправильный клиент»). Снаружи это
+// выглядит как «подписка скачалась, туннель не работает», то есть как поломка на нашей
+// стороне — поэтому и идентификатор роутера, и сказанное панелью обязаны быть на экране.
+describe('устройство в панели подписки', () => {
+    it('идентификатор роутера показан рядом с подпиской', async () => {
+        h.subInfo.mockResolvedValue({
+            present: true, kind: 'url', bytes: 15039, hwid: 'splify2-6202c56e402d4e29c012',
+        })
+        h.vlessNodes.mockResolvedValue({ output: 'vl', nodes: [], usable: 0, skipped: 0, foreign: 0 })
+        render(<VlessPanel name="vl" output={OUT} onChange={() => {}} saved />)
+        expect(await screen.findByText('splify2-6202c56e402d4e29c012')).toBeInTheDocument()
+        // Про MAC сказано прямо: человек имеет право знать, что уходит наружу, а что нет.
+        expect(screen.getByText(/MAC порта/)).toBeInTheDocument()
+    })
+
+    it('вставленным руками ссылкам панель не нужна — идентификатора нет', async () => {
+        h.subInfo.mockResolvedValue({
+            present: true, kind: 'links', bytes: 90, hwid: 'splify2-6202c56e402d4e29c012',
+        })
+        h.vlessNodes.mockResolvedValue({ output: 'vl', nodes: [], usable: 1, skipped: 0, foreign: 0 })
+        render(<VlessPanel name="vl" output={OUT} onChange={() => {}} saved />)
+        await screen.findByText(/Файл на роутере/)
+        expect(screen.queryByText('splify2-6202c56e402d4e29c012')).toBeNull()
+    })
+
+    it('сказанное панелью держится на экране, а не всплывашкой', async () => {
+        h.subSet.mockResolvedValue({
+            ok: true, bytes: 556, kind: 'url',
+            warn: 'панель не увидела идентификатора устройства и отдала заглушку вместо узлов',
+        })
+        mount()
+        const field = await screen.findByLabelText(/Ссылка на подписку|Источник узлов/)
+        fireEvent.input(field, { target: { value: 'https://panel.invalid/sub/abc' } })
+        fireEvent.click(submit())
+        expect(await screen.findByText(/заглушку вместо узлов/)).toBeInTheDocument()
+    })
+})
