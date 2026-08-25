@@ -236,5 +236,118 @@ check "откат вернул и ДОМЕННЫЙ список" "prev-domain.ex
 check "копий .prev после отката не осталось" "" \
       "$(find "$T/lists" -name '*.prev' 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
 
+# ---- просадка объёма: кратно поредевший список не применяется (R-085, I-118) ----
+#
+# Проверка формы («строки похожи на записи») пропускает файл, в котором записи выглядят
+# правильно, но их кратно меньше прежних. Ровно так выглядела беда I-118: одиннадцать
+# снапшотов из четырнадцати вышли с четвертью потерянного покрытия (geoblock.lst — 77
+# префиксов против 420), и по самим файлам это не видно — они правильные, просто
+# короткие. Роутер их принимал и применял: собственного рубежа у него не было вовсе,
+# всё держалось на том, что гейты генератора беду не пропустят.
+#
+# Прогон третий, со своим манифестом и своей спекой: здесь важны РАЗМЕРЫ файлов, а не
+# коллизия имён, поэтому имена списков нарочно разные.
+rm -rf "$T/lists" "$T/var/last-update" "$T/requested"
+mkdir -p "$T/lists/domains" "$T/serve"
+
+cat > "$T/manifest.src" <<EOF
+{
+  "base_url": "https://example.invalid/lists",
+  "categories":   [ { "id": "big",   "file": "big.lst" },
+                    { "id": "mild",  "file": "mild.lst" },
+                    { "id": "small", "file": "small.lst" } ],
+  "domain_lists": [ { "id": "dom",   "file": "domains/dom.lst" } ]
+}
+EOF
+
+cat > "$T/etc/spec.json" <<EOF
+{
+  "schema": 1,
+  "channels": [
+    { "name": "c1", "match": { "prefixes_files": ["$T/lists/big.lst",
+                                                  "$T/lists/mild.lst",
+                                                  "$T/lists/small.lst"],
+                               "domains_files":  ["$T/lists/domains/dom.lst"] } }
+  ]
+}
+EOF
+
+# curl отдаёт заранее положенное тело по имени файла: размерами иначе не поуправлять.
+cat > "$T/bin/curl" <<'EOF'
+#!/bin/sh
+out=""; url=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o) out="$2"; shift 2 ;;
+        http*) url="$1"; shift ;;
+        *) shift ;;
+    esac
+done
+echo "$url" >> "$SANDBOX/requested"
+case "$url" in
+    *categories.json) cp "$SANDBOX/manifest.src" "$out" ;;
+    *) body="$SANDBOX/serve/$(basename "$url")"
+       if [ -f "$body" ]; then cp "$body" "$out"; else printf '10.0.0.0/8\n' > "$out"; fi ;;
+esac
+EOF
+# steer снова соглашается: проверяется рубеж ДО применения, а не откат после.
+cat > "$T/bin/steer" <<'EOF'
+#!/bin/sh
+case "${1:-}" in
+    fit) src=""; for a in "$@"; do src="$a"; done; cat "$src" ;;
+    apply) exit 0 ;;
+esac
+exit 0
+EOF
+chmod +x "$T/bin/curl" "$T/bin/steer"
+
+cidrs() { awk -v n="$1" 'BEGIN { for (i = 0; i < n; i++) printf "10.%d.%d.0/24\n", int(i / 256), i % 256 }'; }
+
+cidrs 400 > "$T/lists/big.lst"      # прежний большой список
+cidrs 40  > "$T/serve/big.lst"      #   пришёл в десять раз короче — это авария
+cidrs 400 > "$T/lists/mild.lst"     # прежний большой список
+cidrs 300 > "$T/serve/mild.lst"     #   минус четверть — законная смена состава категории
+cidrs 8   > "$T/lists/small.lst"    # мелкий список
+cidrs 2   > "$T/serve/small.lst"    #   кратно меньше, но на восьми записях это обычная жизнь
+printf 'a.example\nb.example\n' > "$T/lists/domains/dom.lst"
+printf '# всё вычистили\n'      > "$T/serve/dom.lst"   # записей не осталось вовсе
+
+: > "$T/syslog"
+SANDBOX="$T" PATH="$T/bin:$PATH" STEER="$T/bin/steer" SPEC="$T/etc/spec.json" LISTS="$T/lists" MANIFEST="$T/etc/manifest.json" STAMP="$T/var/last-update" LOCK="$T/var/update.lock" \
+    sh "$SCRIPT" > "$T/out3" 2>&1
+rc3=$?
+
+check "кратно поредевший список не подменён" "400" \
+      "$(grep -c . "$T/lists/big.lst" 2>/dev/null)"
+check "в журнале названы и файл, и оба числа" "yes" \
+      "$(grep -q 'big.lst: записей в скачанном 40 против 400 прежних' "$T/syslog" && echo yes || echo no)"
+check "минус четверть — законное изменение, список обновлён" "300" \
+      "$(grep -c . "$T/lists/mild.lst" 2>/dev/null)"
+check "на мелком списке кратность ничего не значит — обновлён" "2" \
+      "$(grep -c . "$T/lists/small.lst" 2>/dev/null)"
+check "доменный список без записей не подменён" "2" \
+      "$(grep -c . "$T/lists/domains/dom.lst" 2>/dev/null)"
+check "остальные списки применены, обновление не свёрнуто целиком" "yes" \
+      "$(grep -q 'правила применены' "$T/syslog" && echo yes || echo no)"
+check "просадка объёма поднимает признак неудачи" "1" "$rc3"
+
+# ---- порог снят вручную: список применяется, пустой файл всё равно нет --------------
+#
+# Кратная просадка бывает и законной — издатель схлопнул категорию, и роутеру об этом
+# знать неоткуда. Тогда человек снимает порог (`uci set splify2.main.list_shrink_factor=0`,
+# здесь — тем же швом через окружение). Файл без записей это не отменяет: после такой
+# подмены канал не совпадёт ни с чем.
+rm -f "$T/var/last-update"
+cidrs 400 > "$T/lists/big.lst"
+printf 'a.example\nb.example\n' > "$T/lists/domains/dom.lst"
+: > "$T/syslog"
+SANDBOX="$T" PATH="$T/bin:$PATH" STEER="$T/bin/steer" SPEC="$T/etc/spec.json" LISTS="$T/lists" MANIFEST="$T/etc/manifest.json" STAMP="$T/var/last-update" LOCK="$T/var/update.lock" \
+    SHRINK_FACTOR=0 sh "$SCRIPT" > "$T/out4" 2>&1
+
+check "порог снят — кратно поредевший список применён" "40" \
+      "$(grep -c . "$T/lists/big.lst" 2>/dev/null)"
+check "порог снят, но файл без записей всё равно не применён" "2" \
+      "$(grep -c . "$T/lists/domains/dom.lst" 2>/dev/null)"
+
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo 'ЕСТЬ ПРОВАЛЫ')"
 [ "$fails" -eq 0 ]
