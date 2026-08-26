@@ -216,6 +216,29 @@ if command -v python3 >/dev/null 2>&1; then
     check "release.yml пригоден к запуску" "" "$(python3 tests/wfcheck.py "$WF" 2>&1)"
 fi
 
+# ---- настройка uci кладётся пакетом, а не создаётся на первом обращении --------
+# `uci set splify2.main.x` в несуществующий файл молча ничего не делает — на этом уже
+# терялась ссылка подписки, и rpcd с тех пор создаёт файл сам (uci_file). Это правильная
+# оборона, но не то место: настройка пакета объявляется системе через /etc/uci-defaults,
+# и тогда `uci show splify2` отвечает с первой секунды, а не после первого сохранения.
+# Файл обязан приехать в пакет и обязан быть запущен установкой — иначе он существует
+# только в дереве.
+UD=files/etc/uci-defaults/99-splify2
+check "uci-defaults есть в репозитории" "yes" "$([ -f "$UD" ] && echo yes || echo no)"
+check "build.sh кладёт uci-defaults" "1" "$(grep -c "cp $UD" build.sh)"
+# Считаются РАЗНЫЕ вещи, а не вхождения строки: скрипт обязан быть и запущен, и убран после
+# успеха — иначе он остаётся в системе и запускается на каждом обновлении пакета.
+#
+# Читается build.sh, а не build/scripts/post-install: второй — сгенерированный артефакт, его
+# каталог в .gitignore, и в свежем клоне его нет вовсе. Стенд, проверяющий артефакт сборки,
+# зелен только там, где сборку уже запускали.
+check "установка прогоняет uci-defaults" "1" \
+    "$(grep -c '\. /etc/uci-defaults/99-splify2' build.sh)"
+check "установка убирает uci-defaults после успеха" "1" \
+    "$(grep -c 'rm -f /etc/uci-defaults/99-splify2' build.sh)"
+check "uci-defaults заводит секцию main" "1" \
+    "$(grep -c "splify2.main=splify2" "$UD" 2>/dev/null)"
+
 printf '\n%d проверок пройдено' "$pass"
 if [ "$fail" -gt 0 ]; then printf ', %d ПРОВАЛЕНО\n' "$fail"; exit 1; fi
 printf '\nвсе проверки прошли\n'

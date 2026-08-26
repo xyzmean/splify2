@@ -66,6 +66,10 @@ cp -r luci/htdocs/luci-static/resources/view "$PKG/www/luci-static/resources/"
 cp -r luci/root/usr/share "$PKG/usr/"
 cp files/usr/libexec/rpcd/splify2 "$PKG/usr/libexec/rpcd/splify2"
 cp files/usr/sbin/splify2-update-lists "$PKG/usr/sbin/splify2-update-lists"
+# Настройка uci объявляется системе пакетом: почему именно так — в шапке самого файла.
+mkdir -p "$PKG/etc/uci-defaults"
+cp files/etc/uci-defaults/99-splify2 "$PKG/etc/uci-defaults/99-splify2"
+chmod 0755 "$PKG/etc/uci-defaults/99-splify2"
 chmod 0755 "$PKG/usr/libexec/rpcd/splify2" "$PKG/usr/sbin/splify2-update-lists"
 
 # Протокол xsteer: обработчик netifd и страница LuCI.
@@ -104,6 +108,13 @@ cat > build/scripts/post-install <<'EOF'
 # Расписание обновления списков. Раз в сутки со случайной минутой: если все роутеры
 # постучатся в одну секунду, это выглядит как всплеск на источнике, и первым страдает
 # тот, кто раздаёт списки бесплатно.
+# Настройка uci: скрипт uci-defaults штатно запускает загрузка системы (образ) или
+# postinst пакетного менеджера (установка). Свой postinst здесь написан руками, поэтому
+# запуск делаем сами и файл убираем после успеха — ровно как это делает default_postinst
+# в сборочной системе OpenWrt. Без этой строки файл существовал бы только в пакете.
+if [ -x /etc/uci-defaults/99-splify2 ]; then
+    ( . /etc/uci-defaults/99-splify2 ) >/dev/null 2>&1 && rm -f /etc/uci-defaults/99-splify2
+fi
 if ! grep -q splify2-update-lists /etc/crontabs/root 2>/dev/null; then
     mkdir -p /etc/crontabs
     printf '%s 5 * * * /usr/sbin/splify2-update-lists\n' "$(awk "BEGIN{srand();print int(rand()*60)}")" \
