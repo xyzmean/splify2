@@ -220,8 +220,11 @@ check "post-install сеть не перезапускает" "0" \
 RPCD=files/usr/libexec/rpcd/splify2
 check "self_update отдаёт вывод установщика и на успехе" "1" \
     "$(grep -c 'json_add_string output "\$PKG_OUT"' "$RPCD")"
+# Окно шире двух строк: у объявления появились ещё поля (`via` — путь, которым приехал
+# пакет при обходе закрытого githubusercontent), и на -A2 проверка ловила бы форматирование,
+# а не наличие поля.
 check "интерфейс объявляет это поле у splify2_install" "1" \
-    "$(grep -A2 'splify2Install: declare' ui/src/lib/rpc.ts | grep -c 'output?: string')"
+    "$(grep -A12 'splify2Install: declare' ui/src/lib/rpc.ts | grep -c 'output?: string')"
 check "карточка обновления его показывает" "1" \
     "$(grep -c 'r.output' ui/src/components/SelfUpdateCard.tsx)"
 

@@ -100,14 +100,21 @@ export default function CatalogTab({ onUseInRule }: Props) {
     async function fetchService(sv: ServiceEntry) {
         mark(sv.id)
         let bad = 0
+        // Каким путём приехали файлы. Пусто — прямым; иначе бэкенд обошёл закрытый
+        // githubusercontent, и сказать об этом надо здесь: обход медленнее, и человек
+        // иначе видит только затянувшееся ожидание (splify2#15).
+        let via = ''
         try {
             for (const p of sv.parts) {
-                const r = await rpc.listFetch(p.id, p.kind).catch(() => ({ ok: false }) as { ok: boolean })
+                const r = await rpc
+                    .listFetch(p.id, p.kind)
+                    .catch(() => ({ ok: false }) as { ok: boolean; via?: string })
                 if (!r.ok) bad++
+                if (r.via) via = r.via
             }
             setLocal((await rpc.localLists()).files || {})
             if (bad) notify(`${sv.name}: не обновилось частей — ${bad} из ${sv.parts.length}`, 'warning')
-            else notify(`${sv.name}: обновлено`)
+            else notify(`${sv.name}: обновлено${via ? ` (${via})` : ''}`)
         } finally {
             unmark(sv.id)
         }

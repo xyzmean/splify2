@@ -38,12 +38,23 @@ cat > "$SB/bin/wget" <<'STUB'
 url=""
 for a in "$@"; do case "$a" in http*) url="$a" ;; esac; done
 case "$url" in
+    # contents API — отдельная ветка: это ТРЕТИЙ путь к версии, и смешивать его с
+    # ответом про релизы значило бы проверять «api ответил» вместо «ответил чем».
+    *api.github.com*contents*) f="$SB/resp-contents" ;;
     *api.github.com*)          f="$SB/resp-api" ;;
     *raw.githubusercontent*)   f="$SB/resp-raw" ;;
+    *codeload.github.com*)     f="$SB/resp-codeload" ;;
     *)                         exit 1 ;;
 esac
 [ -f "$f" ] || exit 1
-cat "$f"
+# Файл, а не поток: архив ветки уезжает в файл (-qO ФАЙЛ), и cat в stdout его бы испортил.
+outf=""
+prev=""
+for a in "$@"; do
+    [ "$prev" = "-qO" ] && outf="$a"
+    prev="$a"
+done
+if [ -n "$outf" ] && [ "$outf" != "-" ]; then cat "$f" > "$outf"; else cat "$f"; fi
 STUB
 chmod +x "$SB/bin/wget"
 PATH="$SB/bin:$PATH"
@@ -51,7 +62,11 @@ export SB
 
 # Сама проверяемая функция. Вместе с ней берутся и переменные хостов: если API или RAW
 # в install.sh переименуют, стенд упадёт здесь, а не молча начнёт проверять пустоту.
-eval "$(sed -n '/^API=/p; /^RAW=/p; /^info()/p; /^latest() {/,/^}/p' "$ROOT/install.sh")"
+# Вместе с latest() достаётся и обход по хостам самого GitHub: третий путь к версии
+# идёт через него, и без этих функций стенд проверял бы отказ вместо обхода.
+eval "$(sed -n '/^API=/p; /^RAW=/p; /^CODELOAD=/p; /^DIST_BRANCH=/p; /^info()/p; /^gh_api_file() {/,/^}/p; /^gh_tarball() {/,/^}/p; /^gh_file() {/,/^}/p; /^latest() {/,/^}/p; /^fetch() {/,/^}/p; /^dl_url() {/,/^}/p' "$ROOT/install.sh")"
+TMP="$SB/tmp"; mkdir -p "$TMP"
+die() { printf 'die: %s\n' "$*" >&2; return 1; }
 check "функция latest достана из install.sh" "latest" "$(command -v latest >/dev/null && echo latest)"
 
 # ---- обычный путь: API отвечает -----------------------------------------------
@@ -87,12 +102,45 @@ check "нечисловой VERSION версией не считается" "" "
 printf ' 1.0.0-rc1\n' > "$SB/resp-raw"
 check "версия с хвостом обрезается до чисел" "1.0.0" "$(latest xyzmean/steer 2>/dev/null)"
 
+# ---- закрыт githubusercontent: третий путь к версии и к пакету -----------------
+#
+# splify2#15. `raw.` и `release-assets.` — это одни и те же адреса Fastly, поэтому у
+# человека с закрытым `githubusercontent.com` отваливались РАЗОМ второй путь к версии и
+# скачивание самих пакетов: splify2 нельзя было ни поставить, ни обновить. Хосты самого
+# GitHub при этом работают, и оба умеют отдать файл из ветки.
+rm -f "$SB/resp-api" "$SB/resp-raw" "$SB/resp-codeload"
+printf '2.0.1\n' > "$SB/resp-contents"
+check "версия взята через contents API, когда молчат и релизы, и raw" "2.0.1" \
+    "$(latest xyzmean/steer 2>/dev/null)"
+check "третий путь объявлен вслух" "1" \
+    "$(latest xyzmean/steer 2>&1 >/dev/null | grep -c 'contents API')"
+
+# contents API тоже молчит (лимит 60 в час за CGNAT) — остаётся архив ветки.
+rm -f "$SB/resp-contents" "$TMP"/*.tgz
+mkdir -p "$SB/tar/steer-main"
+printf '2.0.2\n' > "$SB/tar/steer-main/VERSION"
+( cd "$SB/tar" && tar -czf "$SB/resp-codeload" steer-main )
+check "версия вынута из архива ветки, когда молчит и contents API" "2.0.2" \
+    "$(latest xyzmean/steer 2>/dev/null)"
+
+# Пакет: прямая ссылка релиза не отдаёт (перенаправление на release-assets), тот же файл
+# лежит в ветке dist.
+rm -f "$TMP"/*.tgz
+mkdir -p "$SB/tar2/steer-dist"
+printf 'PKG\n' > "$SB/tar2/steer-dist/steer-2.0.2-1_x86_64.apk"
+( cd "$SB/tar2" && tar -czf "$SB/resp-codeload" steer-dist )
+rm -f "$SB/resp-contents"
+url="$(dl_url xyzmean/steer 2.0.2 steer-2.0.2-1_x86_64.apk)"
+check "прямая ссылка релиза не отдала — пакет взят из ветки dist" "PKG" \
+    "$(fetch "$url" "$SB/pkg.apk" xyzmean/steer steer-2.0.2-1_x86_64.apk >/dev/null 2>&1; cat "$SB/pkg.apk" 2>/dev/null)"
+rm -f "$SB/resp-codeload" "$TMP"/*.tgz
+
 # ---- отказ называет оба хоста -------------------------------------------------
 # Сообщение «нет релизов?» отправляло человека искать релиз, которого не было только у
 # него в сети. Проверяется, что в отказе названы оба источника и ручной путь.
 for what in движка интерфейса; do
-    check "отказ по версии $what называет оба хоста" "1" \
-        "$(grep -c "не удалось узнать версию $what: не ответили ни api.github.com, ни raw.githubusercontent.com" "$ROOT/install.sh")"
+    check "отказ по версии $what называет все три хоста" "1" \
+        "$(grep -c "не удалось узнать версию $what: не ответили ни api.github.com, ни raw.githubusercontent.com, ни codeload.github.com" "$ROOT/install.sh")"
 done
 check "отказ ведёт на страницу релизов" "2" \
     "$(grep -c 'Пакеты\|Пакет можно поставить руками' "$ROOT/install.sh")"

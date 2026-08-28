@@ -28,6 +28,8 @@ run() {  # ИМЯ КОМАНДА...
 run listsmatch sh "$ROOT/tests/listsmatch.sh"
 run rpcdmatch  sh "$ROOT/tests/rpcdmatch.sh"
 run pkgmatch   sh "$ROOT/tests/pkgmatch.sh"
+# Скачивание с обходом закрытого githubusercontent: лестница путей и её порядок (splify2#15).
+run fetchmatch sh "$ROOT/tests/fetchmatch.sh"
 # Определение версии в установщике: оба пути и оба отказа (R-048).
 run installmatch sh "$ROOT/tests/installmatch.sh"
 # Разбор конфигурации на странице протокола xsteer. Пропускается вслух, если нет quickjs.

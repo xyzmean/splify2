@@ -48,16 +48,11 @@ manifest_url() {
         printf '%s' "https://raw.githubusercontent.com/xyzmean/ru-bypass-ipsets/refs/heads/main/lists/categories.json"
 }
 
-download() {  # URL DEST
-    tmp="$2.tmp"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --max-time 120 -o "$tmp" "$1" || { rm -f "$tmp"; return 1; }
-    else
-        uclient-fetch -q -T 120 -O "$tmp" "$1" || { rm -f "$tmp"; return 1; }
-    fi
-    [ -s "$tmp" ] || { rm -f "$tmp"; return 1; }
-    mv "$tmp" "$2"
-}
+# Скачивание — общий файл с rpcd-объектом: обход закрытого издателя (splify2#15) обязан
+# быть у обеих половин один. Своя копия здесь уже приводила к тому, что каталог в
+# интерфейсе открывался, а ночное обновление тихо не приезжало.
+FETCH_TIMEOUT=${FETCH_TIMEOUT:-120}
+. "${FETCH_SH:-/usr/lib/splify2/fetch.sh}"
 
 # Сколько элементов набора эта коробка может держать. Измерено на 4C: загрузка стоит
 # ~1,3 КБ памяти на префикс, и резерв нужен, иначе загрузка сама себя и уронит.
@@ -181,7 +176,14 @@ mkdir -p "$LISTS" "$(dirname "$STAMP")" "$(dirname "$MANIFEST")"
 
 # Манифест первым: без свежего манифеста новые списки не найти, а старые могут
 # указывать на переехавшие файлы.
-download "$(manifest_url)" "$MANIFEST" || log "манифест не обновился, работаем со старым"
+if download "$(manifest_url)" "$MANIFEST"; then
+    # Обход называется вслух: иначе разница между «издатель доступен» и «издатель закрыт,
+    # спаслись обходом» видна только по времени прогона, а знать её нужно — это она
+    # объясняет, почему обновление вдруг стало занимать минуты.
+    [ -n "$FETCH_NOTE" ] && log "манифест: $FETCH_NOTE"
+else
+    log "манифест не обновился, работаем со старым${FETCH_NOTE:+ ($FETCH_NOTE)}"
+fi
 parse_manifest
 
 BUDGET="$(budget)"
@@ -204,10 +206,11 @@ for kind in ip domains; do
 
         new="$(mktemp /tmp/splify2-list.XXXXXX)"
         if ! download "$url" "$new"; then
-            log "$name: не скачался, оставлен прежний"
+            log "$name: не скачался, оставлен прежний${FETCH_NOTE:+ — $FETCH_NOTE}"
             echo failed >> "$LOCK/flags"
             continue
         fi
+        [ -n "$FETCH_NOTE" ] && log "$name: $FETCH_NOTE"
 
         # Записи в скачанном считаются ЗДЕСЬ, до подгонки: подгонка под память сама
         # может кратно сократить список, и тогда проверка объёма ниже обвиняла бы
