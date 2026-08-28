@@ -45,6 +45,16 @@ check "кодовое имя в VERSION барьер отвергает" "no" \
     "$(V='26.9 Andromeda'; case "$V" in ''|*[!0-9.]*) echo no ;; *) echo yes ;; esac)"
 
 # ---- сборка делает оба формата ------------------------------------------------
+# Общее скачивание едет в пакете, и обе половины начинаются с его подключения: пакет без
+# этого файла не запускает ни ubus-объект, ни ночное обновление, а выглядит это как
+# «раздел splify2 пропал из LuCI». Поэтому проверяется и укладка файла, и барьер на неё.
+check "fetch.sh укладывается в пакет" "1" \
+    "$(grep -c 'cp files/usr/lib/splify2/fetch.sh' build.sh)"
+check "на его отсутствие в пакете стоит барьер" "1" \
+    "$(grep -c 'test -s "$PKG/usr/lib/splify2/fetch.sh"' build.sh)"
+check "обе половины подключают именно его" "2" \
+    "$(grep -c 'FETCH_SH:-/usr/lib/splify2/fetch.sh' files/usr/libexec/rpcd/splify2 files/usr/sbin/splify2-update-lists | awk -F: '{s+=$2} END {print s}')"
+
 check "build.sh собирает apk" "1" "$(grep -c 'info name:luci-app-splify2' build.sh)"
 check "build.sh собирает ipk" "1" "$(grep -c 'Package: luci-app-splify2' build.sh)"
 check "build.sh берёт родной ipkg-build из OpenWrt" "1" \
