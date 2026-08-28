@@ -86,7 +86,13 @@ export const rpc = {
 
     /** Fetch a list's file so a channel can use it. Downloading is the management
      *  layer's job, not the engine's. */
-    listFetch: declare<{ ok: boolean; count?: number; error?: string }>('list_fetch', ['id', 'kind']),
+    listFetch: declare<
+        /** `via` приходит, только когда файл приехал НЕ прямым адресом: провайдеры
+         *  закрывают githubusercontent.com, и бэкенд достаёт список с хостов самого
+         *  GitHub или через туннель роутера (splify2#15). Показать это надо: обход идёт
+         *  дольше прямого пути, и без строки обновление выглядит как беспричинная пауза. */
+        { ok: boolean; count?: number; error?: string; via?: string }
+    >('list_fetch', ['id', 'kind']),
 
     /** Which list files are already on the router, with their local line count. The
      *  UI cannot tell a downloaded list from a merely offered one without this — and
@@ -186,7 +192,15 @@ export const rpc = {
      *  его надо и на успехе: именно там установщик говорит, что netifd держит прежний
      *  набор опций протокола и новые не действуют до перезапуска сети. */
     splify2Install: declare<
-        { ok: boolean; error?: string; installed?: string; reload_needed?: boolean; output?: string }
+        {
+            ok: boolean
+            error?: string
+            installed?: string
+            reload_needed?: boolean
+            output?: string
+            /** Каким путём приехал пакет, если прямая ссылка релиза не отдала — см. listFetch. */
+            via?: string
+        }
     >('splify2_install', ['version']),
 
     /** Версии движка, доступные в релизах. Спрашиваются у GitHub, а не зашиты: зашитая
@@ -218,6 +232,8 @@ export const rpc = {
         installed?: string
         restarted?: boolean
         removed?: boolean
+        /** Каким путём приехал пакет, если прямая ссылка релиза не отдала — см. listFetch. */
+        via?: string
     }>('steer_install', ['version', 'extended']),
 
     /** Подписка: где лежит, откуда взята, когда обновлялась.

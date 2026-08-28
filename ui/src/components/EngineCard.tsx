@@ -55,7 +55,10 @@ export default function EngineCard({ engine, releases, onInstalled }: Props) {
                     'warning',
                 )
             } else {
-                notify(`${t('Движок установлен')}: ${r.installed}`)
+                // via — путь, которым приехал пакет, когда прямая ссылка релиза не
+                // отдала (закрытый githubusercontent, splify2#15). Молчать нельзя:
+                // установка в этом случае идёт заметно дольше.
+                notify(`${t('Движок установлен')}: ${r.installed}${r.via ? ` (${r.via})` : ''}`)
             }
             onInstalled()
         } catch (e) {
