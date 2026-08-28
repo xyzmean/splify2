@@ -154,11 +154,10 @@ jobs:
             Установка одной строкой — она же поставит движок, если его нет:
 
             ```sh
-            sh -c "$(wget -qO- --header='Accept: application/vnd.github.raw' \
-                https://api.github.com/repos/xyzmean/splify2/contents/install.sh)"
+            sh -c "$(wget -qO- https://gitlab.com/xyzmean/splify2/-/raw/main/install.sh)"
             ```
 
-            Короткий вариант, если `githubusercontent.com` у вас открыт:
+            Если `githubusercontent.com` у вас открыт, работает и так:
 
             ```sh
             sh -c "$(wget -qO- https://raw.githubusercontent.com/xyzmean/splify2/main/install.sh)"
@@ -166,8 +165,9 @@ jobs:
 
             Если провайдер закрыл `githubusercontent.com`, файлы ниже не скачаются: прямая
             ссылка релиза ведёт на `release-assets.githubusercontent.com`. Те же пакеты
-            лежат в ветке [`dist`](https://github.com/xyzmean/splify2/tree/dist), и первая
-            команда берёт их оттуда сама.
+            лежат в ветке `dist` — на [зеркале](https://gitlab.com/xyzmean/splify2/-/tree/dist)
+            и [здесь](https://github.com/xyzmean/splify2/tree/dist), — и первая команда берёт
+            их оттуда сама.
 
             Пакет один на все роутеры: архитектуры здесь нет, весь бинарный код в движке.
             Форматов два: `.apk` для OpenWrt 24.10 и новее, `.ipk` для 23.05, 22.03 и
