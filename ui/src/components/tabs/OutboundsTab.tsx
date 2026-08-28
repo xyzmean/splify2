@@ -171,6 +171,9 @@ export default function OutboundsTab({ live }: { live: Live }) {
         try {
             for (const n of list) {
                 if (kinds[n] === 'direct') continue
+                /* Выход, который прямо сейчас перебирает узлы, не спрашиваем: устройства ещё
+                 * нет, мерить нечего, а шесть секунд таймаута он отнимет у остальных. */
+                if (live.status?.outputs?.[n]?.probe?.state === 'probing') continue
                 try {
                     const r = await rpc.outboundProbe(n)
                     setPings((p) => ({ ...p, [n]: { ms: r.ms, state: r.state } }))
@@ -275,6 +278,11 @@ export default function OutboundsTab({ live }: { live: Live }) {
                         const dev = s?.device
                         const stat = dev ? live.devs?.[dev] : undefined
                         const p = pings[name]
+                        /* Подъём выхода vless — состояние, у которого раньше не было имени:
+                         * устройство появляется только после перебора узлов подписки, и до
+                         * тех пор шапка говорила «нет устройства» — то же слово, что при
+                         * настоящем отказе (I-100). Движок теперь рассказывает, что делает. */
+                        const pr = s?.probe
                         /* Расшифровка выхода в одну строку: правило указывает на ИМЯ, и без
                          * второй половины строки имя ничего не значит для того, кто настраивал
                          * роутер месяц назад. */
@@ -309,7 +317,13 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                                 ? 'bg-muted-foreground'
                                                 : s?.up
                                                   ? 'bg-success'
-                                                  : 'bg-destructive'
+                                                  : pr?.state === 'probing'
+                                                    ? /* Идёт работа, а не поломка: акцент с
+                                                         пульсом, а не красный. Красная точка
+                                                         на исправном подъёме — это ровно та
+                                                         ложь, из-за которой завелась I-100. */
+                                                      'animate-pulse bg-primary'
+                                                    : 'bg-destructive'
                                         }`}
                                         aria-hidden="true"
                                     />
@@ -324,11 +338,15 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                         )}
                                         <span
                                             className={
-                                                p && p.ms < 0
-                                                    ? 'text-destructive'
-                                                    : p
-                                                      ? 'text-success'
-                                                      : 'text-muted-foreground'
+                                                pr?.state === 'probing'
+                                                    ? 'text-primary'
+                                                    : pr?.state === 'failed'
+                                                      ? 'text-destructive'
+                                                      : p && p.ms < 0
+                                                        ? 'text-destructive'
+                                                        : p
+                                                          ? 'text-success'
+                                                          : 'text-muted-foreground'
                                             }
                                         >
                                             {/* Пока идёт проверка — «…» вместо ПРЕЖНЕГО числа:
@@ -340,15 +358,25 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                                 же слово переносилось на свою строку. */}
                                             {o.kind === 'direct'
                                                 ? ''
-                                                : p
-                                                  ? p.ms < 0
-                                                      ? p.state
-                                                      : `${p.ms} мс`
-                                                  : pinging
-                                                    ? '…'
-                                                    : s?.up
-                                                      ? 'поднят'
-                                                      : 'нет устройства'}
+                                                : pr?.state === 'probing'
+                                                  ? /* Отклик здесь не спрашивают и не
+                                                       показывают: устройства ещё нет, мерить
+                                                       нечего. Номер узла отвечает на «сколько
+                                                       ещё ждать» лучше любого числа мс. */
+                                                    `проверяю узлы: ${pr.node ?? 1} из ${pr.total ?? 0}`
+                                                  : pr?.state === 'failed'
+                                                    ? pr.total
+                                                      ? 'ни один узел не ответил'
+                                                      : 'в подписке нет узлов'
+                                                    : p
+                                                      ? p.ms < 0
+                                                          ? p.state
+                                                          : `${p.ms} мс`
+                                                      : pinging
+                                                        ? '…'
+                                                        : s?.up
+                                                          ? 'поднят'
+                                                          : 'нет устройства'}
                                         </span>
                                     </span>
                                 </button>

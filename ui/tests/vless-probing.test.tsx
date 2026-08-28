@@ -1,0 +1,82 @@
+import { render, screen, waitFor } from '@testing-library/preact'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import OutboundsTab from '@/components/tabs/OutboundsTab'
+import { pending } from '@/lib/pending'
+import { rpc } from '@/lib/rpc'
+import { live } from './fixtures'
+import type { Spec, Status } from '@/lib/model'
+
+// I-100: устройство туннеля vless появляется только ПОСЛЕ перебора узлов подписки, а при
+// `node: -1` перебор идёт с таймаутом восемь секунд на узел. Пока он идёт, `up` ложно — то же
+// значение, что при настоящем отказе, — и раздел выходов показывал «нет устройства» в обоих
+// случаях. На трёх десятках нерабочих узлов исправная настройка минутами выглядела сломанной.
+//
+// Движок теперь рассказывает, что делает (поле `probe` в status). Проверяется, что интерфейс
+// различает три случая и что отсутствие поля возвращает прежний вид: «не знаем» не должно
+// читаться как «плохо».
+
+const SPEC: Spec = {
+    schema: 1,
+    outputs: { vl: { name: 'vl', kind: 'vless', sub_file: '/etc/steer/sub.txt', node: -1, on_fail: 'drop' } },
+    channels: [],
+}
+
+const status = (probe?: Status['outputs'][string]['probe']): Status => ({
+    schema: 1,
+    outputs: { vl: { name: 'vl', kind: 'vless', device: 'vl', up: false, probe } },
+    channels: [],
+})
+
+describe('подъём выхода vless виден словами (I-100)', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks()
+        pending.saved = SPEC
+        pending.applied = SPEC
+        vi.spyOn(rpc, 'devices').mockResolvedValue({ devices: [] })
+        vi.spyOn(rpc, 'engine').mockResolvedValue({ present: true, vless: true })
+        vi.spyOn(rpc, 'vlessNodes').mockRejectedValue(new Error('не спрашиваем'))
+        vi.spyOn(rpc, 'outboundProbe').mockResolvedValue({ output: 'vl', state: 'ok', ms: 42, how: '' } as never)
+    })
+
+    it('идёт перебор — назван номер узла и сколько их всего', async () => {
+        render(<OutboundsTab live={live({ status: status({ state: 'probing', node: 3, total: 26 }) })} />)
+        expect(await screen.findByText('проверяю узлы: 3 из 26')).toBeInTheDocument()
+        expect(screen.queryByText('нет устройства')).toBeNull()
+    })
+
+    it('перебор не спрашивают об отклике: устройства ещё нет, мерить нечего', async () => {
+        render(<OutboundsTab live={live({ status: status({ state: 'probing', node: 1, total: 26 }) })} />)
+        await screen.findByText('проверяю узлы: 1 из 26')
+        await waitFor(() => expect(rpc.engine).toHaveBeenCalled())
+        expect(rpc.outboundProbe).not.toHaveBeenCalled()
+    })
+
+    it('ни один узел не ответил — это отказ, а не «нет устройства»', async () => {
+        render(<OutboundsTab live={live({ status: status({ state: 'failed', total: 26 }) })} />)
+        expect(await screen.findByText('ни один узел не ответил')).toBeInTheDocument()
+    })
+
+    it('узлов в подписке нет — сказано именно это', async () => {
+        render(<OutboundsTab live={live({ status: status({ state: 'failed', total: 0 }) })} />)
+        expect(await screen.findByText('в подписке нет узлов')).toBeInTheDocument()
+    })
+
+    it('поля нет — прежний вид, а не догадка', async () => {
+        // Движок старее интерфейса, состояние устарело, писавший процесс мёртв — всё это
+        // «не знаем», и менять из-за этого приговор нельзя.
+        render(<OutboundsTab live={live({ status: status(undefined) })} />)
+        await waitFor(() => expect(rpc.outboundProbe).toHaveBeenCalled())
+        expect(await screen.findByText('42 мс')).toBeInTheDocument()
+    })
+
+    it('поднятый выход про перебор не говорит', async () => {
+        const up: Status = {
+            schema: 1,
+            outputs: { vl: { name: 'vl', kind: 'vless', device: 'vl', up: true } },
+            channels: [],
+        }
+        render(<OutboundsTab live={live({ status: up })} />)
+        await waitFor(() => expect(rpc.outboundProbe).toHaveBeenCalled())
+        expect(screen.queryByText(/проверяю узлы/)).toBeNull()
+    })
+})
