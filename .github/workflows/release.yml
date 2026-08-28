@@ -154,8 +154,8 @@ jobs:
             Установка одной строкой — она же поставит движок, если его нет:
 
             ```sh
-            wget -qO- https://codeload.github.com/xyzmean/splify2/tar.gz/refs/heads/main |
-                tar -xzO splify2-main/install.sh | sh
+            sh -c "$(wget -qO- --header='Accept: application/vnd.github.raw' \
+                https://api.github.com/repos/xyzmean/splify2/contents/install.sh)"
             ```
 
             Короткий вариант, если `githubusercontent.com` у вас открыт:

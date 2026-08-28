@@ -315,6 +315,12 @@ export const rpc = {
     uiGet: declare<{ state?: string }>('ui_get'),
     uiSet: declare<{ ok: boolean }>('ui_set', ['state']),
 
+    /** Чем роутер качает списки и обновления: `auto` — туннель последним, `always` — первым,
+     *  `off` — не трогать. `out` — выход, через который пойдёт скачивание; пусто означает,
+     *  что поднятого выхода нет и `always` ничего не даст (splify2#15). */
+    fetchMode: declare<{ mode?: string; out?: string }>('fetch_mode'),
+    fetchModeSet: declare<{ ok: boolean; mode?: string; error?: string }>('fetch_mode_set', ['mode']),
+
     /** Счётчики устройств из /sys/class/net.
      *
      *  Нужны потому, что счётчик канала в nft считает только путь «наружу»: он стоит на

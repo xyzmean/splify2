@@ -250,10 +250,30 @@ fetch_rules_flush() {  # ТАБЛИЦА
     done
 }
 
-# Повтор через туннель. Код 0 — файл на месте.
+# Как человек распорядился насчёт туннеля. Три состояния, а не два, и среднее — не
+# компромисс, а разные случаи:
+#
+#   auto   (по умолчанию) — туннель последним, когда не отдали ни прямой адрес, ни хосты
+#          самого GitHub. Роутеру, у которого издатель доступен, ничего не меняет.
+#   always — туннель ПЕРВЫМ. Это выбор человека, у которого GitHub закрыт насовсем: тогда
+#          файл едет по своему прямому адресу одним запросом, без contents API и без
+#          архива ветки — то есть один список вместо мегабайта.
+#   off    — туннель не трогать вовсе.
+#
+# `1` и `0` понимаются как auto и off: поле раньше было двоичным.
+fetch_mode() {
+    case "$(uci -q get splify2.main.fetch_via_tunnel 2>/dev/null)" in
+        always) printf 'always' ;;
+        off|0)  printf 'off' ;;
+        *)      printf 'auto' ;;
+    esac
+}
+
+# Скачивание через туннель. Код 0 — файл на месте.
 fetch_via_tunnel() {  # URL ФАЙЛ
-    if [ "$(uci -q get splify2.main.fetch_via_tunnel)" = 0 ]; then
-        FETCH_NOTE="напрямую не отдают, а повтор через туннель выключен (splify2.main.fetch_via_tunnel)"
+    _vt_mode="$(fetch_mode)"
+    if [ "$_vt_mode" = off ]; then
+        FETCH_NOTE="напрямую не отдают, а скачивание через туннель выключено (splify2.main.fetch_via_tunnel)"
         return 1
     fi
     _vt_host="$(fetch_host "$1")"
@@ -300,7 +320,11 @@ fetch_via_tunnel() {  # URL ФАЙЛ
         FETCH_NOTE="$_vt_host не ответил ни напрямую, ни через выход $_vt_name"
         return 1
     fi
-    FETCH_NOTE="$_vt_host напрямую не отдаёт — скачано через выход $_vt_name"
+    if [ "$_vt_mode" = always ]; then
+        FETCH_NOTE="скачано через выход $_vt_name — так настроено"
+    else
+        FETCH_NOTE="$_vt_host напрямую не отдаёт — скачано через выход $_vt_name"
+    fi
     return 0
 }
 
@@ -312,6 +336,15 @@ download() {  # URL ФАЙЛ
     FETCH_NOTE=""
     _dl_tmp="$2.tmp"
     rm -f "$_dl_tmp"
+    _dl_mode="$(fetch_mode)"
+
+    # Человек попросил ходить через туннель — значит туда и первым делом. Смысл именно в
+    # порядке: по своему прямому адресу файл едет одним запросом, тогда как обход по хостам
+    # GitHub — это лишний запрос, а в худшем случае архив ветки целиком ради одного списка.
+    if [ "$_dl_mode" = always ] && fetch_via_tunnel "$1" "$_dl_tmp"; then
+        mv "$_dl_tmp" "$2"
+        return 0
+    fi
 
     if [ "$FETCH_DIRECT_DEAD" != 1 ]; then
         if fetch_get "$1" "$_dl_tmp" && [ -s "$_dl_tmp" ]; then
@@ -326,7 +359,9 @@ download() {  # URL ФАЙЛ
         mv "$_dl_tmp" "$2"
         return 0
     fi
-    if fetch_via_tunnel "$1" "$_dl_tmp"; then
+    # В режиме always заход уже был выше — второй раз не ходим: он стоит ещё одного
+    # разрешения имени и опроса движка.
+    if [ "$_dl_mode" != always ] && fetch_via_tunnel "$1" "$_dl_tmp"; then
         FETCH_DIRECT_DEAD=1
         mv "$_dl_tmp" "$2"
         return 0

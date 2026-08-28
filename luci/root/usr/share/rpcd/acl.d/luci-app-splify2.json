@@ -28,7 +28,8 @@
           "net_info",
           "outbound_probe",
           "leases",
-          "splify2_versions"
+          "splify2_versions",
+          "fetch_mode"
         ]
       }
     },
@@ -50,7 +51,8 @@
           "engine_stop",
           "engine_start",
           "splify2_install",
-          "list_put"
+          "list_put",
+          "fetch_mode_set"
         ]
       }
     }

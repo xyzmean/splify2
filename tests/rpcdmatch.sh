@@ -825,7 +825,10 @@ check "путь файла настройки — шов, а не литерал
       "$(grep -c '^UCI_SPLIFY2=' "$SCRIPT")"
 check "прямых путей /etc/config/splify2 в коде не осталось" "1" \
       "$(grep -c '/etc/config/splify2' "$SCRIPT")"
-check "файл заводится одной функцией на все места" "3" \
+# Четыре места: sub_set, backup-подобная ветка настроек, ui_get|ui_set и fetch_mode|
+# fetch_mode_set. Число растёт вместе с методами, которые пишут в uci, — и это ровно тот
+# случай, когда барьер должен ломаться: новый метод обязан заводить файл той же функцией.
+check "файл заводится одной функцией на все места" "4" \
       "$(grep -c '^ *uci_file ||' "$SCRIPT")"
 check "перенаправлением файл больше не заводится" "0" \
       "$(grep -c ': > "\?/etc/config' "$SCRIPT")"
@@ -1209,6 +1212,71 @@ if command -v busybox >/dev/null 2>&1; then
 else
     printf 'busybox нет — чистку заголовков проверить нечем, пропускаю\n'
 fi
+
+# ---- откуда качать списки и обновления (splify2#15) --------------------------------
+# Обход по хостам самого GitHub спасает установку, но списки решает не лучшим образом:
+# contents API — лишний запрос, а при исчерпанном лимите приезжает архив ветки целиком ради
+# одного файла. Поэтому у человека есть выбор: ходить сразу через туннель. Здесь проверяется
+# не карточка, а её опора — что выбор доезжает до uci тем значением, которое понимает
+# скачивание, и что мусор отвергается ДО записи.
+#
+# uci на время этих проверок настоящий (файловый): общая заглушка отвечает отказом на всё, и
+# на ней круг «записал — прочитал» проверить нечем.
+cp "$T/bin/uci" "$T/bin/uci.stub"
+cat > "$T/bin/uci" <<'STUB'
+#!/bin/sh
+# Ровно то, чем пользуется скрипт: get/set/delete/commit по ключу вида a.b.c.
+store="$SANDBOX/uci.store"
+[ -f "$store" ] || : > "$store"
+q=0; [ "${1:-}" = "-q" ] && { q=1; shift; }
+cmd="${1:-}"; arg="${2:-}"
+case "$cmd" in
+    get)
+        v="$(grep "^$arg=" "$store" | tail -1)"
+        [ -n "$v" ] || exit 1
+        printf '%s\n' "${v#*=}"
+        ;;
+    set)
+        key="${arg%%=*}"; val="${arg#*=}"
+        [ "$key" = "$val" ] && val=""
+        grep -v "^$key=" "$store" > "$store.new" 2>/dev/null || : > "$store.new"
+        printf '%s=%s\n' "$key" "$val" >> "$store.new"
+        mv "$store.new" "$store"
+        ;;
+    delete)
+        grep -v "^$arg=" "$store" > "$store.new" 2>/dev/null || : > "$store.new"
+        mv "$store.new" "$store"
+        ;;
+    commit) ;;
+    *) exit 1 ;;
+esac
+exit 0
+STUB
+chmod +x "$T/bin/uci"
+rm -f "$T/uci.store"
+
+out="$(rpcd fetch_mode)"
+check "по умолчанию туннель последним, а не первым" "auto" "$(printf '%s' "$out" | jget mode)"
+check "имя выхода отдаётся полем, даже когда его нет" "" "$(printf '%s' "$out" | jget out)"
+
+out="$(rpcd fetch_mode_set '{"mode":"always"}')"
+check "выбор принят" "true;always" \
+      "$(printf '%s' "$out" | jget ok);$(printf '%s' "$out" | jget mode)"
+check "и записан именно тем значением, которое читает скачивание" "always" \
+      "$(grep '^splify2.main.fetch_via_tunnel=' "$T/uci.store" | tail -1 | cut -d= -f2)"
+check "прочитан обратно" "always" "$(rpcd fetch_mode | jget mode)"
+
+out="$(rpcd fetch_mode_set '{"mode":"через туннель"}')"
+check "чужое значение отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+check "в отказе названы допустимые" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'auto, always или off' && echo yes || echo no)"
+check "и в uci ничего не изменилось" "always" \
+      "$(grep '^splify2.main.fetch_via_tunnel=' "$T/uci.store" | tail -1 | cut -d= -f2)"
+
+out="$(rpcd fetch_mode_set '{"mode":"off"}')"
+check "туннель можно запретить вовсе" "off" "$(rpcd fetch_mode | jget mode)"
+
+mv "$T/bin/uci.stub" "$T/bin/uci"
 
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo "ЕСТЬ ПРОВАЛЫ: $fails")"
 [ "$fails" -eq 0 ]

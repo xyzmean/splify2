@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import EngineCard from '@/components/EngineCard'
 import SelfUpdateCard from '@/components/SelfUpdateCard'
 import BackupCard from '@/components/BackupCard'
+import FetchCard from '@/components/FetchCard'
 import { rpc } from '@/lib/rpc'
 import { human, type Live } from '@/lib/live'
 
@@ -261,6 +262,11 @@ export default function LogsTab({ live }: { live: Live }) {
                     )}
                 </CardContent>
             </Card>
+
+            {/* Откуда качать — рядом с движком и самообновлением: это про то, как коробка
+                берёт файлы из интернета, а не про маршрутизацию. Выше журнала его ставить
+                незачем, ниже архива — потеряется. */}
+            <FetchCard />
 
             <EngineCard engine={live.build} releases={live.releases} onInstalled={live.refresh} />
             <SelfUpdateCard info={live.selfUpdate} onInstalled={live.refresh} />
