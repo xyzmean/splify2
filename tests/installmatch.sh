@@ -37,12 +37,14 @@ cat > "$SB/bin/wget" <<'STUB'
 #!/bin/sh
 url=""
 for a in "$@"; do case "$a" in http*) url="$a" ;; esac; done
+echo "$url" >> "$SB/wget.log"
 case "$url" in
     # contents API — отдельная ветка: это ТРЕТИЙ путь к версии, и смешивать его с
     # ответом про релизы значило бы проверять «api ответил» вместо «ответил чем».
     *api.github.com*contents*) f="$SB/resp-contents" ;;
     *api.github.com*)          f="$SB/resp-api" ;;
     *raw.githubusercontent*)   f="$SB/resp-raw" ;;
+    *gitlab.com*)              f="$SB/resp-mirror" ;;
     *codeload.github.com*)     f="$SB/resp-codeload" ;;
     *)                         exit 1 ;;
 esac
@@ -64,7 +66,7 @@ export SB
 # в install.sh переименуют, стенд упадёт здесь, а не молча начнёт проверять пустоту.
 # Вместе с latest() достаётся и обход по хостам самого GitHub: третий путь к версии
 # идёт через него, и без этих функций стенд проверял бы отказ вместо обхода.
-eval "$(sed -n '/^API=/p; /^RAW=/p; /^CODELOAD=/p; /^DIST_BRANCH=/p; /^info()/p; /^gh_api_file() {/,/^}/p; /^gh_tarball() {/,/^}/p; /^gh_file() {/,/^}/p; /^latest() {/,/^}/p; /^fetch() {/,/^}/p; /^dl_url() {/,/^}/p' "$ROOT/install.sh")"
+eval "$(sed -n '/^API=/p; /^RAW=/p; /^CODELOAD=/p; /^MIRROR=/p; /^DIST_BRANCH=/p; /^info()/p; /^gl_file() {/,/^}/p; /^gh_api_file() {/,/^}/p; /^gh_tarball() {/,/^}/p; /^gh_file() {/,/^}/p; /^latest() {/,/^}/p; /^fetch() {/,/^}/p; /^dl_url() {/,/^}/p' "$ROOT/install.sh")"
 TMP="$SB/tmp"; mkdir -p "$TMP"
 die() { printf 'die: %s\n' "$*" >&2; return 1; }
 check "функция latest достана из install.sh" "latest" "$(command -v latest >/dev/null && echo latest)"
@@ -108,7 +110,14 @@ check "версия с хвостом обрезается до чисел" "1.0
 # человека с закрытым `githubusercontent.com` отваливались РАЗОМ второй путь к версии и
 # скачивание самих пакетов: splify2 нельзя было ни поставить, ни обновить. Хосты самого
 # GitHub при этом работают, и оба умеют отдать файл из ветки.
-rm -f "$SB/resp-api" "$SB/resp-raw" "$SB/resp-codeload"
+rm -f "$SB/resp-api" "$SB/resp-raw" "$SB/resp-codeload" "$SB/resp-contents"
+printf '2.0.0\n' > "$SB/resp-mirror"
+check "версия взята с зеркала, когда молчат и релизы, и raw" "2.0.0" \
+    "$(latest xyzmean/steer 2>/dev/null)"
+check "к хостам GitHub при живом зеркале не ходили" "" \
+    "$(: > "$SB/wget.log"; latest xyzmean/steer >/dev/null 2>&1; grep -c 'codeload\|contents' "$SB/wget.log" | sed 's/^0$//')"
+rm -f "$SB/resp-mirror"
+
 printf '2.0.1\n' > "$SB/resp-contents"
 check "версия взята через contents API, когда молчат и релизы, и raw" "2.0.1" \
     "$(latest xyzmean/steer 2>/dev/null)"
@@ -131,7 +140,11 @@ printf 'PKG\n' > "$SB/tar2/steer-dist/steer-2.0.2-1_x86_64.apk"
 ( cd "$SB/tar2" && tar -czf "$SB/resp-codeload" steer-dist )
 rm -f "$SB/resp-contents"
 url="$(dl_url xyzmean/steer 2.0.2 steer-2.0.2-1_x86_64.apk)"
-check "прямая ссылка релиза не отдала — пакет взят из ветки dist" "PKG" \
+printf 'PKG-MIRROR\n' > "$SB/resp-mirror"
+check "прямая ссылка релиза не отдала — пакет берётся с зеркала" "PKG-MIRROR" \
+    "$(fetch "$url" "$SB/pkg2.apk" xyzmean/steer steer-2.0.2-1_x86_64.apk >/dev/null 2>&1; cat "$SB/pkg2.apk" 2>/dev/null)"
+rm -f "$SB/resp-mirror"
+check "зеркало молчит — тогда ветка dist через хосты GitHub" "PKG" \
     "$(fetch "$url" "$SB/pkg.apk" xyzmean/steer steer-2.0.2-1_x86_64.apk >/dev/null 2>&1; cat "$SB/pkg.apk" 2>/dev/null)"
 rm -f "$SB/resp-codeload" "$TMP"/*.tgz
 
@@ -139,8 +152,8 @@ rm -f "$SB/resp-codeload" "$TMP"/*.tgz
 # Сообщение «нет релизов?» отправляло человека искать релиз, которого не было только у
 # него в сети. Проверяется, что в отказе названы оба источника и ручной путь.
 for what in движка интерфейса; do
-    check "отказ по версии $what называет все три хоста" "1" \
-        "$(grep -c "не удалось узнать версию $what: не ответили ни api.github.com, ни raw.githubusercontent.com, ни codeload.github.com" "$ROOT/install.sh")"
+    check "отказ по версии $what называет все источники" "1" \
+        "$(grep -c "не удалось узнать версию $what: не ответили ни api.github.com, ни raw.githubusercontent.com, ни зеркало на gitlab.com" "$ROOT/install.sh")"
 done
 check "отказ ведёт на страницу релизов" "2" \
     "$(grep -c 'Пакеты\|Пакет можно поставить руками' "$ROOT/install.sh")"

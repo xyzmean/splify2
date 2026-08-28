@@ -49,18 +49,17 @@ splify2 позволяет роутеру самому решать, какой 
 Одной строкой на роутере:
 
 ```sh
-sh -c "$(wget -qO- --header='Accept: application/vnd.github.raw' \
-    https://api.github.com/repos/xyzmean/splify2/contents/install.sh)"
+sh -c "$(wget -qO- https://gitlab.com/xyzmean/splify2/-/raw/main/install.sh)"
 ```
 
-Если `githubusercontent.com` у вас открыт, короче так:
+Если `githubusercontent.com` у вас открыт, работает и так:
 
 ```sh
 sh -c "$(wget -qO- https://raw.githubusercontent.com/xyzmean/splify2/main/install.sh)"
 ```
 
 Скрипт определит архитектуру и менеджер пакетов, поставит движок маршрутизации
-([steer](https://github.com/xyzmean/steer)), затем интерфейс, и включит службу.
+([steer](https://gitlab.com/xyzmean/steer)), затем интерфейс, и включит службу.
 
 <a name="закрытый-githubusercontent"></a>
 **Почему длинная команда стала главной.** У части провайдеров закрыт
@@ -68,14 +67,21 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/xyzmean/splify2/main/instal
 одних и тех же адресах Fastly (185.199.108–111.133). Отваливается разом и этот скрипт, и
 файлы релиза, которые он скачивает, — поставить splify2 с GitHub нельзя вообще. Хосты
 самого GitHub при этом работают (`github.com`, `api.github.com`, `codeload.github.com` —
-сеть 140.82.121.x). Из них `api.github.com` отдаёт один файл и никуда не перенаправляет,
-а `codeload` умеет только архив ветки целиком — поэтому в команде выше стоит первый.
+сеть 140.82.121.x), но содержимое они отдают по-разному.
 
-Тем же путём ходит и всё остальное, что роутер берёт с GitHub: списки, манифест каталога,
-пакеты при обновлении из интерфейса. Порядок такой — прямой адрес, затем тот же файл через
-`api.github.com` (а если тот исчерпал лимит — архивом через `codeload`), и только потом
-через туннель самого роутера. Чужие зеркала (`gh-proxy` и родня) не используются нигде:
-зеркалу пришлось бы доверить то, что роутер выполнит как правила маршрутизации.
+Поэтому у проекта есть вторая выкладка — зеркало на GitLab
+([splify2](https://gitlab.com/xyzmean/splify2), [steer](https://gitlab.com/xyzmean/steer),
+[ru-bypass-ipsets](https://gitlab.com/xyzmean/ru-bypass-ipsets)). Содержимое там то же самое,
+а сырой файл отдаётся с того же домена, на который вы и так зашли: отдельного хоста под
+содержимое, который закрывают отдельно, у GitLab просто нет.
+
+Тем же порядком ходит и всё остальное, что роутер берёт из интернета: списки, манифест
+каталога, пакеты при обновлении из интерфейса. Сначала прямой адрес, затем тот же файл с
+зеркала, затем хосты самого GitHub (`api.github.com` поштучно, а если он исчерпал лимит —
+архивом через `codeload`), и только потом через туннель самого роутера. Чужие зеркала
+(`gh-proxy` и родня) не используются нигде: зеркалу пришлось бы доверить то, что роутер
+выполнит как правила маршрутизации, — а GitLab здесь не чужое зеркало, а вторая выкладка
+того же владельца.
 
 **Если GitHub закрыт у вас насовсем**, обходные адреса каждый раз проходятся впустую, а
 второй из них тянет архив ветки ради одного списка. Тогда скажите роутеру ходить сразу
@@ -145,8 +151,8 @@ nft list table inet fw4 | grep splify                   # убедиться, ч
 продолжит и повторит предупреждение в конце, чтобы «Готово.» не читалось как «всё чисто».
 
 Если предпочитаете ставить руками, возьмите пакеты со страниц релизов
-[splify2](https://github.com/xyzmean/splify2/releases) и
-[steer](https://github.com/xyzmean/steer/releases):
+[splify2](https://gitlab.com/xyzmean/splify2/-/tree/dist) и
+[steer](https://gitlab.com/xyzmean/steer/-/tree/dist):
 
 ```sh
 # OpenWrt 24.10 и новее
@@ -172,7 +178,7 @@ opkg install --force-overwrite ./luci-app-splify2-<версия>-1_all.ipk
 ## Как устроено
 
 splify2 — это управляющий слой и интерфейс; пакеты маршрутизирует движок
-**[steer](https://github.com/xyzmean/steer)**.
+**[steer](https://gitlab.com/xyzmean/steer)**.
 
 ```
 Вы → интерфейс splify2 → ubus/rpcd → /etc/steer/spec.json → steer → nftables, ip route, DNS
@@ -193,9 +199,9 @@ splify2 — это управляющий слой и интерфейс; пак
 
 ### Откуда берутся списки
 
-- Списки маршрутизации (адреса и домены): [xyzmean/ru-bypass-ipsets](https://github.com/xyzmean/ru-bypass-ipsets)
+- Списки маршрутизации (адреса и домены): [xyzmean/ru-bypass-ipsets](https://gitlab.com/xyzmean/ru-bypass-ipsets)
 - Базовые доменные списки: [itdoginfo/allow-domains](https://github.com/itdoginfo/allow-domains)
-- Движок маршрутизации: [xyzmean/steer](https://github.com/xyzmean/steer)
+- Движок маршрутизации: [xyzmean/steer](https://gitlab.com/xyzmean/steer)
 
 ## Что где лежит
 
@@ -326,6 +332,6 @@ sh tests/run.sh            # все стенды
 
 - [docs/rpcd-api.md](docs/rpcd-api.md) — контракт объекта `splify2` в ubus/rpcd: каждый метод, его
   вход и выход, форма объекта ошибки, разделение прав. Нужен, если пишете что-то поверх splify2.
-- [Контракт steer](https://github.com/xyzmean/steer/blob/main/docs/contract-v1.md) — формат
+- [Контракт steer](https://gitlab.com/xyzmean/steer/-/blob/main/docs/contract-v1.md) — формат
   `spec.json`, формат состояния, ограничения, коды возврата. Нужен, чтобы понимать, что именно
   интерфейс пишет движку.

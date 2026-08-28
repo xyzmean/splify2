@@ -181,6 +181,8 @@ printf 'from-tarball\n' > "$T/tarsrc/ru-bypass-ipsets-main/lists/news.lst"
 printf 'PKG-from-tarball\n' > "$T/tarsrc/steer-dist/steer-1.2.1-1_x86_64.apk"
 ( cd "$T/tarsrc" && tar -czf "$T/lists.tgz" ru-bypass-ipsets-main )
 ( cd "$T/tarsrc" && tar -czf "$T/dist.tgz" steer-dist )
+printf 'from-mirror\n' > "$T/mirror-body"
+printf 'PKG-from-mirror\n' > "$T/mirror-pkg"
 printf 'from-api\n' > "$T/api-body"
 printf 'PKG-from-api\n' > "$T/api-pkg"
 
@@ -221,9 +223,38 @@ check "прямой путь ничего не объясняет — обход
 check "прямой путь не трогает маршруты" "" "$(grep -c . "$S/ip.log" | sed 's/^0$//')"
 check "обходных запросов не было вовсе" "1" "$(grep -c . "$S/curl.log")"
 
-# ---- 2. закрыт githubusercontent: выручает contents API ----------------------------
+# ---- 2. закрыт githubusercontent: первым выручает зеркало ---------------------------
+# Репозитории зеркалятся на GitLab тем же путём, и это самый дешёвый обход: сырой файл GitLab
+# отдаёт со СВОЕГО домена — без отдельного хоста под содержимое, без заголовка и без счётчика
+# запросов. Поэтому зеркало проверяется на месте: первым среди обходов, а не «где-нибудь».
 reset
 printf 'githubusercontent.com\n' > "$S/blocked-always"
+printf 'gitlab.com\t%s\n' "$T/mirror-body" > "$S/serve"
+res="$(run "$RAW")"
+check "закрытый издатель: файл взят с зеркала" "from-mirror" "$(cat "$T/got" 2>/dev/null)"
+check "адрес зеркала собран из того же владельца, репозитория, ветки и пути" \
+      "https://gitlab.com/xyzmean/ru-bypass-ipsets/-/raw/main/lists/news.lst" \
+      "$(grep -o 'https://gitlab.com[^ ]*' "$S/curl.log" | head -1)"
+check "зеркало названо человеку" "yes" \
+      "$(echo "$res" | grep -q 'NOTE1=.*зеркала gitlab.com' && echo yes || echo no)"
+check "до хостов GitHub дело не дошло" "" \
+      "$(grep -c 'api.github.com\|codeload' "$S/curl.log" | sed 's/^0$//')"
+check "заголовок сырого содержимого зеркалу не нужен" "" \
+      "$(grep 'gitlab.com' "$S/curl.log" | grep -c 'hdr=Accept' | sed 's/^0$//')"
+
+# Ссылка релиза уходит на зеркало в ту же ветку dist.
+reset
+printf 'githubusercontent.com\nreleases/download\n' > "$S/blocked-always"
+printf 'gitlab.com\t%s\n' "$T/mirror-pkg" > "$S/serve"
+res="$(run "$REL")"
+check "пакет релиза взят с зеркала из ветки dist" "PKG-from-mirror" "$(cat "$T/got" 2>/dev/null)"
+check "и адрес у него тот же по форме" \
+      "https://gitlab.com/xyzmean/steer/-/raw/dist/steer-1.2.1-1_x86_64.apk" \
+      "$(grep -o 'https://gitlab.com[^ ]*' "$S/curl.log" | head -1)"
+
+# ---- 2. закрыт githubusercontent: выручает contents API ----------------------------
+reset
+printf 'githubusercontent.com\ngitlab.com\n' > "$S/blocked-always"
 printf 'api.github.com\t%s\n' "$T/api-body" > "$S/serve"
 res="$(run "$RAW")"
 check "закрытый издатель: файл взят через api.github.com" "from-api" "$(cat "$T/got" 2>/dev/null)"
@@ -239,7 +270,7 @@ check "туннель не понадобился — маршруты не тр
 
 # ---- 3. API отказал (403 за CGNAT): выручает архив ветки ---------------------------
 reset
-printf 'githubusercontent.com\napi.github.com\n' > "$S/blocked-always"
+printf 'githubusercontent.com\ngitlab.com\napi.github.com\n' > "$S/blocked-always"
 printf 'codeload.github.com\t%s\n' "$T/lists.tgz" > "$S/serve"
 res="$(run "$RAW")"
 check "API молчит: файл вынут из архива ветки" "from-tarball" "$(cat "$T/got" 2>/dev/null)"
@@ -251,7 +282,7 @@ check "путь назван человеку" "yes" \
 
 # ---- 4. второй файл того же прогона не ждёт отказа заново --------------------------
 reset
-printf 'githubusercontent.com\n' > "$S/blocked-always"
+printf 'githubusercontent.com\ngitlab.com\n' > "$S/blocked-always"
 printf 'api.github.com\t%s\n' "$T/api-body" > "$S/serve"
 res="$(run "$RAW" "${RAW%news.lst}hodca.lst")"
 check "второй файл тоже приехал" "from-api" "$(cat "$T/got2" 2>/dev/null)"
@@ -263,7 +294,7 @@ reset
 # Прямая ссылка релиза закрыта не своим именем, а перенаправлением на
 # release-assets.githubusercontent.com — заглушка не ходит по перенаправлениям, поэтому
 # закрывается сам путь релиза.
-printf 'githubusercontent.com\nreleases/download\n' > "$S/blocked-always"
+printf 'githubusercontent.com\nreleases/download\ngitlab.com\n' > "$S/blocked-always"
 printf 'api.github.com\t%s\n' "$T/api-pkg" > "$S/serve"
 res="$(run "$REL")"
 check "пакет релиза взят из ветки dist" "PKG-from-api" "$(cat "$T/got" 2>/dev/null)"
@@ -272,14 +303,14 @@ check "имя файла и ветка подставлены верно" \
       "$(grep -o 'https://api.github.com[^ ]*' "$S/curl.log" | head -1)"
 
 reset
-printf 'githubusercontent.com\nreleases/download\napi.github.com\n' > "$S/blocked-always"
+printf 'githubusercontent.com\nreleases/download\ngitlab.com\napi.github.com\n' > "$S/blocked-always"
 printf 'codeload.github.com\t%s\n' "$T/dist.tgz" > "$S/serve"
 res="$(run "$REL")"
 check "пакет вынут и из архива ветки dist" "PKG-from-tarball" "$(cat "$T/got" 2>/dev/null)"
 
 # ---- 6. закрыт весь GitHub: остаётся туннель --------------------------------------
 reset
-printf 'api.github.com\ncodeload.github.com\n' > "$S/blocked-always"
+printf 'api.github.com\ncodeload.github.com\ngitlab.com\n' > "$S/blocked-always"
 printf 'githubusercontent.com\n' > "$S/blocked"
 res="$(run "$RAW")"
 check "закрыт весь GitHub: скачано через туннель" "direct:$RAW" "$(cat "$T/got" 2>/dev/null)"
@@ -296,7 +327,7 @@ check "выход назван человеку" "yes" \
 # ---- 7. отказы обхода через туннель ------------------------------------------------
 # Поднятого выхода нет: `up` снят, и таблицы у выхода нет.
 reset
-printf 'api.github.com\ncodeload.github.com\n' > "$S/blocked-always"
+printf 'api.github.com\ncodeload.github.com\ngitlab.com\n' > "$S/blocked-always"
 printf 'githubusercontent.com\n' > "$S/blocked"
 cat > "$S/status.json" <<'EOF'
 {"schema":1,"outputs":{"direct":{"kind":"direct"},"vl":{"kind":"vless","device":"vl","up":false,"table":300}},"channels":[]}
@@ -312,7 +343,7 @@ EOF
 
 # Издатель живёт на адресе узла подписки — увести это в туннель значит закольцевать движок.
 reset
-printf 'api.github.com\ncodeload.github.com\n' > "$S/blocked-always"
+printf 'api.github.com\ncodeload.github.com\ngitlab.com\n' > "$S/blocked-always"
 printf 'githubusercontent.com\n' > "$S/blocked"
 printf 'Name:\traw.githubusercontent.com\nAddress: 198.51.100.7\n' > "$S/dns/raw.githubusercontent.com"
 res="$(run "$RAW")"
@@ -323,7 +354,7 @@ check "правил при этом не добавлено" "" "$(grep -c '^rul
 
 # fake-IP: адрес выдан нашим же резолвером, обратного перевода для роутера нет.
 reset
-printf 'api.github.com\ncodeload.github.com\n' > "$S/blocked-always"
+printf 'api.github.com\ncodeload.github.com\ngitlab.com\n' > "$S/blocked-always"
 printf 'githubusercontent.com\n' > "$S/blocked"
 printf 'Name:\traw.githubusercontent.com\nAddress: 198.18.0.5\n' > "$S/dns/raw.githubusercontent.com"
 res="$(run "$RAW")"
@@ -334,7 +365,7 @@ printf 'Name:\traw.githubusercontent.com\nAddress: 185.199.108.133\nName:\traw.g
 
 # Выключено через uci — обход не делается, и об этом сказано.
 reset
-printf 'api.github.com\ncodeload.github.com\n' > "$S/blocked-always"
+printf 'api.github.com\ncodeload.github.com\ngitlab.com\n' > "$S/blocked-always"
 printf 'githubusercontent.com\n' > "$S/blocked"
 echo 0 > "$S/uci.splify2_main_fetch_via_tunnel"
 res="$(run "$RAW")"
@@ -376,7 +407,7 @@ EOF
 # второго захода в туннель быть не должно — он стоит ещё одного разрешения имени.
 reset
 echo always > "$S/uci.splify2_main_fetch_via_tunnel"
-printf 'githubusercontent.com\n' > "$S/blocked-always"
+printf 'githubusercontent.com\ngitlab.com\n' > "$S/blocked-always"
 printf 'api.github.com\t%s\n' "$T/api-body" > "$S/serve"
 res="$(run "$RAW")"
 check "always: не вышло туннелем — выручает обход по GitHub" "from-api" "$(cat "$T/got" 2>/dev/null)"
@@ -385,7 +416,7 @@ check "always: в туннель второй раз не ходили" "1" \
 
 # ---- 8. правила снимаются и когда повтор не удался ---------------------------------
 reset
-printf 'api.github.com\ncodeload.github.com\ngithubusercontent.com\n' > "$S/blocked-always"
+printf 'api.github.com\ncodeload.github.com\ngithubusercontent.com\ngitlab.com\n' > "$S/blocked-always"
 res="$(run "$RAW")"
 check "нечем спастись: отказ" "RC1=1" "$(echo "$res" | grep '^RC1=')"
 check "правило добавлялось" "yes" \

@@ -1,26 +1,29 @@
 #!/bin/sh
 # Установка splify2 на OpenWrt одной строкой.
 #
-#   sh -c "$(wget -qO- --header='Accept: application/vnd.github.raw' \
-#       https://api.github.com/repos/xyzmean/splify2/contents/install.sh)"
+#   sh -c "$(wget -qO- https://gitlab.com/xyzmean/splify2/-/raw/main/install.sh)"
 #
-# Раньше здесь стояла строка через raw.githubusercontent.com, и она осталась рабочей там,
-# где этот хост доступен:
+# Прежняя строка через raw.githubusercontent.com осталась рабочей там, где этот хост
+# доступен:
 #
 #   sh -c "$(wget -qO- https://raw.githubusercontent.com/xyzmean/splify2/main/install.sh)"
 #
-# Почему главной стала другая. splify2#15: у части аудитории провайдер закрыл
+# Почему главной стало зеркало. splify2#15: у части аудитории провайдер закрыл
 # `githubusercontent.com`, и закрыл его целиком — на тех же четырёх адресах Fastly
 # (185.199.108-111.133) живут и `raw.`, и `objects.`, и `release-assets.`. То есть разом
 # отваливается и этот скрипт, и файлы релиза, которые он скачивает: поставить splify2 с
-# GitHub нельзя вообще. Сам `github.com`, `api.github.com` и `codeload.github.com` стоят на
-# другой сети (140.82.121.x) и работают.
+# GitHub нельзя вообще.
 #
-# `api.github.com` отдаёт ОДИН файл (24 КБ) и никуда не перенаправляет; `codeload` умеет
-# только архив ветки целиком — 400 КБ ради того же файла, — поэтому он остался запасным
-# путём внутри скрипта, а не главной командой. Чужое зеркало вроде gh-proxy не годится
-# вовсе: зеркалу пришлось бы доверить то, что роутер выполнит и применит как правила
-# маршрутизации, и закрыли бы его следующим.
+# Репозитории зеркалятся на GitLab тем же путём, и там сырой файл отдаётся с ТОГО ЖЕ домена,
+# на который человек и так ходит: отдельного хоста под содержимое, который закрывают
+# отдельно, у GitLab просто нет. Плюс ни заголовка, ни счётчика запросов. Хосты самого
+# GitHub (`api.` и `codeload.`, сеть 140.82.121.x) остались запасными путями внутри
+# скрипта: у contents API 60 запросов в час на адрес, а codeload умеет только архив ветки
+# целиком — 400 КБ ради одного файла в 24 КБ.
+#
+# Чужое зеркало вроде gh-proxy не годится вовсе: зеркалу пришлось бы доверить то, что роутер
+# выполнит и применит как правила маршрутизации. GitLab здесь — не чужое зеркало, а вторая
+# выкладка того же владельца.
 #
 # Форма `sh -c "$(...)"`, а не `... | sh`: через конвейер установщику достаётся не терминал,
 # и вопрос про вариант движка он не задаёт вовсе — молча берёт расширенный.
@@ -45,6 +48,8 @@ RAW=https://raw.githubusercontent.com
 # `dist` — это выкладка релизного workflow: те же пакеты, что и в релизе, только доступные
 # по адресу, который не перенаправляет на Fastly.
 CODELOAD=https://codeload.github.com
+# Зеркало на GitLab: тот же владелец, тот же путь, сырой файл со своего домена.
+MIRROR=https://gitlab.com
 DIST_BRANCH=dist
 
 say()  { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -280,7 +285,7 @@ latest() {  # РЕПОЗИТОРИЙ
         if gh_file "$1" main VERSION "$vf"; then
             ver="$(sed -n 's/^[[:blank:]]*\([0-9][0-9.]*\).*/\1/p' "$vf" | head -1)"
             if [ -n "$ver" ]; then
-                info "версия $1 взята из VERSION в main через contents API: релизы и raw не ответили" >&2
+                info "версия $1 взята из VERSION в main обходом (зеркало или contents API): релизы и raw не ответили" >&2
             fi
         fi
     fi
@@ -296,6 +301,11 @@ latest() {  # РЕПОЗИТОРИЙ
 #
 # `--header` понимает uclient-fetch, которым wget на OpenWrt и является. Если в сборке
 # другой wget и флага он не знает, заход просто не удастся — дальше идёт архив.
+gl_file() {  # РЕПОЗИТОРИЙ ВЕТКА ПУТЬ ФАЙЛ
+    wget -qO "$4" "$MIRROR/$1/-/raw/$2/$3" 2>/dev/null || { rm -f "$4"; return 1; }
+    [ -s "$4" ] || { rm -f "$4"; return 1; }
+}
+
 gh_api_file() {  # РЕПОЗИТОРИЙ ВЕТКА ПУТЬ ФАЙЛ
     wget -qO "$4" --header='Accept: application/vnd.github.raw' \
         "$API/$1/contents/$3?ref=$2" 2>/dev/null || { rm -f "$4"; return 1; }
@@ -316,6 +326,7 @@ gh_tarball() {  # РЕПОЗИТОРИЙ ВЕТКА -> печатает путь
 # Один файл из ветки. Верхний каталог в архиве GitHub называется «репозиторий-ветка»,
 # без владельца — отсюда `${1#*/}`.
 gh_file() {  # РЕПОЗИТОРИЙ ВЕТКА ПУТЬ ФАЙЛ
+    gl_file "$@" && return 0
     gh_api_file "$@" && return 0
     _tb="$(gh_tarball "$1" "$2")" || return 1
     tar -xzOf "$_tb" "${1#*/}-$2/$3" > "$4" 2>/dev/null || { rm -f "$4"; return 1; }
@@ -331,7 +342,7 @@ fetch() {  # URL ФАЙЛ [РЕПОЗИТОРИЙ ИМЯ_В_DIST]
     fi
     rm -f "$2"
     if [ $# -ge 4 ] && gh_file "$3" "$DIST_BRANCH" "$4" "$2"; then
-        info "релизный файл не отдался — взят из ветки $DIST_BRANCH (api/codeload.github.com)"
+        info "релизный файл не отдался — взят из ветки $DIST_BRANCH (зеркало gitlab.com или хосты GitHub)"
         return 0
     fi
     die "не скачалось: $1"
@@ -344,7 +355,7 @@ dl_url() {  # РЕПОЗИТОРИЙ ВЕРСИЯ ИМЯ
 # ---- движок -------------------------------------------------------------------
 if [ "$have_steer" = no ]; then
     SV="$(latest "$REPO_STEER")"
-    [ -n "$SV" ] || die "не удалось узнать версию движка: не ответили ни api.github.com, ни raw.githubusercontent.com, ни codeload.github.com. Пакеты можно поставить руками с https://github.com/$REPO_STEER/releases"
+    [ -n "$SV" ] || die "не удалось узнать версию движка: не ответили ни api.github.com, ни raw.githubusercontent.com, ни зеркало на gitlab.com. Пакеты можно поставить руками с https://github.com/$REPO_STEER/releases"
     if [ "$WANT_EXT" = yes ]; then
         PKG="steer-extended-${SV}-1_${ARCH}.$(pm_ext)"
     else
@@ -360,7 +371,7 @@ fi
 
 # ---- интерфейс ----------------------------------------------------------------
 UV="$(latest "$REPO_UI")"
-[ -n "$UV" ] || die "не удалось узнать версию интерфейса: не ответили ни api.github.com, ни raw.githubusercontent.com, ни codeload.github.com. Пакет можно поставить руками с https://github.com/$REPO_UI/releases"
+[ -n "$UV" ] || die "не удалось узнать версию интерфейса: не ответили ни api.github.com, ни raw.githubusercontent.com, ни зеркало на gitlab.com. Пакет можно поставить руками с https://github.com/$REPO_UI/releases"
 UI_PKG="luci-app-splify2-${UV}-1_$(pm_suffix)"
 say ""
 say "Интерфейс splify2 $UV"
