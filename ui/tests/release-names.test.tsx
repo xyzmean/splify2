@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/preact'
 import { describe, expect, it } from 'vitest'
 import EngineCard from '@/components/EngineCard'
 import SelfUpdateCard from '@/components/SelfUpdateCard'
-import StatusRail from '@/components/StatusRail'
+import Rail from '@/components/Rail'
 import { cmpVersion, engineAction, releaseName } from '@/lib/engine'
 import { live } from './fixtures'
 
@@ -114,14 +114,16 @@ describe('выпадающие списки: показывается имя, с
         expect(screen.getByRole('button', { name: /Обновить до 26\.9 Andromeda/ })).toBeInTheDocument()
     })
 
-    it('и колонка состояния говорит то же слово, что карточка (I-038)', () => {
+    it('и подвал рельса говорит то же слово, что карточка (I-038)', () => {
         render(
-            <StatusRail
+            <Rail
                 live={live({
                     build: { present: true, vless: true, version: '1.2.0', arch: 'aarch64_cortex-a53' },
                     releases: RELEASES,
                 })}
-                onGoDiag={noop}
+                section="overview"
+                onSection={noop}
+                counts={{}}
             />,
         )
         expect(screen.getByRole('button', { name: 'Обновить до 26.9.1 Andromeda' })).toBeInTheDocument()
