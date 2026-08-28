@@ -1,7 +1,23 @@
 #!/bin/sh
 # Установка splify2 на OpenWrt одной строкой.
 #
+#   wget -qO- https://codeload.github.com/xyzmean/splify2/tar.gz/refs/heads/main |
+#       tar -xzO splify2-main/install.sh | sh
+#
+# Раньше здесь стояла короткая строка через raw.githubusercontent.com, и она осталась
+# рабочей там, где этот хост доступен:
+#
 #   sh -c "$(wget -qO- https://raw.githubusercontent.com/xyzmean/splify2/main/install.sh)"
+#
+# Почему главной стала длинная. splify2#15: у части аудитории провайдер закрыл
+# `githubusercontent.com`, и закрыл его целиком — на тех же четырёх адресах Fastly
+# (185.199.108-111.133) живут и `raw.`, и `objects.`, и `release-assets.`. То есть разом
+# отваливается и этот скрипт, и файлы релиза, которые он скачивает: поставить splify2 с
+# GitHub нельзя вообще. Сам `github.com`, `api.github.com` и `codeload.github.com` стоят на
+# другой сети (140.82.121.x) и работают. `codeload` отдаёт ветку архивом и никуда не
+# перенаправляет — поэтому и установка, и обновление ходят теперь через него, а не через
+# чужое зеркало вроде gh-proxy: зеркалу пришлось бы доверить то, что роутер выполнит и
+# применит как правила маршрутизации, и закрыли бы его следующим.
 #
 # Что делает: определяет архитектуру, предупреждает, если на роутере стоит splify первой
 # версии, ставит движок steer, если его нет, ставит интерфейс, включает службу. Ничего не
@@ -19,6 +35,11 @@ REPO_UI=xyzmean/splify2
 TMP=/tmp/splify2-install
 API=https://api.github.com/repos
 RAW=https://raw.githubusercontent.com
+# Обходной путь к тем же файлам, если `githubusercontent.com` закрыт (см. шапку). Ветка
+# `dist` — это выкладка релизного workflow: те же пакеты, что и в релизе, только доступные
+# по адресу, который не перенаправляет на Fastly.
+CODELOAD=https://codeload.github.com
+DIST_BRANCH=dist
 
 say()  { printf '\033[1m%s\033[0m\n' "$*"; }
 info() { printf '  %s\n' "$*"; }
@@ -248,11 +269,66 @@ latest() {  # РЕПОЗИТОРИЙ
             info "версия $1 взята из VERSION в main: api.github.com не ответил" >&2
         fi
     fi
+    if [ -z "$ver" ]; then
+        vf="$TMP/VERSION.$(echo "$1" | tr '/' '_').txt"
+        if gh_file "$1" main VERSION "$vf"; then
+            ver="$(sed -n 's/^[[:blank:]]*\([0-9][0-9.]*\).*/\1/p' "$vf" | head -1)"
+            if [ -n "$ver" ]; then
+                info "версия $1 взята из VERSION в main через contents API: релизы и raw не ответили" >&2
+            fi
+        fi
+    fi
     echo "$ver"
 }
 
-fetch() {  # URL ФАЙЛ
-    wget -qO "$2" "$1" || die "не скачалось: $1"
+# ---- обходной путь по хостам самого GitHub ------------------------------------
+# Один файл через api.github.com. Отвечает сам, с адреса 140.82.121.5, и никуда не
+# перенаправляет — проверено. Дешевле архива: для движка это 300 КБ вместо пяти мегабайт
+# (в релизе steer 24 пакета на шесть архитектур), а /tmp на роутере — это оперативная
+# память. Ограничения известны и потому путь не единственный: без ключа GitHub считает
+# 60 запросов в час на адрес, а файл больше мегабайта этот метод не отдаёт.
+#
+# `--header` понимает uclient-fetch, которым wget на OpenWrt и является. Если в сборке
+# другой wget и флага он не знает, заход просто не удастся — дальше идёт архив.
+gh_api_file() {  # РЕПОЗИТОРИЙ ВЕТКА ПУТЬ ФАЙЛ
+    wget -qO "$4" --header='Accept: application/vnd.github.raw' \
+        "$API/$1/contents/$3?ref=$2" 2>/dev/null || { rm -f "$4"; return 1; }
+    [ -s "$4" ] || { rm -f "$4"; return 1; }
+}
+
+# Ветка репозитория архивом. Тарбол кэшируется на прогон: за установку из одного
+# репозитория берутся и версия, и пакет, а качать по мегабайту дважды незачем.
+gh_tarball() {  # РЕПОЗИТОРИЙ ВЕТКА -> печатает путь к тарболу
+    _t="$TMP/$(echo "$1-$2" | tr '/' '_').tgz"
+    if [ ! -s "$_t" ]; then
+        wget -qO "$_t" "$CODELOAD/$1/tar.gz/refs/heads/$2" 2>/dev/null || { rm -f "$_t"; return 1; }
+        [ -s "$_t" ] || { rm -f "$_t"; return 1; }
+    fi
+    printf '%s' "$_t"
+}
+
+# Один файл из ветки. Верхний каталог в архиве GitHub называется «репозиторий-ветка»,
+# без владельца — отсюда `${1#*/}`.
+gh_file() {  # РЕПОЗИТОРИЙ ВЕТКА ПУТЬ ФАЙЛ
+    gh_api_file "$@" && return 0
+    _tb="$(gh_tarball "$1" "$2")" || return 1
+    tar -xzOf "$_tb" "${1#*/}-$2/$3" > "$4" 2>/dev/null || { rm -f "$4"; return 1; }
+    [ -s "$4" ] || { rm -f "$4"; return 1; }
+}
+
+# Скачать. Если файл есть и в ветке `dist` — при отказе прямого адреса берём оттуда:
+# прямой адрес релиза перенаправляет на `release-assets.githubusercontent.com`, то есть
+# ровно туда, куда закрыт путь.
+fetch() {  # URL ФАЙЛ [РЕПОЗИТОРИЙ ИМЯ_В_DIST]
+    if wget -qO "$2" "$1" 2>/dev/null && [ -s "$2" ]; then
+        return 0
+    fi
+    rm -f "$2"
+    if [ $# -ge 4 ] && gh_file "$3" "$DIST_BRANCH" "$4" "$2"; then
+        info "релизный файл не отдался — взят из ветки $DIST_BRANCH (api/codeload.github.com)"
+        return 0
+    fi
+    die "не скачалось: $1"
 }
 
 dl_url() {  # РЕПОЗИТОРИЙ ВЕРСИЯ ИМЯ
@@ -262,7 +338,7 @@ dl_url() {  # РЕПОЗИТОРИЙ ВЕРСИЯ ИМЯ
 # ---- движок -------------------------------------------------------------------
 if [ "$have_steer" = no ]; then
     SV="$(latest "$REPO_STEER")"
-    [ -n "$SV" ] || die "не удалось узнать версию движка: не ответили ни api.github.com, ни raw.githubusercontent.com. Пакеты можно поставить руками с https://github.com/$REPO_STEER/releases"
+    [ -n "$SV" ] || die "не удалось узнать версию движка: не ответили ни api.github.com, ни raw.githubusercontent.com, ни codeload.github.com. Пакеты можно поставить руками с https://github.com/$REPO_STEER/releases"
     if [ "$WANT_EXT" = yes ]; then
         PKG="steer-extended-${SV}-1_${ARCH}.$(pm_ext)"
     else
@@ -271,19 +347,19 @@ if [ "$have_steer" = no ]; then
     say ""
     say "Движок steer $SV"
     info "$PKG"
-    fetch "$(dl_url "$REPO_STEER" "$SV" "$PKG")" "$TMP/$PKG"
+    fetch "$(dl_url "$REPO_STEER" "$SV" "$PKG")" "$TMP/$PKG" "$REPO_STEER" "$PKG"
     pm_add "$TMP/$PKG" || die "движок не установился"
     info "установлен"
 fi
 
 # ---- интерфейс ----------------------------------------------------------------
 UV="$(latest "$REPO_UI")"
-[ -n "$UV" ] || die "не удалось узнать версию интерфейса: не ответили ни api.github.com, ни raw.githubusercontent.com. Пакет можно поставить руками с https://github.com/$REPO_UI/releases"
+[ -n "$UV" ] || die "не удалось узнать версию интерфейса: не ответили ни api.github.com, ни raw.githubusercontent.com, ни codeload.github.com. Пакет можно поставить руками с https://github.com/$REPO_UI/releases"
 UI_PKG="luci-app-splify2-${UV}-1_$(pm_suffix)"
 say ""
 say "Интерфейс splify2 $UV"
 info "$UI_PKG"
-fetch "$(dl_url "$REPO_UI" "$UV" "$UI_PKG")" "$TMP/$UI_PKG"
+fetch "$(dl_url "$REPO_UI" "$UV" "$UI_PKG")" "$TMP/$UI_PKG" "$REPO_UI" "$UI_PKG"
 pm_add "$TMP/$UI_PKG" || die "интерфейс не установился"
 info "установлен"
 

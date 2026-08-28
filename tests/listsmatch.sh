@@ -166,6 +166,7 @@ LISTS="$T/lists" \
 MANIFEST="$T/etc/manifest.json" \
 STAMP="$T/var/last-update" \
 LOCK="$T/var/update.lock" \
+FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
     sh "$SCRIPT" > "$T/out" 2>&1
 
 # ---- проверки ----------------------------------------------------------------
@@ -227,7 +228,7 @@ exit 0
 EOF
 chmod +x "$T/bin/steer"
 
-SANDBOX="$T" PATH="$T/bin:$PATH" STEER="$T/bin/steer" SPEC="$T/etc/spec.json" LISTS="$T/lists" MANIFEST="$T/etc/manifest.json" STAMP="$T/var/last-update" LOCK="$T/var/update.lock"     sh "$SCRIPT" > "$T/out2" 2>&1
+SANDBOX="$T" PATH="$T/bin:$PATH" STEER="$T/bin/steer" SPEC="$T/etc/spec.json" LISTS="$T/lists" MANIFEST="$T/etc/manifest.json" STAMP="$T/var/last-update" LOCK="$T/var/update.lock" FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh"     sh "$SCRIPT" > "$T/out2" 2>&1
 
 check "откат вернул адресный список" "prev-address.example/32" \
       "$(cat "$T/lists/news.lst" 2>/dev/null)"
@@ -313,7 +314,7 @@ printf 'a.example\nb.example\n' > "$T/lists/domains/dom.lst"
 printf '# всё вычистили\n'      > "$T/serve/dom.lst"   # записей не осталось вовсе
 
 : > "$T/syslog"
-SANDBOX="$T" PATH="$T/bin:$PATH" STEER="$T/bin/steer" SPEC="$T/etc/spec.json" LISTS="$T/lists" MANIFEST="$T/etc/manifest.json" STAMP="$T/var/last-update" LOCK="$T/var/update.lock" \
+SANDBOX="$T" PATH="$T/bin:$PATH" STEER="$T/bin/steer" SPEC="$T/etc/spec.json" LISTS="$T/lists" MANIFEST="$T/etc/manifest.json" STAMP="$T/var/last-update" LOCK="$T/var/update.lock" FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
     sh "$SCRIPT" > "$T/out3" 2>&1
 rc3=$?
 
@@ -341,7 +342,7 @@ rm -f "$T/var/last-update"
 cidrs 400 > "$T/lists/big.lst"
 printf 'a.example\nb.example\n' > "$T/lists/domains/dom.lst"
 : > "$T/syslog"
-SANDBOX="$T" PATH="$T/bin:$PATH" STEER="$T/bin/steer" SPEC="$T/etc/spec.json" LISTS="$T/lists" MANIFEST="$T/etc/manifest.json" STAMP="$T/var/last-update" LOCK="$T/var/update.lock" \
+SANDBOX="$T" PATH="$T/bin:$PATH" STEER="$T/bin/steer" SPEC="$T/etc/spec.json" LISTS="$T/lists" MANIFEST="$T/etc/manifest.json" STAMP="$T/var/last-update" LOCK="$T/var/update.lock" FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
     SHRINK_FACTOR=0 sh "$SCRIPT" > "$T/out4" 2>&1
 
 check "порог снят — кратно поредевший список применён" "40" \

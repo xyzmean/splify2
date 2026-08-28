@@ -83,11 +83,17 @@ cp -r luci/htdocs/luci-static/resources/view "$PKG/www/luci-static/resources/"
 cp -r luci/root/usr/share "$PKG/usr/"
 cp files/usr/libexec/rpcd/splify2 "$PKG/usr/libexec/rpcd/splify2"
 cp files/usr/sbin/splify2-update-lists "$PKG/usr/sbin/splify2-update-lists"
+# Скачивание общее для обеих половин: rpcd-объект и обновление списков подключают этот
+# файл. Забыть его — значит выкатить пакет, где ни одна из половин не запускается вовсе
+# (`. /usr/lib/splify2/fetch.sh` в шапке), поэтому ниже стоит барьер.
+mkdir -p "$PKG/usr/lib/splify2"
+cp files/usr/lib/splify2/fetch.sh "$PKG/usr/lib/splify2/fetch.sh"
 # Настройка uci объявляется системе пакетом: почему именно так — в шапке самого файла.
 mkdir -p "$PKG/etc/uci-defaults"
 cp files/etc/uci-defaults/99-splify2 "$PKG/etc/uci-defaults/99-splify2"
 chmod 0755 "$PKG/etc/uci-defaults/99-splify2"
 chmod 0755 "$PKG/usr/libexec/rpcd/splify2" "$PKG/usr/sbin/splify2-update-lists"
+chmod 0644 "$PKG/usr/lib/splify2/fetch.sh"
 
 # Протокол xsteer: обработчик netifd и страница LuCI.
 #
@@ -186,6 +192,12 @@ chmod +x build/scripts/post-install
 # варианта: install.sh при установке одной строкой и карточка в самом интерфейсе, если
 # движка нет. Отсутствие движка интерфейс переживает и говорит об этом прямо — это
 # предусмотренное состояние, а не поломка.
+# Барьер: обе половины начинаются со строки `. /usr/lib/splify2/fetch.sh`, и пакет без
+# этого файла не запускает НИ ОДНУ из них — ни ubus-объект, ни ночное обновление. Отказ
+# при этом выглядит как «раздел splify2 пропал из LuCI», то есть виной кажется интерфейс.
+test -s "$PKG/usr/lib/splify2/fetch.sh" || {
+    echo "в пакете нет usr/lib/splify2/fetch.sh — rpcd-объект не запустится"; exit 1; }
+
 mkdir -p "$OUT"
 docker run --rm -v "$PWD":/w -w /w alpine:latest sh -c \
     "apk add --no-cache apk-tools >/dev/null 2>&1; apk mkpkg \

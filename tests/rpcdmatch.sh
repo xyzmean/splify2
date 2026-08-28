@@ -297,7 +297,7 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
     printf '%s\n' "${2:-}" | env \
         SANDBOX="$T" \
         PATH="$T/bin:$PATH" \
-        JSHN_SH="$ROOT/tests/stub/jshn.sh" \
+        JSHN_SH="$ROOT/tests/stub/jshn.sh" FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
         STEER="$T/bin/steer" \
         SPEC="$T/etc/spec.json" \
         LISTS="$T/lists" \
@@ -329,7 +329,7 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
 }
 
 rpcd_list() {
-    env SANDBOX="$T" PATH="$T/bin:$PATH" JSHN_SH="$ROOT/tests/stub/jshn.sh" \
+    env SANDBOX="$T" PATH="$T/bin:$PATH" JSHN_SH="$ROOT/tests/stub/jshn.sh" FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
         sh "$SCRIPT" list 2>"$T/stderr"
 }
 
@@ -521,9 +521,11 @@ check "установленная версия названа, чтобы был
 
 reset_logs
 out="$(rpcd splify2_install '{"version":"0.7.7"}')"
+# Журнал теперь curl.log, а не wget.log: пакеты качаются общей download() (splify2#15),
+# у которой есть обход закрытого githubusercontent — своим wget этот метод больше не ходит.
 check "качается noarch-пакет интерфейса (R-042)" \
       "https://github.com/xyzmean/splify2/releases/download/v0.7.7/luci-app-splify2-0.7.7-1_noarch.apk" \
-      "$(grep 'luci-app-splify2' "$T/wget.log" | head -1)"
+      "$(grep 'luci-app-splify2' "$T/curl.log" | head -1)"
 check "установка интерфейса идёт тем же порядком: add первым (R-042)" \
       "add" "$(awk 'NR==1{print $1}' "$T/apk.log")"
 check "после установки rpcd перезапускается, иначе новый ACL не подхватится (R-042)" \
@@ -536,7 +538,7 @@ out="$(rpcd splify2_install '{"version":"нет-такой"}')"
 check "версия не вида X.Y.Z отвергается до скачивания (R-042)" \
       "false" "$(printf '%s' "$out" | jget ok)"
 check "при отказе по версии ничего не качалось (R-042)" \
-      "" "$(grep -c . "$T/wget.log" 2>/dev/null | sed 's/^0$//')"
+      "" "$(cat "$T/wget.log" "$T/curl.log" 2>/dev/null | grep -c . | sed 's/^0$//')"
 
 # ---- R-037: свои списки доменов и адресов -------------------------------------
 # Вопрос задан снаружи (splicicd#8): маршрутизировать можно только то, что опубликовал
