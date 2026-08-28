@@ -28,6 +28,12 @@ const DIAG = {
     ],
 }
 
+/** Пункт рельса. Разметка рельса ДВОЙНАЯ — колонка для широкого экрана и нижняя панель для
+ *  узкого, — и в браузере видна ровно одна: вторую убирает `display: none` из медиазапроса.
+ *  jsdom каскад не считает, поэтому здесь в дереве обе, и берётся первая (колонка). Проверять
+ *  обе одним запросом нечем и незачем: раскладки разные по построению. */
+const nav = (name: string | RegExp) => screen.getAllByRole('button', { name })[0]
+
 describe('рельс разделов вместо вкладок (Andromeda 26.9)', () => {
     beforeEach(() => {
         vi.restoreAllMocks()
@@ -45,8 +51,9 @@ describe('рельс разделов вместо вкладок (Andromeda 26.
 
     it('в рельсе шесть разделов, и это они', async () => {
         render(<Console />)
+        await screen.findByRole('heading', { name: 'Маршрутизация работает' })
         for (const name of ['Обзор', 'Правила', 'Выходы', 'Каталог', 'Диагностика', 'Система'])
-            expect(await screen.findByRole('button', { name: new RegExp(name) })).toBeInTheDocument()
+            expect(nav(new RegExp(name))).toBeInTheDocument()
     })
 
     it('находок нет — под вердиктом НЕ печатается одинокий нуль', async () => {
@@ -80,7 +87,7 @@ describe('рельс разделов вместо вкладок (Andromeda 26.
     it('счётчики трафика есть на обзоре и НЕ повторяются в диагностике', async () => {
         render(<Console />)
         expect(await screen.findByText('Куда идёт трафик')).toBeInTheDocument()
-        screen.getByRole('button', { name: /Диагностика/ }).click()
+        nav(/Диагностика/).click()
         await waitFor(() => expect(screen.queryByText('Логи steer')).toBeInTheDocument())
         expect(screen.queryByText('Куда идёт трафик')).toBeNull()
     })
@@ -88,11 +95,11 @@ describe('рельс разделов вместо вкладок (Andromeda 26.
     it('движок, самообновление и архив — в «Системе», а не в диагностике', async () => {
         render(<Console />)
         await screen.findByRole('heading', { name: 'Маршрутизация работает' })
-        screen.getByRole('button', { name: /Диагностика/ }).click()
+        nav(/Диагностика/).click()
         await waitFor(() => expect(screen.queryByText('Логи steer')).toBeInTheDocument())
         expect(screen.queryByText('Бекап настроек')).toBeNull()
 
-        screen.getByRole('button', { name: /Система/ }).click()
+        nav(/Система/).click()
         expect(await screen.findByText('Бекап настроек')).toBeInTheDocument()
     })
 
@@ -104,17 +111,19 @@ describe('рельс разделов вместо вкладок (Andromeda 26.
         for (const name of ['Правила', 'Выходы', 'Каталог', 'Диагностика', 'Система']) {
             /* Без якоря `^`: у пункта рельса в доступном имени есть ещё счётчик, а у части
                сборок — ведущий пробел от декоративной иконки. Проверяется заголовок, не имя. */
-            screen.getByRole('button', { name: new RegExp(name) }).click()
+            nav(new RegExp(name)).click()
             expect(await screen.findByRole('heading', { name, level: 1 })).toBeInTheDocument()
         }
     })
 
     it('движок и «Остановить всё» доступны с любого раздела: они про роутер целиком', async () => {
         render(<Console />)
-        expect(await screen.findByRole('button', { name: /Остановить всё/ })).toBeInTheDocument()
-        screen.getByRole('button', { name: /Каталог/ }).click()
+        // Кнопка тоже в двух местах: подвал колонки и блок под содержимым для узкого экрана.
+        await screen.findByRole('heading', { name: 'Маршрутизация работает' })
+        expect(screen.getAllByRole('button', { name: /Остановить всё/ }).length).toBeGreaterThan(0)
+        nav(/Каталог/).click()
         await waitFor(() =>
-            expect(screen.queryByRole('button', { name: /Остановить всё/ })).toBeInTheDocument(),
+            expect(screen.getAllByRole('button', { name: /Остановить всё/ }).length).toBeGreaterThan(0),
         )
     })
 })

@@ -8,7 +8,7 @@ import Rail from '@/components/Rail'
 import FirstRun from '@/components/FirstRun'
 import ApplyPill from '@/components/ApplyPill'
 import Overview from '@/components/sections/Overview'
-import OutputsStatus from '@/components/OutputsStatus'
+import EngineToggle from '@/components/EngineToggle'
 
 /** Пульт: рельс разделов слева, работа справа.
  *
@@ -72,7 +72,9 @@ export default function Console() {
             <div className="flex min-h-[32rem] flex-col lg:flex-row">
                 <Rail live={live} section={section} onSection={setSection} counts={counts} />
 
-                <main className="min-w-0 flex-1 p-4 lg:p-6">
+                {/* Отступ снизу на узком экране — под нижнюю панель разделов: без него последняя
+                    карточка уезжает под неё, и человек не видит, что страница кончилась. */}
+                <main className="min-w-0 flex-1 p-4 pb-24 lg:p-6">
                     {/* «Сохранено» — вспышка на полторы секунды после каждой УДАВШЕЙСЯ записи, а
                         не после правки: взамен кнопки эта галочка — единственное, по чему человек
                         судит, уехало ли что-нибудь на роутер. */}
@@ -106,12 +108,7 @@ export default function Console() {
                                 onGoOutbounds={() => setSection('outputs')}
                             />
                         )}
-                        {section === 'outputs' && (
-                            <div className="space-y-4">
-                                <OutputsStatus live={live} />
-                                <OutboundsTab live={live} />
-                            </div>
-                        )}
+                        {section === 'outputs' && <OutboundsTab live={live} />}
                         {section === 'catalog' && (
                             <CatalogTab
                                 onUseInRule={(l) => {
@@ -123,6 +120,14 @@ export default function Console() {
                         {section === 'diag' && <Diagnostics live={live} />}
                         {section === 'system' && <System live={live} />}
                     </Suspense>
+
+                    {/* «Остановить всё» на узком экране — здесь, а не в нижней панели: красной
+                        кнопке на всю ширину там не место, а прятать её нельзя (R-017). Под
+                        содержимым раздела, на любом из них — то же свойство «доступна всегда»,
+                        что у подвала рельса на широком экране. */}
+                    <div className="mt-6 lg:hidden">
+                        <EngineToggle live={live} variant="block" />
+                    </div>
 
                     <div className="mt-6 border-t border-border pt-3 text-right text-xs text-muted-foreground">
                         powered by{' '}

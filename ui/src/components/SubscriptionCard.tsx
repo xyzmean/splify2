@@ -75,9 +75,11 @@ export default function SubscriptionCard() {
 
     return (
         <Card>
-            <CardHeader className="flex-row items-baseline justify-between gap-2 space-y-0">
+            {/* Строка переносится: «обновлено 12 мин назад» плюс кнопка не влезают рядом с
+                заголовком в 390 пикселях, и кнопка уезжала за край карточки. */}
+            <CardHeader className="flex-row flex-wrap items-baseline justify-between gap-x-2 gap-y-1 space-y-0">
                 <CardTitle>Подписка</CardTitle>
-                <div className="flex shrink-0 items-baseline gap-2 text-xs text-muted-foreground">
+                <div className="flex items-baseline gap-2 text-xs text-muted-foreground">
                     {v?.age && <span>обновлено {v.age}</span>}
                     {/* Кнопка есть и когда числа свежие: «обновлено 3 мин назад» — это повод
                         не ходить наружу самим, а не запрет человеку спросить. У вставленных

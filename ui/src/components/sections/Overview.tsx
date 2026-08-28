@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import SubscriptionCard from '@/components/SubscriptionCard'
 import { rpc } from '@/lib/rpc'
 import { human, type DiagCheck, type Live } from '@/lib/live'
+import { Hint } from '@/components/ui/hint'
 import { type SectionId } from '@/lib/sections'
 
 /** Обзор: ответ на «работает ли» и «куда идёт трафик» — и больше ничего.
@@ -292,19 +293,67 @@ export default function Overview({
  *  роутере с 64 МБ это разница между «работает» и «не влезло». */
 function TrafficCard({ live }: { live: Live }) {
     const channels = live.status?.channels || []
+    /* Одна подготовка чисел на две раскладки: таблицу на широком экране и строки на узком.
+     * Считать их дважды значило бы завести два места, которые разойдутся. */
+    const rows = channels.map((c) => {
+        const sp = live.speed.ch[c.name]
+        return {
+            name: c.name,
+            out: c.out,
+            inKernel: c.live,
+            down: c.down_bytes === undefined ? '—' : human(c.down_bytes),
+            downTitle:
+                c.down_bytes === undefined
+                    ? 'движок не считает встречный путь'
+                    : `${c.down_bytes.toLocaleString('ru-RU')} Б, пакетов ${(c.down_packets ?? 0).toLocaleString('ru-RU')}`,
+            up: human(c.bytes ?? 0),
+            upTitle: `${(c.bytes ?? 0).toLocaleString('ru-RU')} Б, пакетов ${(c.packets ?? 0).toLocaleString('ru-RU')}`,
+            rateDown: sp?.down || null,
+            rateUp: sp?.up || null,
+        }
+    })
     return (
         <Card>
-            <CardHeader className="flex-row items-baseline justify-between gap-2 space-y-0">
+            <CardHeader className="flex-row flex-wrap items-baseline justify-between gap-x-2 gap-y-1 space-y-0">
                 <CardTitle>Куда идёт трафик</CardTitle>
                 <span className="shrink-0 text-xs text-muted-foreground">с загрузки роутера</span>
             </CardHeader>
             <CardContent className="overflow-x-auto">
-                {channels.length === 0 ? (
+                {rows.length === 0 ? (
                     <p className="py-4 text-center text-sm text-muted-foreground">
                         Правил нет — весь трафик идёт напрямую.
                     </p>
                 ) : (
-                    <table className="w-full min-w-[26rem] text-[13px]">
+                    <>
+                    {/* Узкий экран: строки, а не таблица. Четыре столбца в 390 пикселях не
+                        помещаются, и последние два уезжали за край — прокрутка внутри карточки
+                        на телефоне читается как «карточка обрезалась», а не как приглашение
+                        прокрутить. */}
+                    <ul className="divide-y divide-border md:hidden">
+                        {rows.map((r) => (
+                            <li key={r.name} className="py-2">
+                                <div className="flex flex-wrap items-baseline gap-x-1.5">
+                                    <span>{r.name}</span>
+                                    <span className="text-muted-foreground">→ {r.out}</span>
+                                    {!r.inKernel && (
+                                        <span className="text-[11px] text-destructive">нет в ядре</span>
+                                    )}
+                                </div>
+                                <div className="mt-0.5 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
+                                    <span title={r.downTitle}>↓ {r.down}</span>
+                                    <span title={r.upTitle}>↑ {r.up}</span>
+                                    {(r.rateDown || r.rateUp) && (
+                                        <span className="text-foreground">
+                                            сейчас {r.rateDown && <>↓ {r.rateDown}</>}
+                                            {r.rateDown && r.rateUp && ' · '}
+                                            {r.rateUp && <>↑ {r.rateUp}</>}
+                                        </span>
+                                    )}
+                                </div>
+                            </li>
+                        ))}
+                    </ul>
+                    <table className="hidden w-full min-w-[26rem] text-[13px] md:table">
                         <thead>
                             <tr className="text-left text-[11px] text-muted-foreground">
                                 <th className="pb-2 font-normal">набор → выход</th>
@@ -314,43 +363,25 @@ function TrafficCard({ live }: { live: Live }) {
                             </tr>
                         </thead>
                         <tbody>
-                            {channels.map((c) => (
-                                <tr key={c.name} className="border-t border-border">
+                            {rows.map((r) => (
+                                <tr key={r.name} className="border-t border-border">
                                     <td className="py-1.5">
-                                        {c.name}
-                                        <span className="text-muted-foreground"> → {c.out}</span>
-                                        {!c.live && (
+                                        {r.name}
+                                        <span className="text-muted-foreground"> → {r.out}</span>
+                                        {!r.inKernel && (
                                             <span className="ml-2 text-[11px] text-destructive">
                                                 нет в ядре
                                             </span>
                                         )}
                                     </td>
-                                    <td
-                                        className="py-1.5 text-right"
-                                        title={
-                                            c.down_bytes === undefined
-                                                ? 'движок не считает встречный путь'
-                                                : `${c.down_bytes.toLocaleString('ru-RU')} Б, пакетов ${(c.down_packets ?? 0).toLocaleString('ru-RU')}`
-                                        }
-                                    >
-                                        {c.down_bytes === undefined ? '—' : human(c.down_bytes)}
-                                    </td>
-                                    <td
-                                        className="py-1.5 text-right"
-                                        title={`${(c.bytes ?? 0).toLocaleString('ru-RU')} Б, пакетов ${(c.packets ?? 0).toLocaleString('ru-RU')}`}
-                                    >
-                                        {human(c.bytes ?? 0)}
-                                    </td>
+                                    <td className="py-1.5 text-right" title={r.downTitle}>{r.down}</td>
+                                    <td className="py-1.5 text-right" title={r.upTitle}>{r.up}</td>
                                     <td className="py-1.5 whitespace-nowrap text-right text-[11px]">
-                                        {live.speed.ch[c.name]?.down || live.speed.ch[c.name]?.up ? (
+                                        {r.rateDown || r.rateUp ? (
                                             <>
-                                                {live.speed.ch[c.name].down && (
-                                                    <>↓ {live.speed.ch[c.name].down}</>
-                                                )}
-                                                {live.speed.ch[c.name].down && live.speed.ch[c.name].up && (
-                                                    <br />
-                                                )}
-                                                {live.speed.ch[c.name].up && <>↑ {live.speed.ch[c.name].up}</>}
+                                                {r.rateDown && <>↓ {r.rateDown}</>}
+                                                {r.rateDown && r.rateUp && <br />}
+                                                {r.rateUp && <>↑ {r.rateUp}</>}
                                             </>
                                         ) : (
                                             <span className="text-muted-foreground">—</span>
@@ -360,6 +391,7 @@ function TrafficCard({ live }: { live: Live }) {
                             ))}
                         </tbody>
                     </table>
+                    </>
                 )}
             </CardContent>
         </Card>
@@ -392,12 +424,15 @@ function ExplainCard() {
         <Card>
             <CardHeader>
                 <CardTitle>Куда пойдёт запрос</CardTitle>
+                {/* Одна фраза, остальное — в подсказку. Дизайн 26.9: объяснять только то, без
+                    чего можно сделать неверное действие. Абзац про fake-IP и проверку резолвера
+                    верен и полезен, но действия он не меняет, а на телефоне занимал экран. */}
                 <CardDescription>
-                    Отвечает по живому ядру, а не по настройке. Имя движок сначала спрашивает у
-                    своего резолвера и показывает, во что оно превратилось: у доменного правила это
-                    fake-IP, и с настоящим адресом сайта он не совпадает вовсе — по системному
-                    ответу понять, попадёт ли имя в набор, нельзя. Заодно это проверка самого
-                    резолвера: не ответил — значит и клиентам не отвечает.
+                    Отвечает{' '}
+                    <Hint tip="Имя движок сначала спрашивает у своего резолвера и показывает, во что оно превратилось: у доменного правила это fake-IP, и с настоящим адресом сайта он не совпадает вовсе — по системному ответу понять, попадёт ли имя в набор, нельзя. Заодно это проверка самого резолвера: не ответил — значит и клиентам не отвечает.">
+                        по живому ядру
+                    </Hint>
+                    , а не по настройке.
                 </CardDescription>
             </CardHeader>
             <CardContent>

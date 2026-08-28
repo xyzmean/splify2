@@ -219,9 +219,16 @@
    *  карточки 15/600. Третий здесь для заголовков ВНЕ карточки (её собственный CardTitle —
    *  div, и его утилиты работают). */
   .splify-react-root .sp-verdict {
-    font-size: 26px;
+    font-size: 22px;
     font-weight: 600;
     line-height: 1.15;
+  }
+  /* 26 — размер из дизайн-пака, и он рассчитан на широкий экран: в 430 пикселях «Маршрутизация
+   * работает» переносится на две строки и весит больше всего остального на экране вместе. */
+  @media (min-width: 1024px) {
+    .splify-react-root .sp-verdict {
+      font-size: 26px;
+    }
   }
   .splify-react-root .sp-title {
     font-size: 22px;
@@ -240,6 +247,38 @@
     font-size: 12px;
     font-weight: 600;
     line-height: 1.3;
+  }
+  /* РАЗМЕР ШРИФТА У КОНТРОЛОВ: тема бьёт по ним с !important, и утилита не действует.
+   *
+   *  Замерено на живом роутере: `button, .btn, .cbi-button { font-size: 14px !important }` —
+   *  это правило темы, и оно старше любого нашего, потому что !important. В итоге КАЖДАЯ кнопка
+   *  интерфейса рисовалась одним размером 14px, сколько бы ни просила разметка: `text-xs` на
+   *  ссылке-кнопке, `text-[11px]` в нижней панели разделов, `text-[12px]` у ссылки на движок.
+   *  Хуже всего это было видно на телефоне — там разница между подписью и основным текстом и
+   *  держит раскладку, а её не было вовсе.
+   *
+   *  Лечится тем же приёмом, что заливка кнопок ниже: заявить намерение ещё раз, на
+   *  специфичности, которую тема не перебьёт. Перечень токенов ЗАКРЫТЫЙ и значения продублированы
+   *  из шкалы Tailwind сознательно — шаблон вида `[class*="text-"]` захватил бы и `text-primary`,
+   *  где размера нет вовсе. Появится новый шаг шкалы — дописать сюда; барьер в build.sh
+   *  напоминает про заголовки, у которых своя причина (сброс, а не тема).
+   *
+   *  Не `!important` на всех утилитах через tailwind.config: там это включается на ВСЁ разом,
+   *  включая цвета и отступы, и тогда собственные оговорки этого файла (галочки, радио, заливка
+   *  кнопок) начинают проигрывать утилитам — то есть лечение одной болезни ценой трёх. */
+  .splify-react-root :where(button, input, select, textarea)[class~="text-[10px]"] { font-size: 10px !important }
+  .splify-react-root :where(button, input, select, textarea)[class~="text-[11px]"] { font-size: 11px !important }
+  .splify-react-root :where(button, input, select, textarea)[class~="text-[12px]"] { font-size: 12px !important }
+  .splify-react-root :where(button, input, select, textarea)[class~="text-[13px]"] { font-size: 13px !important }
+  .splify-react-root :where(button, input, select, textarea)[class~="text-xs"]     { font-size: 0.75rem !important }
+  .splify-react-root :where(button, input, select, textarea)[class~="text-sm"]     { font-size: 0.875rem !important }
+  .splify-react-root :where(button, input, select, textarea)[class~="text-base"]   { font-size: 1rem !important }
+  .splify-react-root :where(button, input, select, textarea)[class~="text-lg"]     { font-size: 1.125rem !important }
+
+  /* Нижняя панель разделов на узком экране. Отступ снизу — под панель жестов iOS и
+   *  экранные кнопки Android: без него нижний ряд подписей оказывается под ними. */
+  .splify-react-root .sp-bottom-bar {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
   .splify-react-root ol,
   .splify-react-root ul {

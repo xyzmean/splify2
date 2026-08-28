@@ -1,13 +1,12 @@
-import { useEffect, useState } from 'react'
-import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { useEffect, useRef, useState } from 'react'
+import { Activity, ArrowDown, ArrowUp, ChevronRight, Plus, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
 import { pending, usePending } from '@/lib/pending'
 import { EMPTY_SPEC, ON_FAIL_TEXT, type OnFail, type Output, type Spec } from '@/lib/model'
-import { type Live } from '@/lib/live'
+import { human, type Live } from '@/lib/live'
 import { Hint } from '@/components/ui/hint'
 import VlessPanel from '@/components/VlessPanel'
 import ObfsPanel from '@/components/ObfsPanel'
@@ -35,6 +34,24 @@ export default function OutboundsTab({ live }: { live: Live }) {
      *  нечего. Обновляется само после каждого apply (usePending перерисовывает). */
     const { applied } = usePending()
     const saved = new Set(Object.keys(applied?.outputs || {}))
+    /** Какие выходы раскрыты. Выход целиком — это подписка, узлы, обфускация и список
+     *  устройств; развёрнутыми все они занимали экран целиком, и найти нужный можно было
+     *  только прокруткой. Свёрнутый выход отвечает на вопрос «работает ли и куда ведёт»
+     *  одной строкой, а настройка открывается по нажатию.
+     *
+     *  Единственный выход раскрыт сам: сворачивать то, что и так одно, значит требовать
+     *  нажатие ни за что. Только что созданный — тоже: его для того и создали. */
+    const [open, setOpen] = useState<Record<string, boolean>>({})
+    /** Отклик по выходам. Спрашивается ПО ОДНОМУ и не по кругу: каждая проверка упирается в
+     *  таймаут до шести секунд, и опрос десятка выходов каждые пять секунд держал бы роутер
+     *  занятым проверками вместо работы. Один проход при открытии раздела, дальше — по кнопке.
+     *
+     *  Здесь, а не отдельной карточкой сверху: карточка «Сейчас работает» повторяла имя,
+     *  состояние и устройство каждого выхода прямо над его же настройкой — два места об одном
+     *  и том же, которые расходятся на глазах. Теперь это одна строка: шапка спойлера. */
+    const [pings, setPings] = useState<Record<string, { ms: number; state: string }>>({})
+    const [pinging, setPinging] = useState(false)
+    const asked = useRef(false)
 
     useEffect(() => {
         pending.load().then(setSpec).catch(() => setSpec(EMPTY_SPEC))
@@ -45,6 +62,12 @@ export default function OutboundsTab({ live }: { live: Live }) {
     function edit(next: Spec) {
         setSpec(next)
         pending.edit(next)
+    }
+
+    /** Создать выход и сразу его раскрыть: настройка — это то, зачем его создали. */
+    function add(name: string, o: Output, cur: Spec) {
+        edit({ ...cur, outputs: { ...cur.outputs, [name]: o } })
+        setOpen((s2) => ({ ...s2, [name]: true }))
     }
 
     function addInterface() {
@@ -66,13 +89,7 @@ export default function OutboundsTab({ live }: { live: Live }) {
         let name = free?.name?.replace(/[^A-Za-z0-9_-]/g, '') || 'tunnel'
         let n = 2
         while (spec.outputs[name]) name = `${free?.name || 'tunnel'}${n++}`
-        edit({
-            ...spec,
-            outputs: {
-                ...spec.outputs,
-                [name]: { name, kind: 'interface', devices: free ? [free.name] : [], on_fail: 'drop' },
-            },
-        })
+        add(name, { name, kind: 'interface', devices: free ? [free.name] : [], on_fail: 'drop' }, spec)
     }
 
     function addVless() {
@@ -80,22 +97,13 @@ export default function OutboundsTab({ live }: { live: Live }) {
         let name = 'vless'
         let n = 2
         while (spec.outputs[name]) name = `vless${n++}`
-        edit({
-            ...spec,
-            outputs: {
-                ...spec.outputs,
-                [name]: {
-                    name, kind: 'vless', sub_file: '/etc/steer/sub.txt',
-                    node: -1, on_fail: 'drop',
-                },
-            },
-        })
+        add(name, { name, kind: 'vless', sub_file: '/etc/steer/sub.txt', node: -1, on_fail: 'drop' }, spec)
     }
 
     function addDirect() {
         if (!spec) return
         if (spec.outputs.direct) { notify('Выход «direct» уже есть', 'warning'); return }
-        edit({ ...spec, outputs: { ...spec.outputs, direct: { name: 'direct', kind: 'direct' } } })
+        add('direct', { name: 'direct', kind: 'direct' }, spec)
     }
 
     function patch(name: string, o: Output) {
@@ -152,25 +160,77 @@ export default function OutboundsTab({ live }: { live: Live }) {
         edit({ ...spec, outputs })
     }
 
+
+    /** Отклик по всем выходам, по одному за раз. */
+    async function probeAll(list: string[], kinds: Record<string, string>) {
+        setPinging(true)
+        /* Прежние значения гасим СРАЗУ: пока идёт проверка, старое число неотличимо от
+         * свежего, и кнопка выглядела так, будто ничего не делает. */
+        setPings({})
+        let failed: string | null = null
+        try {
+            for (const n of list) {
+                if (kinds[n] === 'direct') continue
+                try {
+                    const r = await rpc.outboundProbe(n)
+                    setPings((p) => ({ ...p, [n]: { ms: r.ms, state: r.state } }))
+                } catch (e) {
+                    /* Отказ метода — не то же, что «узел не ответил», и путать их нельзя:
+                     * первое чинится обновлением splify2, второе — сменой узла. */
+                    failed = String(e instanceof Error ? e.message : e)
+                    setPings((p) => ({ ...p, [n]: { ms: -1, state: 'не спросить' } }))
+                }
+            }
+            if (failed) notify(`Проверка недоступна: ${failed}`, 'error')
+        } finally {
+            setPinging(false)
+        }
+    }
+
     if (!spec) return <div className="p-5 text-sm text-muted-foreground">Загрузка…</div>
 
     const names = Object.keys(spec.outputs)
+    const kinds = Object.fromEntries(names.map((n) => [n, spec.outputs[n].kind]))
+
+    /* Один раз, когда выходы стали известны. Не на каждый их приход: спека перерисовывается
+     * на каждую правку, и проверка запускалась бы заново после каждого нажатия. */
+    if (!asked.current && names.length > 0) {
+        asked.current = true
+        void probeAll(names, kinds)
+    }
 
     return (
-        <div className="space-y-4">
-            <Card>
-                <CardHeader>
-                    <CardTitle>Выходы</CardTitle>
-                    <CardDescription>
-                        Куда правила могут вести. Несколько выходов работают одновременно — у каждого
-                        своя{' '}
+        /* Карточки вокруг раздела больше нет: имя «Выходы» печатает оболочка, и заголовок
+           карточки повторял его слово в слово прямо под ним. Заодно на телефоне пропала
+           коробка в коробке — от неё оставалось меньше трёхсот пикселей на содержимое. */
+        <div className="space-y-3">
+            <div className="space-y-3">
+                {/* Пояснение и действие в одной строке на широком экране и в две на узком:
+                    пока строка не переносилась, кнопка справа сжимала текст до колонки в одно
+                    слово шириной — на снимке телефона это была стена из переносов. */}
+                <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+                    <p className="min-w-[14rem] flex-1 text-xs leading-relaxed text-muted-foreground">
+                        Куда правила могут вести. Несколько выходов работают одновременно — у
+                        каждого своя{' '}
                         <Hint tip="Каждый выход получает метку и таблицу маршрутизации в ядре. Правило указывает на имя выхода, а не на устройство — смена туннеля правил не трогает.">
                             метка
                         </Hint>
                         . Изменения сохраняются сами.
-                    </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-2">
+                    </p>
+                    {names.length > 0 && (
+                        <Button
+                            variant="secondary"
+                            size="sm"
+                            className="shrink-0"
+                            onClick={() => probeAll(names, kinds)}
+                            disabled={pinging}
+                        >
+                            <Activity className="h-3.5 w-3.5" aria-hidden="true" />
+                            {pinging ? 'проверяем…' : 'проверить отклик'}
+                        </Button>
+                    )}
+                </div>
+                <div className="space-y-2">
                     <div className="mb-2 flex flex-wrap gap-2">
                         <Button onClick={addInterface} variant="secondary">
                             <Plus className="mr-1 h-4 w-4" aria-hidden="true" /> Туннель
@@ -211,8 +271,90 @@ export default function OutboundsTab({ live }: { live: Live }) {
                         const o = spec.outputs[name]
                         const s = live.status?.outputs?.[name]
                         const usedBy = spec.channels.filter((c) => c.out === name).map((c) => c.name)
+                        const isOpen = open[name] ?? names.length === 1
+                        const dev = s?.device
+                        const stat = dev ? live.devs?.[dev] : undefined
+                        const p = pings[name]
+                        /* Расшифровка выхода в одну строку: правило указывает на ИМЯ, и без
+                         * второй половины строки имя ничего не значит для того, кто настраивал
+                         * роутер месяц назад. */
+                        const what =
+                            o.kind === 'direct'
+                                ? 'напрямую, мимо туннеля'
+                                : o.kind === 'vless'
+                                  ? `VLESS/Reality${dev ? ` · ${dev}` : ''}`
+                                  : dev
+                                    ? `свой туннель · ${dev}`
+                                    : 'устройство не назначено'
                         return (
-                            <div key={name} className="space-y-2 rounded-md border border-border bg-card p-3">
+                            <div key={name} className="overflow-hidden rounded-xl border border-border bg-card">
+                                {/* Шапка — она же строка состояния: точка, имя, расшифровка, объём
+                                    и отклик. Свёрнутый выход отвечает на «работает ли и куда
+                                    ведёт» без единого нажатия. */}
+                                <button
+                                    type="button"
+                                    aria-expanded={isOpen}
+                                    onClick={() => setOpen({ ...open, [name]: !isOpen })}
+                                    className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 p-3 text-left text-[13px] transition-colors hover:bg-accent"
+                                >
+                                    <ChevronRight
+                                        className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${
+                                            isOpen ? 'rotate-90' : ''
+                                        }`}
+                                        aria-hidden="true"
+                                    />
+                                    <span
+                                        className={`h-2 w-2 shrink-0 rounded-full ${
+                                            o.kind === 'direct'
+                                                ? 'bg-muted-foreground'
+                                                : s?.up
+                                                  ? 'bg-success'
+                                                  : 'bg-destructive'
+                                        }`}
+                                        aria-hidden="true"
+                                    />
+                                    <span className="font-medium">{name}</span>
+                                    <span className="min-w-0 truncate text-muted-foreground">{what}</span>
+                                    {o.obfs && <Badge variant="secondary">поверх TCP</Badge>}
+                                    <span className="ml-auto flex shrink-0 items-center gap-3 text-[11px]">
+                                        {stat && (
+                                            <span className="hidden text-muted-foreground sm:inline">
+                                                ↓ {human(Number(stat.rx))} · ↑ {human(Number(stat.tx))}
+                                            </span>
+                                        )}
+                                        <span
+                                            className={
+                                                p && p.ms < 0
+                                                    ? 'text-destructive'
+                                                    : p
+                                                      ? 'text-success'
+                                                      : 'text-muted-foreground'
+                                            }
+                                        >
+                                            {/* Пока идёт проверка — «…» вместо ПРЕЖНЕГО числа:
+                                                старое число выглядит свежим, и понять, ответил ли
+                                                узел только что, нельзя.
+
+                                                У `direct` здесь пусто: «напрямую» уже сказано
+                                                расшифровкой слева, и на узком экране второе такое
+                                                же слово переносилось на свою строку. */}
+                                            {o.kind === 'direct'
+                                                ? ''
+                                                : p
+                                                  ? p.ms < 0
+                                                      ? p.state
+                                                      : `${p.ms} мс`
+                                                  : pinging
+                                                    ? '…'
+                                                    : s?.up
+                                                      ? 'поднят'
+                                                      : 'нет устройства'}
+                                        </span>
+                                    </span>
+                                </button>
+
+                                {isOpen && (
+                                <div className="space-y-2 border-t border-border p-3">
                                 <div className="flex flex-wrap items-end gap-3">
                                     <label className="flex flex-col gap-1 text-xs">
                                         <span>
@@ -226,7 +368,7 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                             onChange={(e) => setDraft({ ...draft, [name]: e.currentTarget.value })}
                                             onBlur={() => rename(name)}
                                             onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-                                            className="w-36 rounded-md border border-border bg-background px-2 py-1 text-sm transition-colors focus-visible:border-primary focus-visible:outline-none"
+                                            className="w-36 rounded-lg border border-border bg-background px-2 py-1 text-sm transition-colors focus-visible:border-primary focus-visible:outline-none"
                                             aria-label={`Имя выхода ${name}`}
                                         />
                                     </label>
@@ -239,7 +381,7 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                             <select
                                                 value={o.on_fail || 'drop'}
                                                 onChange={(e) => patch(name, { ...o, on_fail: e.currentTarget.value as OnFail })}
-                                                className="rounded-md border border-border bg-background px-2 py-1 text-sm"
+                                                className="rounded-lg border border-border bg-background px-2 py-1 text-sm"
                                             >
                                                 {(Object.keys(ON_FAIL_TEXT) as OnFail[]).map((k) => (
                                                     <option key={k} value={k}>{ON_FAIL_TEXT[k]}</option>
@@ -262,7 +404,6 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                     </div>
                                 </div>
 
-
                                 {o.kind === 'vless' && (
                                     <VlessPanel
                                         name={name}
@@ -280,7 +421,7 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                     const list = devList(o)
                                     const free = devices.filter((d) => !list.includes(d.name))
                                     return (
-                                        <div className="rounded-md border border-border p-2">
+                                        <div className="rounded-xl border border-border p-2">
                                             <div className="mb-1 text-xs text-muted-foreground">
                                                 Устройства по приоритету — трафик пойдёт через первое
                                                 работающее, и сам вернётся наверх, когда основное оживёт.
@@ -290,16 +431,16 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                                     Устройств нет — выход никуда не ведёт.
                                                 </p>
                                             )}
-                                            {list.map((dev, di) => {
-                                                const liveDev = devices.find((x) => x.name === dev)
-                                                const active = s?.device === dev
+                                            {list.map((d2, di) => {
+                                                const liveDev = devices.find((x) => x.name === d2)
+                                                const active = s?.device === d2
                                                 return (
-                                                    <div key={dev} className="flex items-center gap-2 py-0.5 text-sm">
+                                                    <div key={d2} className="flex items-center gap-2 py-0.5 text-sm">
                                                         <span className="w-4 text-center text-xs text-muted-foreground">
                                                             {di + 1}
                                                         </span>
                                                         <span className={active ? 'font-medium text-primary' : ''}>
-                                                            {dev}
+                                                            {d2}
                                                         </span>
                                                         {active && <Badge variant="default">активно</Badge>}
                                                         {!liveDev && (
@@ -319,9 +460,9 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                                                     onClick={() => moveDev(name, o, di, 1)}>
                                                                 <ArrowDown className="h-4 w-4" aria-hidden="true" />
                                                             </Button>
-                                                            <Button variant="ghost" size="icon" aria-label={`Убрать ${dev}`}
+                                                            <Button variant="ghost" size="icon" aria-label={`Убрать ${d2}`}
                                                                     className="hover:bg-destructive/10 hover:text-destructive"
-                                                                    onClick={() => setDevs(name, o, list.filter((x) => x !== dev))}>
+                                                                    onClick={() => setDevs(name, o, list.filter((x) => x !== d2))}>
                                                                 <Trash2 className="h-4 w-4" aria-hidden="true" />
                                                             </Button>
                                                         </div>
@@ -335,13 +476,13 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                                         const v = e.currentTarget.value
                                                         if (v) setDevs(name, o, [...list, v])
                                                     }}
-                                                    className="mt-1 rounded-md border border-border bg-background px-2 py-1 text-sm"
+                                                    className="mt-1 rounded-lg border border-border bg-background px-2 py-1 text-sm"
                                                     aria-label={`Добавить устройство в ${name}`}
                                                 >
                                                     <option value="">+ добавить устройство</option>
-                                                    {free.map((d) => (
-                                                        <option key={d.name} value={d.name}>
-                                                            {d.name}{d.up ? '' : ' (выключено)'}
+                                                    {free.map((d3) => (
+                                                        <option key={d3.name} value={d3.name}>
+                                                            {d3.name}{d3.up ? '' : ' (выключено)'}
                                                         </option>
                                                     ))}
                                                 </select>
@@ -352,34 +493,28 @@ export default function OutboundsTab({ live }: { live: Live }) {
 
                                 <div className="flex flex-wrap items-center gap-2 text-xs">
                                     {s && o.kind === 'interface' && (
-                                        <>
-                                            <Badge variant={s.up ? 'default' : 'destructive'}>
-                                                {s.up ? 'поднят' : 'выключен'}
+                                        <Hint tip="Без NAT маршрут применяется, счётчик растёт, а сайты за туннелем висят — поэтому это видно здесь, а не спрятано.">
+                                            <Badge variant={s.nat ? 'secondary' : 'destructive'}>
+                                                {s.nat ? 'NAT есть' : 'NAT не найден'}
                                             </Badge>
-                                            <Hint tip="Без NAT маршрут применяется, счётчик растёт, а сайты за туннелем висят — поэтому это видно здесь, а не спрятано.">
-                                                <Badge variant={s.nat ? 'secondary' : 'destructive'}>
-                                                    {s.nat ? 'NAT есть' : 'NAT не найден'}
-                                                </Badge>
-                                            </Hint>
-                                            {o.obfs && (
-                                                <Badge variant="secondary">поверх TCP</Badge>
-                                            )}
-                                            {s.mark && (
-                                                <span className="text-muted-foreground">
-                                                    метка {s.mark}, таблица {s.table}
-                                                </span>
-                                            )}
-                                        </>
+                                        </Hint>
+                                    )}
+                                    {s?.mark && (
+                                        <span className="text-muted-foreground">
+                                            метка {s.mark}, таблица {s.table}
+                                        </span>
                                     )}
                                     <span className="text-muted-foreground">
                                         {usedBy.length ? `каналы: ${usedBy.join(', ')}` : 'каналов нет'}
                                     </span>
                                 </div>
+                                </div>
+                                )}
                             </div>
                         )
                     })}
-                </CardContent>
-            </Card>
+                </div>
+            </div>
         </div>
     )
 }
