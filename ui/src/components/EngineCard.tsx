@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
-import { engineAction, type Releases } from '@/lib/engine'
+import { engineAction, type Releases, releaseName } from '@/lib/engine'
 import { t } from '@/lib/i18n'
 
 // Установка движка из интерфейса.
@@ -172,9 +172,12 @@ export default function EngineCard({ engine, releases, onInstalled }: Props) {
                     >
                         {versions === null && <option value="">{t('загрузка…')}</option>}
                         {versions?.length === 0 && <option value="">{t('релизов не найдено')}</option>}
+                        {/* Показывается НАЗВАНИЕ выпуска, ставится ВЕРСИЯ: value — то, что
+                            уедет в steer_install и попадёт в имя файла пакета, а подпись —
+                            то, как выпуск подписан на странице релизов. */}
                         {versions?.map((v, i) => (
                             <option key={v} value={v}>
-                                {v}
+                                {releaseName(v, releases?.names)}
                                 {i === 0 ? ` — ${t('свежая')}` : ''}
                             </option>
                         ))}

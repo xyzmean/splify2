@@ -14,20 +14,45 @@ export interface Releases {
     /** Архитектура ПАКЕТОВ. Приходит и тогда, когда движка нет, — единственный ответ,
      *  который сообщает её в этом состоянии. */
     arch: string
-    /** От новых к старым, уже отфильтрованные бэкендом до вида X.Y.Z. */
+    /** От новых к старым. Только цифры и точки: этим значением собирается имя файла пакета,
+     *  и число составляющих не важно — «26.9» такая же законная версия, как «1.2.0». */
     versions: string[]
+    /** Название выпуска по его версии: «26.9» → «26.9 Andromeda». Может не прийти вовсе,
+     *  если бэкенд старее интерфейса. */
+    names?: Record<string, string>
 }
 
-/** Сравнение версий по числам, а не по строкам: «0.9.10» строкой меньше «0.9.9».
- *  Возвращает <0, 0, >0 — как принято у компараторов. */
+/** Числа версии. Хвост, который числом не является, отбрасывается: версия приезжает и с
+ *  кодовым именем выпуска («26.9 Andromeda»), и с суффиксом сборки, а сравнивать надо числа.
+ *
+ *  Отсутствующая составляющая — нуль, поэтому «26.9» и «26.9.0» равны, а число составляющих
+ *  сравнению не мешает: требовать три части значило бы объявить собственный выпуск непонятным. */
+function parts(v: string): number[] {
+    const m = /^\d+(?:\.\d+)*/.exec(v.trim())
+    return m ? m[0].split('.').map((n) => parseInt(n, 10)) : []
+}
+
+/** Сравнение версий по числам, а не по строкам: «0.9.10» строкой меньше «0.9.9», а «26.9»
+ *  строкой меньше «9.9». Возвращает <0, 0, >0 — как принято у компараторов. */
 export function cmpVersion(a: string, b: string): number {
-    const pa = a.split('.').map((n) => parseInt(n, 10) || 0)
-    const pb = b.split('.').map((n) => parseInt(n, 10) || 0)
+    const pa = parts(a)
+    const pb = parts(b)
     for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
         const d = (pa[i] || 0) - (pb[i] || 0)
         if (d) return d
     }
     return 0
+}
+
+/** Как выпуск называется. Версия — то, чем ставится пакет; название — то, как о выпуске
+ *  говорят и как он подписан на странице релизов («26.9 Andromeda»).
+ *
+ *  Названия может не быть: бэкенд старее интерфейса, у релиза нет заголовка, GitHub не
+ *  ответил. Тогда версия называет себя сама — это хуже, чем название, но лучше пустой
+ *  строки, по которой нечего выбрать. */
+export function releaseName(version: string, names?: Record<string, string>): string {
+    const n = names?.[version]
+    return n && n.trim() ? n : version
 }
 
 /** Что стоит и что можно поставить — про сам интерфейс.
@@ -37,8 +62,10 @@ export function cmpVersion(a: string, b: string): number {
 export interface SelfUpdateInfo {
     /** Что стоит сейчас. Пусто, если пакет поставлен руками мимо apk. */
     current: string
-    /** Релизы от новых к старым, уже отобранные бэкендом до вида X.Y.Z. */
+    /** Релизы от новых к старым, только цифры и точки — см. Releases.versions. */
     versions: string[]
+    /** Название выпуска по его версии — см. Releases.names. */
+    names?: Record<string, string>
 }
 
 export interface EngineAction {
@@ -61,5 +88,11 @@ export function engineAction(build: Build | null, releases: Releases | null): En
     if (!latest || !build.version) return { label: 'Переустановить', latest, outdated: false }
 
     const outdated = cmpVersion(build.version, latest) < 0
-    return { label: outdated ? `Обновить до ${latest}` : 'Переустановить', latest, outdated }
+    /* Подпись называет выпуск так, как он подписан на странице релизов: человек читал
+     * «Обновить до 26.9», а искал «Andromeda» — и не находил, потому что искал не число. */
+    return {
+        label: outdated ? `Обновить до ${releaseName(latest, releases?.names)}` : 'Переустановить',
+        latest,
+        outdated,
+    }
 }
