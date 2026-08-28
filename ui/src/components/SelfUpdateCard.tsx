@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
-import { cmpVersion, type SelfUpdateInfo } from '@/lib/engine'
+import { cmpVersion, type SelfUpdateInfo, releaseName } from '@/lib/engine'
 import { t } from '@/lib/i18n'
 
 // Обновление самого интерфейса.
@@ -36,7 +36,9 @@ export default function SelfUpdateCard({
     // Ровно то же правило, что и у движка (I-038): пока список не пришёл, про «свежее»
     // мы не знаем ничего, и обещать обновление нельзя.
     const outdated = !!(latest && info?.current && cmpVersion(info.current, latest) < 0)
-    const label = outdated ? `${t('Обновить до')} ${latest}` : t('Переустановить')
+    const label = outdated
+        ? `${t('Обновить до')} ${releaseName(latest!, info?.names)}`
+        : t('Переустановить')
 
     useEffect(() => {
         if (latest) setVer((v) => v || latest)
@@ -87,9 +89,11 @@ export default function SelfUpdateCard({
                     >
                         {info === null && <option value="">{t('загрузка…')}</option>}
                         {info !== null && versions.length === 0 && <option value="">{t('релизов не найдено')}</option>}
+                        {/* Подпись — название выпуска, значение — версия: ею собирается имя
+                            файла пакета, и пробелу там места нет. */}
                         {versions.map((v, i) => (
                             <option key={v} value={v}>
-                                {v}
+                                {releaseName(v, info?.names)}
                                 {i === 0 ? ` — ${t('свежая')}` : ''}
                             </option>
                         ))}

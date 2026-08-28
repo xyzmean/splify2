@@ -95,7 +95,17 @@ done
 echo "$url" >> "$SANDBOX/wget.log"
 case "$url" in
     *api.github.com*)
-        printf '[{"tag_name": "v0.9.6"},{"tag_name": "v0.9.5-rc1"},{"tag_name": "v0.9.4"},{"tag_name": "nightly"}]\n'
+        # Список релизов. Теперь с ЗАГОЛОВКАМИ: у выпуска есть кодовое имя («26.9 Andromeda»),
+        # и приезжает оно полем `name`, а не тегом — в теге и в имени файла пакета пробелу
+        # места нет. В наборе намеренно есть релиз без заголовка (null) и заголовок с
+        # вертикальной чертой: обе ветки отката на число проверяются ниже.
+        #
+        # Уезжает в ФАЙЛ, когда его просят (-qO файл), и в поток, когда просят поток: список
+        # версий читается jsonfilter-ом, а тому нужен файл.
+        if [ -n "${GH_BODY:-}" ]; then body="$GH_BODY"; else
+            body='[{"tag_name": "v26.9", "name": "26.9 Andromeda"},{"tag_name": "v0.9.6", "name": null},{"tag_name": "v0.9.5-rc1", "name": "0.9.5 rc1"},{"tag_name": "v0.9.4", "name": "0.9.4 | старьё"},{"tag_name": "nightly", "name": "nightly"}]'
+        fi
+        if [ -n "$out" ]; then printf '%s\n' "$body" > "$out"; else printf '%s\n' "$body"; fi
         ;;
     *)
         [ -n "$out" ] && echo "пакет" > "$out"
@@ -146,6 +156,10 @@ def walk(cur, parts):
         items = cur if isinstance(cur, list) else list(cur.values()) if isinstance(cur, dict) else []
         for it in items:
             yield from walk(it, rest)
+    elif isinstance(cur, list) and p.isdigit():
+        i = int(p)
+        if 0 <= i < len(cur):
+            yield from walk(cur[i], rest)
     elif isinstance(cur, dict) and p in cur:
         yield from walk(cur[p], rest)
 
@@ -160,7 +174,12 @@ for expr in os.environ.get('EXPRS', '').splitlines():
         continue
     # Общий обход: точки — шаги пути, [*] — «все элементы массива или все значения
     # объекта». Ровно тот набор выражений, который встречается в скрипте.
-    parts = [x for x in expr.replace('@.', '', 1).replace('[*]', '.*').split('.') if x]
+    # Числовой индекс массива (`@[0].tag_name`) — им читается список релизов GitHub.
+    # Приводится к обычному шагу пути: скобки становятся точками, а walk() ниже понимает
+    # цифровой шаг как индекс в списке.
+    norm = expr.replace('@.', '', 1).replace('[*]', '.*')
+    norm = norm.replace('[', '.').replace(']', '')
+    parts = [x for x in norm.split('.') if x and x != '@']
     for v in walk(d, parts):
         print(render(v))
 PY
@@ -300,6 +319,8 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         BACKUP_IN="$T/var/backup.in" \
         BACKUP_MAX_BYTES="${BACKUP_MAX_BYTES:-262144}" \
         STEER_RC="${STEER_RC:-0}" \
+        GH_BODY="${GH_BODY-}" \
+        GH_CACHE="$T/var/releases.json" \
         STEER_ERR="${STEER_ERR:-}" \
         APK_ADD_RC="${APK_ADD_RC:-0}" \
         APK_ADD_OUT="${APK_ADD_OUT:-}" \
@@ -320,6 +341,17 @@ try: d = json.load(sys.stdin)
 except Exception: print("НЕ JSON"); raise SystemExit
 v = d.get(sys.argv[1])
 print("" if v is None else json.dumps(v, ensure_ascii=False) if isinstance(v,(list,dict,bool)) else v)' "$1"
+}
+
+# Вложенное поле ответа: названия релизов приезжают объектом «версия → название», и
+# сравнивать его целиком строкой значило бы привязать проверку к порядку ключей.
+jqget() {  # ОБЪЕКТ ПОЛЕ < JSON
+    python3 -c 'import json,sys
+try: d = json.load(sys.stdin)
+except Exception: print("НЕ JSON"); raise SystemExit
+o = d.get(sys.argv[1]) or {}
+v = o.get(sys.argv[2])
+print("" if v is None else json.dumps(v, ensure_ascii=False) if isinstance(v,(list,dict,bool)) else v)' "$1" "$2"
 }
 
 reset_logs() { rm -f "$T/apk.log" "$T/initd.log" "$T/wget.log" "$T/curl.log" "$T/rpcd-initd.log" "$T/disabled"; : > "$T/apk.log"; : > "$T/initd.log"; }
@@ -399,8 +431,8 @@ check "с openwrt_release архитектура берётся из DISTRIB_ARC
 # steer_install отвергает всё, что не вида X.Y.Z. Значит тег с суффиксом, дойдя до
 # выпадающего списка, будет выбран как «свежая» — и отвергнут собственным бэкендом.
 out="$(rpcd steer_versions)"
-check "теги не вида X.Y.Z до выпадающего списка не доходят (I-052)" \
-      '["0.9.6", "0.9.4"]' "$(printf '%s' "$out" | jget versions)"
+check "тег с суффиксом до выпадающего списка не доходит (I-052)" \
+      '["26.9", "0.9.6", "0.9.4"]' "$(printf '%s' "$out" | jget versions)"
 
 # ---- I-042 (половина в rpcd): отказ удаления виден в ответе -------------------
 # Здесь скрипт уже прав, и проверка сторожевая: интерфейс отчитывается об успехе
@@ -449,8 +481,41 @@ reset_logs
 out="$(rpcd splify2_versions)"
 check "версии интерфейса берутся из релизов splify2 (R-042)" \
       "yes" "$(grep -c 'api.github.com/repos/xyzmean/splify2' "$T/wget.log" >/dev/null 2>&1 && grep -q 'xyzmean/splify2' "$T/wget.log" && echo yes || echo no)"
-check "теги не вида X.Y.Z отсеиваются и здесь (R-042)" \
-      '["0.9.6", "0.9.4"]' "$(printf '%s' "$out" | jget versions)"
+check "тег с суффиксом отсеивается и здесь (R-042)" \
+      '["26.9", "0.9.6", "0.9.4"]' "$(printf '%s' "$out" | jget versions)"
+# ---- версии формата «26.9 Andromeda» ------------------------------------------------
+# Выпуск называется кодовым именем, а ставится числом, и это две разные строки: в имени файла
+# пакета и в теге пробелу места нет ни у apk, ни у opkg, ни в URL. Пока бэкенд отдавал одни
+# числа, список версий не сходился ни со страницей релизов, ни с тем, как о выпуске говорят.
+out="$(rpcd steer_versions)"
+check "версия из двух частей не отсеивается: «26.9» — не хуже «1.2.0»" "yes" \
+      "$(printf '%s' "$out" | jget versions | grep -q '"26.9"' && echo yes || echo no)"
+check "первой идёт самая свежая — по порядку релизов, а не по строке" "26.9" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["versions"][0])')"
+check "название выпуска приезжает рядом с версией" "26.9 Andromeda" \
+      "$(printf '%s' "$out" | jqget names 26.9)"
+# Заголовка у релиза нет вовсе (в ответе null) — показываем число. Пустая строка на экране
+# была бы версией без имени, то есть строкой, по которой нечего выбрать.
+check "релиз без заголовка называется своим числом" "0.9.6" \
+      "$(printf '%s' "$out" | jqget names 0.9.6)"
+# Вертикальная черта — разделитель во внутренней разметке названий; заголовок с ней ломал бы
+# поиск по версии. Отказываться из-за заголовка от самого релиза нельзя: ставится он по версии.
+check "заголовок с вертикальной чертой откатывается на число" "0.9.4" \
+      "$(printf '%s' "$out" | jqget names 0.9.4)"
+check "у отсеянного тега названия нет: его нет и в версиях" "" \
+      "$(printf '%s' "$out" | jqget names nightly)"
+
+out="$(rpcd splify2_versions)"
+check "интерфейс отдаёт названия тем же полем" "26.9 Andromeda" \
+      "$(printf '%s' "$out" | jqget names 26.9)"
+
+# GitHub не ответил — ни версий, ни названий, и метод обязан ОТВЕТИТЬ, а не умереть: без
+# списка карточка движка показывает «Переустановить», и это верно, а не поломка.
+out="$(GH_BODY='не json' rpcd steer_versions)"
+check "нечитаемый ответ GitHub не роняет метод" "true;[];{}" \
+      "$([ -n "$out" ] && echo true || echo false);$(printf '%s' "$out" | jget versions);$(printf '%s' "$out" | jget names)"
+
+out="$(rpcd splify2_versions)"
 check "установленная версия названа, чтобы было с чем сравнить (R-042)" \
       "0.7.6" "$(printf '%s' "$out" | jget current)"
 
