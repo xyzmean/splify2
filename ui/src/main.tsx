@@ -15,6 +15,7 @@ declare global {
     __splifyRoot?: Root
     __splifyObserver?: MutationObserver
     __splifyMount?: (el?: HTMLElement | null) => void
+    __splifyBleedOff?: () => void
   }
 }
 
@@ -23,6 +24,7 @@ declare global {
 function teardown() {
   if (window.__splifyRoot) { try { window.__splifyRoot.unmount() } catch { /* */ } window.__splifyRoot = undefined }
   if (window.__splifyObserver) { try { window.__splifyObserver.disconnect() } catch { /* */ } window.__splifyObserver = undefined }
+  if (window.__splifyBleedOff) { try { window.__splifyBleedOff() } catch { /* */ } window.__splifyBleedOff = undefined }
 }
 
 // Sync dark mode with OpenWrt/Argon by reading the actual body background.
@@ -39,12 +41,44 @@ function syncTheme() {
   }
 }
 
+// Сколько горизонтального отступа отбирает у нас страница LuCI.
+//
+// Замерено на живом роутере: `#maincontent.container` держит `padding: 0 32px`, и на телефоне
+// это 64 пикселя из 390 — вместе с нашими собственными отступами под текст оставалось 264, то
+// есть треть ширины экрана уходила в поля. На широком экране это ровно то, что нужно; на узком
+// пульт обязан идти от края до края, как приложение, а не лежать полоской в середине.
+//
+// Отступ ИЗМЕРЯЕТСЯ, а не зашивается числом: 32 пикселя — значение темы bootstrap, у argon и у
+// чужих тем оно своё, а отрицательный отступ больше настоящего дал бы горизонтальную прокрутку
+// всей страницы. Предел в 48 пикселей — страховка от темы, у которой отступ неожиданно велик.
+// Значение уезжает в переменную, а решает по ней CSS (медиазапрос в index.css): «до какой
+// ширины растягиваться» — вопрос раскладки, а не разметки.
+function syncBleed(root: HTMLElement) {
+  try {
+    let pad = 0
+    let el: HTMLElement | null = root.parentElement
+    while (el && el !== document.body && el !== document.documentElement) {
+      pad += parseFloat(getComputedStyle(el).paddingLeft || '0') || 0
+      el = el.parentElement
+    }
+    root.style.setProperty('--sp-bleed', `${Math.max(0, Math.min(48, Math.round(pad)))}px`)
+  } catch (e) {
+    console.error('Failed to measure page padding', e)
+  }
+}
+
 function mount(el?: HTMLElement | null) {
   const rootElement = el ?? document.getElementById('splify-root')
   if (!rootElement) { console.error('splify-root not found!'); return }
   teardown()
 
   syncTheme()
+  syncBleed(rootElement)
+  /* Пересчёт при смене ширины: поворот телефона меняет и отступ контейнера темы. Свой
+   * слушатель, а не тот же observer: тот следит за атрибутами, а не за размерами окна. */
+  const onResize = () => syncBleed(rootElement)
+  window.addEventListener('resize', onResize)
+  window.__splifyBleedOff = () => window.removeEventListener('resize', onResize)
   const observer = new MutationObserver(syncTheme)
   observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class', 'style', 'data-darkmode'] })
   observer.observe(document.body, { attributes: true, attributeFilter: ['data-theme', 'class', 'style'] })

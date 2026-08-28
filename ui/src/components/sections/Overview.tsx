@@ -139,7 +139,7 @@ export default function Overview({
 
     return (
         <div className="space-y-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
                     <div className="flex items-center gap-2.5">
                         <span
@@ -161,7 +161,7 @@ export default function Overview({
                         )}
                     </p>
                 </div>
-                <Button onClick={() => onSection('rules')} className="shrink-0">
+                <Button onClick={() => onSection('rules')} className="w-full shrink-0 sm:w-auto">
                     <Plus className="h-4 w-4" aria-hidden="true" /> Новое правило
                 </Button>
             </div>

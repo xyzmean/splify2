@@ -74,15 +74,19 @@ export default function Console() {
 
                 {/* Отступ снизу на узком экране — под нижнюю панель разделов: без него последняя
                     карточка уезжает под неё, и человек не видит, что страница кончилась. */}
-                <main className="min-w-0 flex-1 p-4 pb-24 lg:p-6">
+                <main className="min-w-0 flex-1 px-3 pb-24 pt-3 lg:p-6">
                     {/* «Сохранено» — вспышка на полторы секунды после каждой УДАВШЕЙСЯ записи, а
                         не после правки: взамен кнопки эта галочка — единственное, по чему человек
                         судит, уехало ли что-нибудь на роутер. */}
-                    <div className="mb-1 flex h-4 justify-end">
+                    {/* Вспышка «Сохранено» не занимает СВОЕЙ строки на узком экране: там это
+                        были шестнадцать пустых пикселей над вердиктом на каждом разделе, и
+                        читались они как незаполненная дырка. Место под неё резервируется только
+                        на широком, где оно есть. */}
+                    <div className="relative flex justify-end lg:mb-1 lg:h-4">
                         <span
                             aria-hidden={!savedFlash}
                             className={[
-                                'flex items-center gap-1.5 text-xs text-muted-foreground',
+                                'absolute right-0 top-0 flex items-center gap-1.5 text-xs text-muted-foreground lg:static',
                                 'transition-opacity duration-300',
                                 savedFlash ? 'opacity-100' : 'opacity-0',
                             ].join(' ')}

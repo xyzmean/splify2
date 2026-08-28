@@ -208,8 +208,11 @@ export default function CatalogTab({ onUseInRule }: Props) {
                 />
             )}
 
-            <div className="overflow-x-auto rounded-md border border-border bg-card shadow-card">
-                <table className="w-full min-w-[38rem] text-sm">
+            <div className="overflow-x-auto rounded-xl border border-border bg-card shadow-card lg:rounded-2xl">
+                {/* sp-stack: на узком экране строки таблицы встают блоками, а шапка убирается —
+                    иначе столбцы «где используется» и действия уезжают за край, и кнопки
+                    оказываются недостижимы. Разбор — в комментарии к правилу в index.css. */}
+                <table className="sp-stack w-full text-sm md:min-w-[38rem]">
                     <thead>
                         <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
                             <th className="px-3 py-2">Запись</th>
@@ -284,7 +287,10 @@ export default function CatalogTab({ onUseInRule }: Props) {
                                             </div>
                                         )}
                                     </td>
-                                    <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
+                                    <td
+                                        className="px-3 py-2 whitespace-nowrap text-muted-foreground"
+                                        data-label="записей"
+                                    >
                                         {(localCount || sv.count || 0).toLocaleString('ru-RU')}
                                     </td>
                                     <td className="px-3 py-2">

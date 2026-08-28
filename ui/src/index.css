@@ -142,6 +142,20 @@
     border-radius: 1rem;
     overflow: hidden;
   }
+  /* На узком экране пульт идёт ОТ КРАЯ ДО КРАЯ. Отступ, который отбирает контейнер темы,
+   * возвращается отрицательным полем; его величину измеряет main.tsx и кладёт в --sp-bleed
+   * (зашитое число дало бы горизонтальную прокрутку на теме с другим отступом).
+   *
+   * Скругление и обрезка тут же снимаются: у полосы во всю ширину скруглять нечего, а
+   * `overflow: hidden` на всю ширину мешал бы прилипшей снизу панели разделов, если она
+   * когда-нибудь окажется внутри. */
+  @media (max-width: 1023px) {
+    .sp-root {
+      margin-inline: calc(-1 * var(--sp-bleed, 0px));
+      border-radius: 0;
+      overflow: visible;
+    }
+  }
   .splify-react-root {
     color: var(--sp-foreground);
     /* Argon renders the whole admin at .875rem over a 16px root — inherit the
@@ -274,6 +288,54 @@
   .splify-react-root :where(button, input, select, textarea)[class~="text-sm"]     { font-size: 0.875rem !important }
   .splify-react-root :where(button, input, select, textarea)[class~="text-base"]   { font-size: 1rem !important }
   .splify-react-root :where(button, input, select, textarea)[class~="text-lg"]     { font-size: 1.125rem !important }
+
+  /* ШИРОКАЯ ТАБЛИЦА НА УЗКОМ ЭКРАНЕ становится строками — без второй вёрстки.
+   *
+   *  Каталог — это тридцать восемь записей по четыре столбца: имя с пояснениями, число, где
+   *  используется и действия. В 390 пикселях последние два уезжали за край, то есть кнопки «В
+   *  правило», «обновить» и «удалить» были недостижимы, и об этом ничто не сообщало —
+   *  горизонтальную прокрутку внутри карточки человек не находит.
+   *
+   *  Здесь именно CSS, а не вторая разметка: у ячеек каталога нет своей фразы, они просто
+   *  встают друг под друга. Там, где фраза есть — правила («что → для кого → куда») и счётчики
+   *  трафика, — раскладки написаны отдельно: строка, собранная из ячеек таблицы, читалась бы
+   *  как таблица, поставленная на бок.
+   *
+   *  Подпись к числу приписывает CSS: столбец без шапки — это число без вопроса, к которому оно
+   *  ответ. Форма та же, что во всём интерфейсе: подпись, двоеточие, число. */
+  @media (max-width: 767px) {
+    .splify-react-root .sp-stack thead {
+      display: none;
+    }
+    .splify-react-root .sp-stack tr {
+      display: block;
+      padding: 0.5rem 0.875rem;
+    }
+    .splify-react-root .sp-stack td {
+      display: block;
+      padding: 0;
+      text-align: left;
+    }
+    /* Число и «где используется» — в одну строку: каждое своей строкой давало на запись
+     * каталога полтысячи пикселей высоты, а записей тридцать восемь. */
+    .splify-react-root .sp-stack td:nth-child(2),
+    .splify-react-root .sp-stack td:nth-child(3) {
+      display: inline-block;
+      margin-right: 0.75rem;
+    }
+    .splify-react-root .sp-stack td:empty {
+      display: none;
+    }
+    .splify-react-root .sp-stack td[data-label]::before {
+      content: attr(data-label) ": ";
+      color: var(--sp-muted-foreground);
+    }
+    /* Действия прижаты к правому краю таблицей; строкой им честнее стоять слева, под тем, к
+     * чему они относятся. */
+    .splify-react-root .sp-stack td > .flex.justify-end {
+      justify-content: flex-start;
+    }
+  }
 
   /* Нижняя панель разделов на узком экране. Отступ снизу — под панель жестов iOS и
    *  экранные кнопки Android: без него нижний ряд подписей оказывается под ними. */

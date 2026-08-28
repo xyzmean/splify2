@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowDown, ArrowUp, Pencil, Plus, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowRight, ArrowUp, Pencil, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
@@ -41,6 +41,18 @@ function whoText(ch: Channel) {
     if (!ch.from?.length) return 'все устройства'
     if (ch.from.length === 1) return ch.from[0]
     return `${ch.from.length} адресов и подсетей`
+}
+
+/** То же самое в родительном падеже: на узком экране правило читается фразой «что → для кого →
+ *  куда», и «для все устройства» в ней — не мелочь, а место, где интерфейс перестаёт читаться
+ *  как текст. Столбцу таблицы на широком экране нужен именительный, поэтому форм две.
+ *
+ *  Счётчик остаётся счётчиком — «устройств: 2», подпись с двоеточием и числом, — и склонения
+ *  после числительного здесь не нужны по построению. */
+function whoTextFor(ch: Channel) {
+    if (!ch.from?.length) return 'всех устройств'
+    if (ch.from.length === 1) return ch.from[0]
+    return `адресов и подсетей: ${ch.from.length}`
 }
 
 /** Спорят ли два правила за одни и те же записи.
@@ -251,6 +263,73 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
         )
     }
 
+    /* Куски строки правила. Раскладок ДВЕ — таблица на широком экране и строки на узком, — и
+       вёрстка, повторённая в обеих, разошлась бы на первой же правке. */
+    type Rule = Spec['channels'][number]
+
+    const ruleName = (ch: Rule, i: number, on: boolean) => (
+        <div className="flex items-start gap-3">
+            <Switch
+                on={on}
+                label={on ? `Выключить правило ${ch.name}` : `Включить правило ${ch.name}`}
+                onClick={() => toggle(i, !on)}
+            />
+            <div className="min-w-0">
+                <div className="truncate font-medium">{ch.name}</div>
+                <div className="truncate text-xs text-muted-foreground">
+                    {describe(ch, services)}
+                    {!on && ' · выключено'}
+                </div>
+            </div>
+        </div>
+    )
+
+    const ruleOut = (ch: Rule) => {
+        const o = outputs[ch.out]
+        return (
+            <span className="flex min-w-0 items-center gap-2">
+                <span
+                    className={`h-2 w-2 shrink-0 rounded-full ${
+                        !o
+                            ? 'bg-destructive'
+                            : o.kind === 'direct'
+                              ? 'bg-muted-foreground'
+                              : o.up
+                                ? 'bg-success'
+                                : 'bg-destructive'
+                    }`}
+                    aria-hidden="true"
+                />
+                <span className="truncate">
+                    {o ? (o.kind === 'direct' ? 'Напрямую' : ch.out) : `${ch.out} — не найден`}
+                </span>
+            </span>
+        )
+    }
+
+    const ruleActions = (i: number) => (
+        <div className="flex justify-end gap-1">
+            <Button variant="ghost" size="icon" aria-label="Поднять приоритет"
+                    disabled={i === 0} onClick={() => move(i, -1)}>
+                <ArrowUp className="h-4 w-4" aria-hidden="true" />
+            </Button>
+            <Button variant="ghost" size="icon" aria-label="Опустить приоритет"
+                    disabled={i === spec.channels.length - 1}
+                    onClick={() => move(i, 1)}>
+                <ArrowDown className="h-4 w-4" aria-hidden="true" />
+            </Button>
+            <Button variant="ghost" size="icon" aria-label="Изменить правило"
+                    onClick={() => setOpen(i)}>
+                <Pencil className="h-4 w-4" aria-hidden="true" />
+            </Button>
+            <Button variant="ghost" size="icon" aria-label="Удалить правило"
+                    className="hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => edit({ ...spec, channels: spec.channels.filter((_, k) => k !== i) })}>
+                <Trash2 className="h-4 w-4" aria-hidden="true" />
+            </Button>
+        </div>
+    )
+
     return (
         <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -275,118 +354,90 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
                 </div>
             </div>
 
-            <div className="overflow-x-auto rounded-md border border-border bg-card shadow-card">
-                <table className="w-full min-w-[34rem] text-sm">
-                    <thead>
-                        <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                            <th className="px-3 py-2">Что перенаправляем</th>
-                            <th className="px-3 py-2">Кого касается</th>
-                            <th className="px-3 py-2">Куда</th>
-                            <th className="px-3 py-2" />
-                        </tr>
-                    </thead>
-                    <tbody>
+            {/* ДВЕ РАСКЛАДКИ. Таблица из трёх столбцов на телефоне не работала: «кого
+                касается» переносилось по слову, а столбец «куда» вместе со всеми действиями
+                (выше, ниже, изменить, удалить) уезжал за край экрана — то есть правило нельзя
+                было ни переставить, ни удалить, и об этом ничто не сообщало.
+
+                На узком экране правило читается фразой, как и велит дизайн 26.9: что → кому →
+                куда, по строке на каждое, а действия — рядом и целиком. Куски строки собраны
+                функциями выше: вёрстка, повторённая дважды, разошлась бы на первой же правке. */}
+            {spec.channels.length === 0 ? (
+                <div className="rounded-xl border border-border bg-card p-6 text-center text-sm text-muted-foreground shadow-card lg:rounded-2xl">
+                    Правил нет — весь трафик идёт напрямую.
+                    <div className="mt-1 text-xs">
+                        Правило говорит движку: этот сервис или категорию — вот этим устройствам —
+                        через такой outbound.
+                    </div>
+                    {Object.keys(outputs).length === 0 && (
+                        <div className="mt-2 text-xs">
+                            Сначала нужен outbound — вести пока некуда.{' '}
+                            <button
+                                type="button"
+                                onClick={onGoOutbounds}
+                                className="text-primary underline decoration-dotted"
+                            >
+                                Завести outbound
+                            </button>
+                        </div>
+                    )}
+                </div>
+            ) : (
+                <>
+                    <ul className="space-y-2 md:hidden">
                         {spec.channels.map((ch, i) => {
-                            const o = outputs[ch.out]
                             const on = ch.enabled !== false
                             return (
-                                <tr
-                                    key={`rule-${i}`}
-                                    /* Выключенное приглушено, но НА ВИДУ и на своём месте: спрятанное
-                                       правило человек считает удалённым и заводит второе такое же, а
-                                       уехавшее вниз меняет порядок, то есть приоритет. */
-                                    className={`border-b border-border/50 transition-colors last:border-b-0 hover:bg-muted/40 ${on ? '' : 'opacity-50'}`}
+                                <li
+                                    key={`rule-m-${i}`}
+                                    className={`rounded-xl border border-border bg-card p-3 shadow-card ${on ? '' : 'opacity-50'}`}
                                 >
-                                    <td className="px-3 py-2">
-                                        <div className="flex items-start gap-3">
-                                            <Switch
-                                                on={on}
-                                                label={on ? `Выключить правило ${ch.name}` : `Включить правило ${ch.name}`}
-                                                onClick={() => toggle(i, !on)}
-                                            />
-                                            <div className="min-w-0">
-                                                <div className="truncate font-medium">{ch.name}</div>
-                                                <div className="truncate text-xs text-muted-foreground">
-                                                    {describe(ch, services)}
-                                                    {!on && ' · выключено'}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td className="px-3 py-2 text-muted-foreground">{whoText(ch)}</td>
-                                    <td className="px-3 py-2">
-                                        <span className="flex items-center gap-2">
-                                            <span
-                                                className={`h-2 w-2 shrink-0 rounded-full ${
-                                                    !o
-                                                        ? 'bg-destructive'
-                                                        : o.kind === 'direct'
-                                                          ? 'bg-muted-foreground'
-                                                          : o.up
-                                                            ? 'bg-success'
-                                                            : 'bg-destructive'
-                                                }`}
-                                                aria-hidden="true"
-                                            />
-                                            <span className="truncate">
-                                                {o ? (o.kind === 'direct' ? 'Напрямую' : ch.out) : `${ch.out} — не найден`}
-                                            </span>
-                                        </span>
-                                    </td>
-                                    <td className="px-3 py-2">
-                                        <div className="flex justify-end gap-1">
-                                            <Button variant="ghost" size="icon" aria-label="Поднять приоритет"
-                                                    disabled={i === 0} onClick={() => move(i, -1)}>
-                                                <ArrowUp className="h-4 w-4" aria-hidden="true" />
-                                            </Button>
-                                            <Button variant="ghost" size="icon" aria-label="Опустить приоритет"
-                                                    disabled={i === spec.channels.length - 1}
-                                                    onClick={() => move(i, 1)}>
-                                                <ArrowDown className="h-4 w-4" aria-hidden="true" />
-                                            </Button>
-                                            <Button variant="ghost" size="icon" aria-label="Изменить правило"
-                                                    onClick={() => setOpen(i)}>
-                                                <Pencil className="h-4 w-4" aria-hidden="true" />
-                                            </Button>
-                                            <Button variant="ghost" size="icon" aria-label="Удалить правило"
-                                                    className="hover:bg-destructive/10 hover:text-destructive"
-                                                    onClick={() =>
-                                                        edit({ ...spec, channels: spec.channels.filter((_, k) => k !== i) })
-                                                    }>
-                                                <Trash2 className="h-4 w-4" aria-hidden="true" />
-                                            </Button>
-                                        </div>
-                                    </td>
-                                </tr>
+                                    {ruleName(ch, i, on)}
+                                    <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[13px]">
+                                        <span className="text-muted-foreground">для</span>
+                                        <span>{whoTextFor(ch)}</span>
+                                        <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                                        {ruleOut(ch)}
+                                    </div>
+                                    <div className="mt-1 border-t border-border pt-1">{ruleActions(i)}</div>
+                                </li>
                             )
                         })}
+                    </ul>
 
-                        {spec.channels.length === 0 && (
-                            <tr>
-                                <td colSpan={4} className="px-3 py-8 text-center text-sm text-muted-foreground">
-                                    Правил нет — весь трафик идёт напрямую.
-                                    <div className="mt-1 text-xs">
-                                        Правило говорит движку: этот сервис или категорию — вот этим
-                                        устройствам — через такой outbound.
-                                    </div>
-                                    {Object.keys(outputs).length === 0 && (
-                                        <div className="mt-2 text-xs">
-                                            Сначала нужен outbound — вести пока некуда.{' '}
-                                            <button
-                                                type="button"
-                                                onClick={onGoOutbounds}
-                                                className="text-primary underline decoration-dotted"
-                                            >
-                                                Завести outbound
-                                            </button>
-                                        </div>
-                                    )}
-                                </td>
-                            </tr>
-                        )}
-                    </tbody>
-                </table>
-            </div>
+                    <div className="hidden overflow-x-auto rounded-2xl border border-border bg-card shadow-card md:block">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                                    <th className="px-3 py-2">Что перенаправляем</th>
+                                    <th className="px-3 py-2">Кого касается</th>
+                                    <th className="px-3 py-2">Куда</th>
+                                    <th className="px-3 py-2" />
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {spec.channels.map((ch, i) => {
+                                    const on = ch.enabled !== false
+                                    return (
+                                        <tr
+                                            key={`rule-${i}`}
+                                            /* Выключенное приглушено, но НА ВИДУ и на своём месте: спрятанное
+                                               правило человек считает удалённым и заводит второе такое же, а
+                                               уехавшее вниз меняет порядок, то есть приоритет. */
+                                            className={`border-b border-border/50 transition-colors last:border-b-0 hover:bg-muted/40 ${on ? '' : 'opacity-50'}`}
+                                        >
+                                            <td className="px-3 py-2">{ruleName(ch, i, on)}</td>
+                                            <td className="px-3 py-2 text-muted-foreground">{whoText(ch)}</td>
+                                            <td className="px-3 py-2">{ruleOut(ch)}</td>
+                                            <td className="px-3 py-2">{ruleActions(i)}</td>
+                                        </tr>
+                                    )
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                </>
+            )}
         </div>
     )
 }
