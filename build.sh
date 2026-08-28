@@ -40,14 +40,42 @@ echo "splify2 $VERSION"
 # `splify`, барьер искал в ACL несуществующее имя и валился на верных данных. Заметить
 # это удалось только когда проверка стала запускаться без docker.
 acl=luci/root/usr/share/rpcd/acl.d/luci-app-splify2.json
+methods="$(sed -n '/^list)/,/^    ;;/p' files/usr/libexec/rpcd/splify2 |
+           grep -o 'json_add_object [a-z0-9_]*' | awk '{print $2}' | tr '\n' ' ')"
 missing=''
-for m in $(sed -n '/^list)/,/^    ;;/p' files/usr/libexec/rpcd/splify2 |
-           grep -o 'json_add_object [a-z0-9_]*' | awk '{print $2}'); do
+for m in $methods; do
     grep -q "\"$m\"" "$acl" || missing="$missing $m"
 done
 [ -z "$missing" ] || {
     echo "методы rpcd не объявлены в ACL ($acl):$missing"
     echo "из браузера они получат отказ доступа, из ssh будут работать"
+    exit 1
+}
+
+# Третье ребро того же контракта, и до сих пор оно не проверялось ничем. Имена методов
+# заданы строками в ТРЁХ местах: блок `list)` в rpcd, ACL выше и вызовы в интерфейсе
+# (`declare<...>('local_lists')` в ui/src/lib/rpc.ts). Барьер выше сторожит ребро
+# rpcd → ACL, а переименование метода в скрипте оставляет в интерфейсе вызов, который
+# никуда не ведёт: ubus отвечает «Method not found», и отказ ровно того невидимого вида,
+# ради которого барьер выше и написан — сборка проходит, tsc проходит, страница
+# открывается и показывает «нет данных» там, где у вызова есть запасной путь.
+#
+# Направление одно: каждый вызов интерфейса обязан иметь метод. Обратное — метод, который
+# интерфейс не зовёт, — законно: у объекта есть вызовы из страницы протокола и из ssh.
+#
+# Переносы строк убираются до поиска: у половины вызовов тип занимает несколько строк
+# (`declare<{ ... }>(\n    'outbound_probe',`), и построчный grep их не видит вовсе.
+rpc=ui/src/lib/rpc.ts
+unknown=''
+for m in $(tr '\n' ' ' < "$rpc" | grep -oE ">\( *'[a-z0-9_]+'" | tr -d " >('" | sort -u); do
+    case " $methods " in
+        *" $m "*) ;;
+        *) unknown="$unknown $m" ;;
+    esac
+done
+[ -z "$unknown" ] || {
+    echo "интерфейс зовёт методы, которых нет в rpcd ($rpc):$unknown"
+    echo "ubus ответит «Method not found», а страница покажет «нет данных»"
     exit 1
 }
 
