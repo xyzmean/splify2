@@ -343,6 +343,46 @@ check "выключение названо словами" "yes" \
       "$(echo "$res" | grep -q 'NOTE1=.*выключен' && echo yes || echo no)"
 check "правил не добавлено" "" "$(grep -c '^rule add' "$S/ip.log" | sed 's/^0$//')"
 
+# ---- 7b. режим always: туннель первым, а не последним ------------------------------
+# Выбор человека, у которого GitHub закрыт насовсем. Смысл в порядке: по своему прямому
+# адресу файл едет одним запросом, тогда как обход по хостам GitHub — это лишний запрос, а в
+# худшем случае архив ветки целиком ради одного списка.
+reset
+echo always > "$S/uci.splify2_main_fetch_via_tunnel"
+res="$(run "$RAW")"
+check "always: скачано через туннель, хотя издатель доступен" "direct:$RAW" "$(cat "$T/got" 2>/dev/null)"
+check "always: запрос был ровно один и по IPv4" "1;yes" \
+      "$(grep -c . "$S/curl.log");$(grep -q 'four=yes' "$S/curl.log" && echo yes || echo no)"
+check "always: обход по хостам GitHub не понадобился" "" \
+      "$(grep -c 'api.github.com\|codeload' "$S/curl.log" | sed 's/^0$//')"
+check "always: сказано, что так настроено" "yes" \
+      "$(echo "$res" | grep -q 'NOTE1=.*так настроено' && echo yes || echo no)"
+check "always: правило снято" "0" "$(cat "$S/rules" 2>/dev/null || echo 0)"
+
+# Туннеля нет — режим не должен превращаться в отказ: прямой путь по-прежнему работает.
+reset
+echo always > "$S/uci.splify2_main_fetch_via_tunnel"
+cat > "$S/status.json" <<'EOF'
+{"schema":1,"outputs":{"direct":{"kind":"direct"},"vl":{"kind":"vless","device":"vl","up":false,"table":300}},"channels":[]}
+EOF
+res="$(run "$RAW")"
+check "always без поднятого выхода: остаётся прямой путь" "direct:$RAW" "$(cat "$T/got" 2>/dev/null)"
+check "always без выхода: маршруты не тронуты" "" "$(grep -c . "$S/ip.log" | sed 's/^0$//')"
+cat > "$S/status.json" <<'EOF'
+{"schema":1,"outputs":{"direct":{"kind":"direct"},"vl":{"kind":"vless","device":"vl","up":true,"mark":"0x00100000","table":300}},"channels":[]}
+EOF
+
+# Тот же адрес и тот же режим, но издатель закрыт и через провайдера, и в туннеле:
+# второго захода в туннель быть не должно — он стоит ещё одного разрешения имени.
+reset
+echo always > "$S/uci.splify2_main_fetch_via_tunnel"
+printf 'githubusercontent.com\n' > "$S/blocked-always"
+printf 'api.github.com\t%s\n' "$T/api-body" > "$S/serve"
+res="$(run "$RAW")"
+check "always: не вышло туннелем — выручает обход по GitHub" "from-api" "$(cat "$T/got" 2>/dev/null)"
+check "always: в туннель второй раз не ходили" "1" \
+      "$(grep -c 'githubusercontent.com.*four=yes' "$S/curl.log")"
+
 # ---- 8. правила снимаются и когда повтор не удался ---------------------------------
 reset
 printf 'api.github.com\ncodeload.github.com\ngithubusercontent.com\n' > "$S/blocked-always"
