@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/preact'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import StatusRail from '@/components/StatusRail'
+import Overview from '@/components/sections/Overview'
 import { rpc } from '@/lib/rpc'
 import { live } from './fixtures'
 import type { Status } from '@/lib/model'
@@ -13,7 +13,11 @@ import type { Status } from '@/lib/model'
 //
 // Здесь же проверяется вторая половина требования — что предупреждение НЕ становится ещё
 // одним постоянным значком: при поднятом туннеле, при неизвестном списке устройств и до
-// первого ответа движка колонка молчит.
+// первого ответа движка обзор молчит.
+//
+// Место переехало вместе с дизайном Andromeda 26.9: обе строки жили в закреплённой колонке
+// состояния (StatusRail), которой больше нет, — теперь они на обзоре. Проверки те же, потому
+// что находка та же: состояние, у которого не было названия.
 //
 // R-030 (I-039, splify2#4 п.2): «Что за совет?» — счётчик «советов: N» был вопросом, а не
 // ответом. Последний тест проверяет, что строка несёт содержание и ведёт на диагностику.
@@ -32,17 +36,14 @@ const devs = (...names: string[]) =>
 describe('«трафику некуда идти»: выходов нет или устройства нет в системе (R-064)', () => {
     beforeEach(() => {
         vi.restoreAllMocks()
-        // Отклик спрашивается при появлении выходов — без заглушки проверка ушла бы в
-        // отказ ubus и утащила в вывод чужую ошибку.
-        vi.spyOn(rpc, 'outboundProbe').mockResolvedValue({ ms: 12, state: 'ok' } as never)
         vi.spyOn(rpc, 'devices').mockResolvedValue({ devices: [] })
     })
 
     it('выходов нет вовсе — говорит, что трафику некуда идти', async () => {
         render(
-            <StatusRail
+            <Overview
                 live={live({ build: BUILD, status: status({}), devs: devs('br-lan', 'wan') })}
-                onGoDiag={() => {}}
+                onSection={() => {}}
             />,
         )
         expect(await screen.findByText(/Трафику некуда идти/)).toBeInTheDocument()
@@ -51,13 +52,13 @@ describe('«трафику некуда идти»: выходов нет или
 
     it('единственный выход — direct: он трафик не уводит, значит выходов по-прежнему нет', async () => {
         render(
-            <StatusRail
+            <Overview
                 live={live({
                     build: BUILD,
                     status: status({ home: { name: 'home', kind: 'direct' } }),
                     devs: devs('br-lan'),
                 })}
-                onGoDiag={() => {}}
+                onSection={() => {}}
             />,
         )
         expect(await screen.findByText(/Выходов нет/)).toBeInTheDocument()
@@ -65,17 +66,17 @@ describe('«трафику некуда идти»: выходов нет или
 
     it('устройства выхода нет в системе — называет и выход, и устройство', async () => {
         render(
-            <StatusRail
+            <Overview
                 live={live({
                     build: BUILD,
                     status: status({ vpn: { name: 'vpn', kind: 'interface', devices: ['awg0'] } }),
                     devs: devs('br-lan', 'wan'),
                 })}
-                onGoDiag={() => {}}
+                onSection={() => {}}
             />,
         )
-        // Смотрим внутрь самой карточки: имя выхода и устройства встречается и в списке
-        // Outbounds выше, и совпадение там ничего не доказывало бы.
+        // Смотрим внутрь самой карточки: имя выхода и устройства встречается и в разделе
+        // выходов, и совпадение где-то на экране ничего не доказывало бы.
         const card = (await screen.findByText(/Трафику некуда идти/)).parentElement as HTMLElement
         expect(card).toHaveTextContent(/Выход vpn не поднят/)
         expect(card).toHaveTextContent(/awg0/)
@@ -84,13 +85,13 @@ describe('«трафику некуда идти»: выходов нет или
 
     it('выходу не назначено устройство — тоже названо словами', async () => {
         render(
-            <StatusRail
+            <Overview
                 live={live({
                     build: BUILD,
                     status: status({ vpn: { name: 'vpn', kind: 'interface' } }),
                     devs: devs('br-lan'),
                 })}
-                onGoDiag={() => {}}
+                onSection={() => {}}
             />,
         )
         expect(await screen.findByText(/устройство ему не назначено/)).toBeInTheDocument()
@@ -101,7 +102,7 @@ describe('«трафику некуда идти»: выходов нет или
             devices: [{ name: 'awg0', up: true, kind: 'wireguard' }],
         })
         render(
-            <StatusRail
+            <Overview
                 live={live({
                     build: BUILD,
                     status: status({
@@ -109,7 +110,7 @@ describe('«трафику некуда идти»: выходов нет или
                     }),
                     devs: devs('br-lan', 'awg0'),
                 })}
-                onGoDiag={() => {}}
+                onSection={() => {}}
             />,
         )
         await waitFor(() => expect(rpc.devices).toHaveBeenCalled())
@@ -121,13 +122,13 @@ describe('«трафику некуда идти»: выходов нет или
         // Полный список интерфейсов (live.devs) о нём знает — и это тот случай, когда
         // предупреждение соврало бы.
         render(
-            <StatusRail
+            <Overview
                 live={live({
                     build: BUILD,
                     status: status({ vpn: { name: 'vpn', kind: 'interface', devices: ['br-vpn'] } }),
                     devs: devs('br-lan', 'br-vpn'),
                 })}
-                onGoDiag={() => {}}
+                onSection={() => {}}
             />,
         )
         await waitFor(() => expect(rpc.devices).toHaveBeenCalled())
@@ -137,13 +138,13 @@ describe('«трафику некуда идти»: выходов нет или
     it('список устройств не получен — молчим, а не тревожим на исправном роутере', async () => {
         vi.spyOn(rpc, 'devices').mockRejectedValue(new Error('ubus is unavailable'))
         render(
-            <StatusRail
+            <Overview
                 live={live({
                     build: BUILD,
                     status: status({ vpn: { name: 'vpn', kind: 'interface', devices: ['awg0'] } }),
                     devs: devs('br-lan'),
                 })}
-                onGoDiag={() => {}}
+                onSection={() => {}}
             />,
         )
         await waitFor(() => expect(rpc.devices).toHaveBeenCalled())
@@ -151,15 +152,15 @@ describe('«трафику некуда идти»: выходов нет или
     })
 
     it('состояние ещё не пришло — пустой список выходов это «не знаем», а не «выходов нет»', () => {
-        render(<StatusRail live={live({ build: BUILD })} onGoDiag={() => {}} />)
+        render(<Overview live={live({ build: BUILD })} onSection={() => {}} />)
         expect(screen.queryByText(/Трафику некуда идти/)).toBeNull()
     })
 
     it('движок не отвечает — причина уже названа сверху, второй раз не пишем', () => {
         render(
-            <StatusRail
+            <Overview
                 live={live({ build: BUILD, status: status({}), devs: devs('br-lan'), error: 'движок не ответил' })}
-                onGoDiag={() => {}}
+                onSection={() => {}}
             />,
         )
         expect(screen.getByText(/движок не ответил/)).toBeInTheDocument()
@@ -192,30 +193,30 @@ describe('совет виден содержанием и ведёт на диа
     }
 
     it('единственный совет показан текстом, а не числом', () => {
-        render(<StatusRail live={live({ ...OK, diag: DIAG(1) })} onGoDiag={() => {}} />)
+        render(<Overview live={live({ ...OK, diag: DIAG(1) })} onSection={() => {}} />)
         expect(screen.getByText(/клиент может обходить DNS роутера/)).toBeInTheDocument()
     })
 
     it('нажатие на строку совета уводит на диагностику', () => {
         const go = vi.fn()
-        render(<StatusRail live={live({ ...OK, diag: DIAG(1) })} onGoDiag={go} />)
+        render(<Overview live={live({ ...OK, diag: DIAG(1) })} onSection={go} />)
         screen.getByRole('button', { name: /клиент может обходить DNS роутера/ }).click()
         expect(go).toHaveBeenCalledTimes(1)
     })
 
     it('советов несколько — счётчик остаётся, но с первым советом рядом', () => {
-        render(<StatusRail live={live({ ...OK, diag: DIAG(3) })} onGoDiag={() => {}} />)
+        render(<Overview live={live({ ...OK, diag: DIAG(3) })} onSection={() => {}} />)
         const line = screen.getByRole('button', { name: /советов: 3/ })
         expect(line).toHaveTextContent(/клиент может обходить DNS роутера/)
     })
 
     it('вердикт и цвет от совета не меняются', () => {
-        render(<StatusRail live={live({ ...OK, diag: DIAG(2) })} onGoDiag={() => {}} />)
-        expect(screen.getByRole('heading', { name: 'Работает' })).toBeInTheDocument()
+        render(<Overview live={live({ ...OK, diag: DIAG(2) })} onSection={() => {}} />)
+        expect(screen.getByRole('heading', { name: 'Маршрутизация работает' })).toBeInTheDocument()
     })
 
     it('советов нет — строки нет вовсе', () => {
-        render(<StatusRail live={live({ ...OK, diag: { warn: 0, fail: 0, checks: [] } })} onGoDiag={() => {}} />)
+        render(<Overview live={live({ ...OK, diag: { warn: 0, fail: 0, checks: [] } })} onSection={() => {}} />)
         expect(screen.queryByText(/совет/)).toBeNull()
     })
 })

@@ -28,6 +28,11 @@ module.exports = {
           `color-mix(in srgb, var(${v}) calc(<alpha-value> * 100%), transparent)`
         return {
           border: mix("--sp-border"),
+          // Рельс разделов и второй уровень текста — свои токены Andromeda: `bg-rail`,
+          // `text-subtle`. Не варианты muted: рельс светлее карточки, а второй текст
+          // ТЕМНЕЕ тусклого, и выразить их через существующие два нечем.
+          rail: mix("--sp-rail"),
+          subtle: mix("--sp-fg2"),
           input: mix("--sp-input"),
           ring: mix("--sp-ring"),
           background: "var(--sp-background)",

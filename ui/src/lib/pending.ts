@@ -201,6 +201,10 @@ export function usePending() {
     const [, force] = useState(0)
     useEffect(() => pending.subscribe(() => force((n) => n + 1)), [])
     return {
+        /** Сохранённая спека — та же, что видят разделы. Нужна рельсу для счётчика «Правила N»:
+         *  спрашивать её отдельным вызовом значило бы показать в рельсе одно число, а в
+         *  разделе рядом другое. null, пока не загружена. */
+        spec: pending.saved,
         count: pending.count(),
         applying: pending.applying,
         justApplied: pending.justApplied,

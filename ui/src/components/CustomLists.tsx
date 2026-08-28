@@ -128,7 +128,7 @@ export default function CustomLists({
 
     return (
         <section className="rounded-md border border-border bg-card p-4">
-            <h3 className="text-sm font-semibold">Свои списки</h3>
+            <h3 className="sp-sub">Свои списки</h3>
             <p className="mt-1 text-xs text-muted-foreground">
                 Домены и подсети, которых нет у издателя. После добавления список появится в
                 редакторе правил рядом с остальными — сам по себе он ничего не меняет.

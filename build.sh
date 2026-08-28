@@ -56,6 +56,26 @@ bad="$(grep -rEo '\b(bg|text|border|ring|from|to|via|fill|stroke)-sp-[a-z-]*' ui
     exit 1
 }
 
+# Размер и вес заголовка утилитой на самом h1–h4 НЕ ЗАДАТЬ, и это не стилистика.
+#
+# Сброс в ui/src/index.css объявляет у h1–h4 `font-size: inherit` и `font-weight: inherit`, и
+# написан он ВНЕ каскадных слоёв (почему — в комментарии к сбросам). Утилиты Tailwind живут в
+# @layer utilities, а неслоёные правила главнее любого слоя, поэтому `text-[26px] font-semibold`
+# на h1 не действует вовсе: получается 14 пикселей и вес 400. Специфичность не спасает —
+# проигрывает слой, а не селектор.
+#
+# Ошибка не видна ничем, кроме глаз: сборка проходит, tsc проходит, стенды на jsdom тоже —
+# jsdom не считает каскад из index.css. Поймано на снимке живого роутера, где вердикт
+# «Маршрутизация работает» оказался ростом с подпись в рельсе. Взамен есть три класса:
+# sp-verdict (26/600), sp-title (22/600), sp-sub (15/600).
+bad="$(grep -rEn --include='*.tsx' '<h[1-6][^>]*className="[^"]*(text-\[[0-9]|text-(xs|sm|base|lg|xl|2xl|3xl)|font-(medium|semibold|bold))' ui/src 2>/dev/null | head -5)"
+[ -z "$bad" ] || {
+    echo "у заголовка задан размер или вес утилитой — она не подействует:"
+    printf '%s\n' "$bad"
+    echo "используйте классы sp-verdict / sp-title / sp-sub (ui/src/index.css)"
+    exit 1
+}
+
 ( cd ui && npm run build >/dev/null 2>&1 ) || { echo "сборка интерфейса провалилась"; exit 1; }
 
 rm -rf "$PKG"

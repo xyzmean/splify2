@@ -173,7 +173,7 @@ export default function RuleEditor({
             <div className="space-y-4 p-3">
                 <section>
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        <h3 className="sp-label uppercase tracking-wide text-muted-foreground">
                             Что перенаправляем
                         </h3>
                         <span className="text-xs text-muted-foreground">
@@ -272,7 +272,7 @@ export default function RuleEditor({
 
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     <section className="rounded-md border border-border p-3">
-                        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        <h3 className="sp-label uppercase tracking-wide text-muted-foreground">
                             Кого касается
                         </h3>
                         <div className="mt-2 space-y-2">
@@ -386,7 +386,7 @@ export default function RuleEditor({
                     </section>
 
                     <section className="rounded-md border border-border p-3">
-                        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        <h3 className="sp-label uppercase tracking-wide text-muted-foreground">
                             Куда направить
                         </h3>
                         <div className="mt-2 space-y-2">

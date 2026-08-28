@@ -1,100 +1,86 @@
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
+import { Check } from 'lucide-react'
 import { useLive } from '@/lib/live'
-import { usePending } from '@/lib/pending'
+import { pending, usePending } from '@/lib/pending'
 import { type ServiceEntry } from '@/lib/model'
-import StatusRail from '@/components/StatusRail'
+import { SECTION_TITLE, type SectionId } from '@/lib/sections'
+import Rail from '@/components/Rail'
 import FirstRun from '@/components/FirstRun'
 import ApplyPill from '@/components/ApplyPill'
-import { Check } from 'lucide-react'
+import Overview from '@/components/sections/Overview'
+import OutputsStatus from '@/components/OutputsStatus'
 
-/** Пульт: один экран вместо пары «мастер / эксперт».
+/** Пульт: рельс разделов слева, работа справа.
  *
- *  Прежде интерфейс сам решал, что показать: пока каналов нет — мастер, появились — редактор.
- *  Переключение происходило без участия человека, и он не понимал, куда делись настройки и как
- *  вернуться. Режим теперь один: всё видно на месте, а глубина открывается по мере надобности.
+ *  Прежде здесь была строка вкладок, и одна из четырёх («Логи steer») собрала всё, что не
+ *  влезло в остальные. Дизайн Andromeda 26.9 заменил вкладки шестью разделами: обзор, правила,
+ *  выходы, каталог, диагностика, система. Вложенных вкладок нет — у каждого раздела одна роль.
  *
- *  Слева закреплённое состояние, справа работа. Разделение не косметическое: вопрос «работает
- *  ли» задаётся ПОСРЕДИ работы, и раньше за ответом надо было уйти с той вкладки, где человек
- *  что-то набирал.
+ *  Что ещё изменилось вместе с этим. Закреплённая колонка состояния (StatusRail) разобрана:
+ *  вердикт, предупреждения и счётчики трафика ушли на обзор, движок и «Остановить всё» — в
+ *  подвал рельса, список выходов с откликом — в раздел выходов. Колонка повторяла половину
+ *  каждой вкладки, и два числа об одном и том же расходились на глазах.
  *
- *  Живые данные читает ОДИН опрос на весь экран (lib/live.ts) — иначе колонка и вкладка
- *  показывали бы два разных мгновения, и оба были бы правдой.
+ *  Живые данные читает ОДИН опрос на весь экран (lib/live.ts) — иначе рельс и раздел показывали
+ *  бы два разных мгновения, и оба были бы правдой.
  *
- *  Сохранение автоматическое (lib/pending.ts): кнопок «Сохранить» на вкладках больше нет,
- *  применение — одна плавающая пилюля (ApplyPill) на весь экран. */
+ *  Сохранение автоматическое (lib/pending.ts): кнопок «Сохранить» в разделах нет, применение —
+ *  одна плавающая пилюля (ApplyPill) на весь экран. */
 
 const RulesTab = lazy(() => import('@/components/tabs/RulesTab'))
 const OutboundsTab = lazy(() => import('@/components/tabs/OutboundsTab'))
 const CatalogTab = lazy(() => import('@/components/tabs/CatalogTab'))
-const LogsTab = lazy(() => import('@/components/tabs/LogsTab'))
-
-type TabId = 'rules' | 'outbounds' | 'catalog' | 'logs'
-
-/** Ярлыки вкладок. Установившиеся слова остаются английскими: «outbound» переводом не
- *  становится понятнее, а расходится с тем, что человек читает в документации движка и в
- *  чужих настройках. Переведено то, у чего есть точный русский эквивалент. */
-const TABS: { id: TabId; label: string }[] = [
-    { id: 'rules', label: 'Правила' },
-    { id: 'outbounds', label: 'Outbounds' },
-    { id: 'catalog', label: 'Сервисы и категории' },
-    { id: 'logs', label: 'Логи steer' },
-]
+const Diagnostics = lazy(() => import('@/components/sections/Diagnostics'))
+const System = lazy(() => import('@/components/sections/System'))
 
 const FALLBACK = <div className="p-5 text-sm text-muted-foreground">Загрузка…</div>
 
 export default function Console() {
-    const [tab, setTab] = useState<TabId>('rules')
+    const [section, setSection] = useState<SectionId>('overview')
     const live = useLive()
-    const { savedFlash } = usePending()
-    /** Сервис, который попросили «в правило». Живёт здесь, а не в каталоге, потому что
-     *  переход между вкладками — дело оболочки; каталог только просит. Считывается вкладкой
-     *  правил один раз и сбрасывается: иначе повторный заход на вкладку снова открывал бы
-     *  редактор, которого человек уже не просил. */
+    const { spec, savedFlash } = usePending()
+    /** Сервис, который попросили «в правило». Живёт здесь, а не в каталоге, потому что переход
+     *  между разделами — дело оболочки; каталог только просит. Считывается разделом правил один
+     *  раз и сбрасывается: иначе повторный заход снова открывал бы редактор, которого человек
+     *  уже не просил. */
     const [wanted, setWanted] = useState<ServiceEntry | null>(null)
 
-    /* Движка нет — показываем установку ВМЕСТО вкладок. Не «рядом»: без движка ни одна из них
+    /* Спека нужна рельсу для счётчика правил, а он виден на всех разделах — значит загрузить её
+     * обязана оболочка, а не раздел правил. Вызов идемпотентен: кто пришёл раньше, тот и
+     * загрузил (lib/pending.ts). */
+    useEffect(() => { void pending.load() }, [])
+
+    /* Движка нет — показываем установку ВМЕСТО разделов. Не «рядом»: без движка ни один из них
      * не может подействовать, и открывать их значило бы дать человеку заполнить настройку,
      * которая откажется применяться на последнем шаге.
      *
-     * Пока не знаем (build === null) — вкладки, а не установку: угадав неверно, мы покажем
+     * Пока не знаем (build === null) — разделы, а не установку: угадав неверно, мы покажем
      * «движка нет» тому, у кого он работает, и это худшая из двух ошибок. */
     if (live.build && !live.build.present) return <FirstRun live={live} />
 
+    const warnings = (live.diag?.fail ?? 0) + (live.diag?.warn ?? 0)
+    const counts = {
+        rules: spec ? { text: String(spec.channels.length) } : undefined,
+        outputs: live.status
+            ? { text: String(Object.keys(live.status.outputs || {}).length) }
+            : undefined,
+        diag: warnings > 0 ? { text: String(warnings), alarm: true } : undefined,
+    }
+
     return (
         <div className="sp-root text-foreground">
-            {/* Одна колонка на узком экране: закреплённое состояние уезжает наверх, а не
-                прячется — на телефоне это первое, что человек хочет увидеть. */}
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
-                <StatusRail live={live} onGoDiag={() => setTab('logs')} />
+            <div className="flex min-h-[32rem] flex-col lg:flex-row">
+                <Rail live={live} section={section} onSection={setSection} counts={counts} />
 
-                <main className="min-w-0">
-                    <div className="mb-4 flex items-center justify-between gap-2 border-b border-border">
-                        <nav className="flex flex-wrap gap-1" role="tablist">
-                            {TABS.map(({ id, label }) => (
-                                <button
-                                    key={id}
-                                    role="tab"
-                                    aria-selected={tab === id}
-                                    onClick={() => setTab(id)}
-                                    className={[
-                                        'rounded-t-md px-4 py-2 text-sm transition-colors',
-                                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
-                                        tab === id
-                                            ? 'border-b-2 border-primary font-medium text-primary'
-                                            : 'border-b-2 border-transparent text-muted-foreground hover:text-foreground',
-                                    ].join(' ')}
-                                >
-                                    {label}
-                                </button>
-                            ))}
-                        </nav>
-                        {/* «Сохранено» — вспышка на полторы секунды после каждой УДАВШЕЙСЯ
-                            записи, а не после правки: взамен кнопки эта галочка — единственное,
-                            по чему человек судит, уехало ли что-нибудь на роутер. */}
+                <main className="min-w-0 flex-1 p-4 lg:p-6">
+                    {/* «Сохранено» — вспышка на полторы секунды после каждой УДАВШЕЙСЯ записи, а
+                        не после правки: взамен кнопки эта галочка — единственное, по чему человек
+                        судит, уехало ли что-нибудь на роутер. */}
+                    <div className="mb-1 flex h-4 justify-end">
                         <span
                             aria-hidden={!savedFlash}
                             className={[
-                                'flex shrink-0 items-center gap-1.5 pb-1.5 text-xs text-muted-foreground',
+                                'flex items-center gap-1.5 text-xs text-muted-foreground',
                                 'transition-opacity duration-300',
                                 savedFlash ? 'opacity-100' : 'opacity-0',
                             ].join(' ')}
@@ -103,25 +89,39 @@ export default function Console() {
                         </span>
                     </div>
 
+                    {/* Имя раздела печатает ОБОЛОЧКА, а не сам раздел: оно обязано совпадать
+                        с пунктом рельса дословно, а два места с одной строкой расходятся. У
+                        обзора заголовок другой — им служит вердикт, и второго над ним не надо. */}
+                    {section !== 'overview' && (
+                        <h1 className="sp-title mb-3">{SECTION_TITLE[section]}</h1>
+                    )}
+
                     <Suspense fallback={FALLBACK}>
-                        {tab === 'rules' && (
+                        {section === 'overview' && <Overview live={live} onSection={setSection} />}
+                        {section === 'rules' && (
                             <RulesTab
                                 live={live}
                                 wanted={wanted}
                                 onWantedUsed={() => setWanted(null)}
-                                onGoOutbounds={() => setTab('outbounds')}
+                                onGoOutbounds={() => setSection('outputs')}
                             />
                         )}
-                        {tab === 'outbounds' && <OutboundsTab live={live} />}
-                        {tab === 'catalog' && (
+                        {section === 'outputs' && (
+                            <div className="space-y-4">
+                                <OutputsStatus live={live} />
+                                <OutboundsTab live={live} />
+                            </div>
+                        )}
+                        {section === 'catalog' && (
                             <CatalogTab
                                 onUseInRule={(l) => {
                                     setWanted(l)
-                                    setTab('rules')
+                                    setSection('rules')
                                 }}
                             />
                         )}
-                        {tab === 'logs' && <LogsTab live={live} />}
+                        {section === 'diag' && <Diagnostics live={live} />}
+                        {section === 'system' && <System live={live} />}
                     </Suspense>
 
                     <div className="mt-6 border-t border-border pt-3 text-right text-xs text-muted-foreground">

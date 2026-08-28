@@ -15,8 +15,8 @@ export default function FirstRun({ live }: { live: Live }) {
     return (
         <div className="sp-root text-foreground">
             <div className="mx-auto max-w-2xl space-y-4">
-                <div className="rounded-md border border-border bg-card p-5 shadow-card">
-                    <h1 className="text-lg font-semibold">Движок не установлен</h1>
+                <div className="rounded-2xl border border-border bg-card p-5 shadow-card">
+                    <h1 className="sp-title">Движок не установлен</h1>
                     <p className="mt-2 text-sm text-muted-foreground">
                         splify2 — это интерфейс, а маршрутизацией занимается <b>steer</b>: он превращает
                         правила в собственную таблицу nftables и раздаёт метки. Без него интерфейсу нечего

@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/preact'
 import { describe, expect, it } from 'vitest'
-import StatusRail from '@/components/StatusRail'
+import Rail from '@/components/Rail'
 import EngineCard from '@/components/EngineCard'
 import { live } from './fixtures'
 
@@ -17,56 +17,45 @@ import { live } from './fixtures'
 const RELEASES = { arch: 'aarch64_cortex-a53', versions: ['0.9.6', '0.9.5', '0.9.4'] }
 const noop = () => {}
 
+/** Подвал рельса — то место, где подпись действия над движком видна с любого раздела.
+ *  Прежде она стояла в закреплённой колонке состояния (StatusRail), которой больше нет. */
+const rail = (l: Parameters<typeof Rail>[0]['live']) => (
+    <Rail live={l} section="overview" onSection={noop} counts={{}} />
+)
+
 describe('подпись действия над движком', () => {
     it('на свежей версии не зовёт обновляться (I-038)', () => {
-        render(
-            <StatusRail
-                live={live({
-                    build: { present: true, vless: true, version: '0.9.6', arch: 'aarch64_cortex-a53' },
-                    releases: RELEASES,
-                })}
-                onGoDiag={noop}
-            />,
-        )
+        render(rail(live({
+            build: { present: true, vless: true, version: '0.9.6', arch: 'aarch64_cortex-a53' },
+            releases: RELEASES,
+        })))
         expect(screen.queryByRole('button', { name: /Обновить/ })).toBeNull()
         expect(screen.getByRole('button', { name: 'Переустановить' })).toBeInTheDocument()
     })
 
     it('на устаревшей называет версию, до которой обновит (I-038)', () => {
-        render(
-            <StatusRail
-                live={live({
-                    build: { present: true, vless: true, version: '0.9.4', arch: 'aarch64_cortex-a53' },
-                    releases: RELEASES,
-                })}
-                onGoDiag={noop}
-            />,
-        )
+        render(rail(live({
+            build: { present: true, vless: true, version: '0.9.4', arch: 'aarch64_cortex-a53' },
+            releases: RELEASES,
+        })))
         expect(screen.getByRole('button', { name: 'Обновить до 0.9.6' })).toBeInTheDocument()
     })
 
     it('пока список версий не пришёл, не утверждает ничего (I-038)', () => {
-        render(
-            <StatusRail
-                live={live({ build: { present: true, vless: true, version: '0.9.4' }, releases: null })}
-                onGoDiag={noop}
-            />,
-        )
+        render(rail(live({ build: { present: true, vless: true, version: '0.9.4' }, releases: null })))
         expect(screen.queryByRole('button', { name: /Обновить/ })).toBeNull()
     })
 
     it('без движка зовёт установить', () => {
-        render(
-            <StatusRail live={live({ build: { present: false, vless: false }, releases: RELEASES })} onGoDiag={noop} />,
-        )
+        render(rail(live({ build: { present: false, vless: false }, releases: RELEASES })))
         expect(screen.getByRole('button', { name: 'Установить' })).toBeInTheDocument()
     })
 
-    it('колонка и карточка говорят об одной операции одно и то же (I-038)', () => {
+    it('рельс и карточка говорят об одной операции одно и то же (I-038)', () => {
         const build = { present: true, vless: true, version: '0.9.4', arch: 'aarch64_cortex-a53' }
-        const rail = render(<StatusRail live={live({ build, releases: RELEASES })} onGoDiag={noop} />)
-        const railLabel = rail.getByRole('button', { name: /Обновить|Переустановить|Установить/ }).textContent
-        rail.unmount()
+        const shown = render(rail(live({ build, releases: RELEASES })))
+        const railLabel = shown.getByRole('button', { name: /Обновить|Переустановить|Установить/ }).textContent
+        shown.unmount()
 
         render(<EngineCard engine={build} releases={RELEASES} onInstalled={noop} />)
         const cardLabel = screen.getByRole('button', { name: /Обновить|Переустановить|Установить/ }).textContent

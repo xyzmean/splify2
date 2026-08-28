@@ -44,6 +44,7 @@
           "list_fetch",
           "list_remove",
           "sub_set",
+          "sub_quota",
           "backup_put",
           "ui_set",
           "steer_install",

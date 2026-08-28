@@ -167,7 +167,38 @@ PY
 EOF
 
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/logger"
-printf '#!/bin/sh\nexit 1\n' > "$T/bin/uci"
+# uci: маленькое, но НАСТОЯЩЕЕ хранилище — «ключ=значение» в файле песочницы.
+#
+# Раньше заглушка отвечала одним `exit 1`, то есть «настройки нет никогда». Этого хватало,
+# пока настройки только записывались; методу sub_quota она нужна на ЧТЕНИЕ — ссылку подписки
+# он берёт из uci и ниоткуда больше, и на молчащей заглушке метод не мог ничего спросить, а
+# проверка была бы зелёной при любом поведении.
+cat > "$T/bin/uci" <<'EOF'
+#!/bin/sh
+S="$SANDBOX/uci.store"
+[ -f "$S" ] || : > "$S"
+while [ $# -gt 0 ]; do
+    case "$1" in -*) shift ;; *) break ;; esac
+done
+case "${1:-}" in
+    get)
+        line="$(grep "^${2:-}=" "$S" | tail -1)" || exit 1
+        [ -n "$line" ] || exit 1
+        printf '%s\n' "${line#*=}"
+        ;;
+    set)
+        k="${2%%=*}"; v="${2#*=}"
+        grep -v "^$k=" "$S" > "$S.t" 2>/dev/null
+        mv "$S.t" "$S" 2>/dev/null || : > "$S"
+        printf '%s=%s\n' "$k" "$v" >> "$S"
+        ;;
+    delete)
+        grep -v "^${2:-}=" "$S" > "$S.t" 2>/dev/null
+        mv "$S.t" "$S" 2>/dev/null || : > "$S"
+        ;;
+esac
+exit 0
+EOF
 # ubus: код возврата прежний (на машине разработчика его нет, и скрипт обязан это
 # переживать), но вызовы теперь протоколируются — сигнал экземпляру виден только так.
 cat > "$T/bin/ubus" <<'EOF'
@@ -180,10 +211,15 @@ EOF
 # одном журнале значило бы проверять «что-то скачалось» вместо «скачалось это».
 cat > "$T/bin/curl" <<'EOF'
 #!/bin/sh
-out=""; url=""; dump=""
+out=""; url=""; dump=""; head=0
 while [ $# -gt 0 ]; do
     case "$1" in
         -o) out="$2"; shift 2 ;;
+        # -fsSI: запрос ОДНИХ заголовков, которым обновляется остаток трафика подписки.
+        # Заголовки при этом уезжают в stdout, а не в файл -D, и тела нет вовсе — поэтому
+        # ветка отдельная: без неё стенд не отличил бы «спросили заголовки» от «скачали
+        # подписку заново».
+        -fsSI|-I) head=1; shift ;;
         # Заголовки ЗАПРОСА протоколируются отдельным файлом: подписка уходит с
         # идентификатором устройства, и проверить это можно только так — в URL его нет.
         -H) echo "$2" >> "$SANDBOX/curl.hdrs"; shift 2 ;;
@@ -196,6 +232,11 @@ while [ $# -gt 0 ]; do
     esac
 done
 echo "$url" >> "$SANDBOX/curl.log"
+if [ "$head" = 1 ]; then
+    echo "$url" >> "$SANDBOX/curl.head.log"
+    printf 'HTTP/2 200\r\n%s\r\n' "${CURL_HEAD_HDRS-${CURL_RESP_HDRS:-}}"
+    exit "${CURL_HEAD_RC:-0}"
+fi
 [ -n "$dump" ] && printf 'HTTP/2 200\r\n%s\r\n' "${CURL_RESP_HDRS:-}" > "$dump"
 if [ -n "$out" ]; then
     if [ -n "${CURL_BODY:-}" ]; then printf '%s\n' "$CURL_BODY" > "$out"
@@ -293,6 +334,8 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         UCI_SPLIFY2="${UCI_SPLIFY2_FIXTURE:-$T/etc/config/splify2}" \
         SYSINFO_MODEL="$T/etc/sysinfo-model" \
         CURL_RESP_HDRS="${CURL_RESP_HDRS:-}" \
+        CURL_HEAD_HDRS="${CURL_HEAD_HDRS-}" \
+        CURL_HEAD_RC="${CURL_HEAD_RC:-0}" \
         CURL_BODY="${CURL_BODY:-}" \
         CURL_RC="${CURL_RC:-0}" \
         APPLIED="$T/etc/spec.applied.json" \
@@ -320,6 +363,17 @@ try: d = json.load(sys.stdin)
 except Exception: print("НЕ JSON"); raise SystemExit
 v = d.get(sys.argv[1])
 print("" if v is None else json.dumps(v, ensure_ascii=False) if isinstance(v,(list,dict,bool)) else v)' "$1"
+}
+
+# Вложенное поле: остаток трафика приезжает объектом, и сравнивать его целиком строкой
+# значило бы привязать проверку к порядку ключей.
+jqget() {  # ОБЪЕКТ ПОЛЕ < JSON
+    python3 -c 'import json,sys
+try: d = json.load(sys.stdin)
+except Exception: print("НЕ JSON"); raise SystemExit
+o = d.get(sys.argv[1]) or {}
+v = o.get(sys.argv[2])
+print("" if v is None else json.dumps(v, ensure_ascii=False) if isinstance(v,(list,dict,bool)) else v)' "$1" "$2"
 }
 
 reset_logs() { rm -f "$T/apk.log" "$T/initd.log" "$T/wget.log" "$T/curl.log" "$T/rpcd-initd.log" "$T/disabled"; : > "$T/apk.log"; : > "$T/initd.log"; }
@@ -809,6 +863,115 @@ rm -f "$T/curl.hdrs"
 out="$(rpcd sub_set '{"url":"vless://key@host:443#node"}')"
 check "для ссылок vless:// запроса нет вовсе" "links;no" \
       "$(printf '%s' "$out" | jget kind);$([ -f "$T/curl.hdrs" ] && echo yes || echo no)"
+
+# ---- остаток трафика подписки (Andromeda: карточка «Подписка» на обзоре) ----------
+# Панель говорит остаток ЗАГОЛОВКОМ ответа, и больше нигде: в теле подписки этих чисел нет.
+# Значит запомнить их можно только в момент запроса — и вся проверка про это.
+USERINFO='subscription-userinfo: upload=1288490188; download=139458183168; total=214748364800; expire=1789200000'
+rm -f "$T/etc/sub.userinfo"
+out="$(CURL_RESP_HDRS="$USERINFO" rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
+check "остаток приезжает в ответе на «Обновить»" "214748364800" \
+      "$(printf '%s' "$out" | jqget quota total)"
+check "разобраны обе половины расхода" "1288490188;139458183168" \
+      "$(printf '%s' "$out" | jqget quota up);$(printf '%s' "$out" | jqget quota down)"
+check "срок подписки разобран" "1789200000" "$(printf '%s' "$out" | jqget quota expire)"
+# Байты — СТРОКАМИ: 200 ГБ не влезают в int32, и обрезанное число выглядело бы законным
+# остатком. Проверяется именно тип, а не значение: значение сверено выше.
+check "объёмы отданы строками, а не числами" "yes" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys; print("yes" if isinstance(json.load(sys.stdin)["quota"]["total"], str) else "no")')"
+check "sub_info отдаёт запомненный остаток без запроса наружу" "214748364800" \
+      "$(rpcd sub_info | jqget quota total)"
+rm -f "$T/curl.log"
+rpcd sub_info > /dev/null
+check "и правда не ходит к панели" "no" \
+      "$([ -f "$T/curl.log" ] && echo yes || echo no)"
+
+# Панель промолчала — прежние числа СНИМАЮТСЯ. «Осталось 68 ГБ» от прежней подписки
+# выглядит свежим и ничем не отличимо от правды; честное «остатка нет» дешевле.
+out="$(CURL_RESP_HDRS='x-hwid-active: true' rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
+check "молчание панели не оставляет прежних чисел" ";" \
+      "$(printf '%s' "$out" | jget quota);$(rpcd sub_info | jget quota)"
+
+# Заголовок есть, а чисел в нём нет — то же молчание: полоса «осталось 0 из 0» была бы
+# выдумкой интерфейса, а не ответом панели.
+out="$(CURL_RESP_HDRS='subscription-userinfo: upload=; download=' rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
+check "заголовок без чисел считается молчанием" "" "$(printf '%s' "$out" | jget quota)"
+
+# sub_quota — обновление остатка БЕЗ подмены подписки. Спрашиваются одни заголовки, файл
+# подписки не трогается: метод зовут при открытии обзора, и подменять там узлы нельзя.
+out="$(CURL_RESP_HDRS="$USERINFO" rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
+sub_before="$(cat "$T/etc/sub.txt")"
+rm -f "$T/curl.log" "$T/curl.head.log" "$T/var/vless-dirty"
+out="$(CURL_HEAD_HDRS='subscription-userinfo: upload=0; download=214748364800; total=214748364800; expire=1789200000' rpcd sub_quota)"
+check "остаток обновлён" "true;true;214748364800" \
+      "$(printf '%s' "$out" | jget ok);$(printf '%s' "$out" | jget asked);$(printf '%s' "$out" | jqget quota down)"
+check "спрошены одни заголовки, а не подписка целиком" "1;1" \
+      "$(wc -l < "$T/curl.head.log" | tr -d ' ');$(wc -l < "$T/curl.log" | tr -d ' ')"
+check "файл подписки не подменён" "$sub_before" "$(cat "$T/etc/sub.txt")"
+check "клиента перечитывать не просят" "no" \
+      "$([ -f "$T/var/vless-dirty" ] && echo yes || echo no)"
+
+# Панель на HEAD ответила отказом (так делают не все, но делают) — тогда обычная загрузка,
+# и она обязана уйти в ВЫБРОСНЫЙ файл, а не поверх подписки.
+rm -f "$T/curl.log" "$T/curl.head.log"
+# Расход в этом состоянии заведомо МЕНЬШЕ того, что приедет ниже: иначе уменьшение расхода
+# само по себе означало бы новый период, и проверка смотрела бы не на то.
+out="$(CURL_RESP_HDRS='subscription-userinfo: upload=0; download=1073741824; total=214748364800; expire=1789200000' rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
+since0="$(printf '%s' "$out" | jqget quota since)"
+rm -f "$T/curl.log" "$T/curl.head.log"
+out="$(CURL_HEAD_RC=22 CURL_HEAD_HDRS='' CURL_RESP_HDRS="$USERINFO" CURL_BODY='vless://other@host:443#new' rpcd sub_quota)"
+check "отказ на HEAD не оставляет остаток непрочитанным" "214748364800" \
+      "$(printf '%s' "$out" | jqget quota total)"
+check "и подписку это не подменяет" "$sub_before" "$(cat "$T/etc/sub.txt")"
+# Найдено на живом роутере: панель отвечала на HEAD отказом, проба снимала файл остатка, а
+# загрузка вслед записывала его заново — и точка отсчёта периода переезжала на каждый вызов.
+# Вместе с ней терялся измеренный темп расхода, который набирается сутками, поэтому «в среднем
+# в сутки» на обзоре не появлялось никогда.
+check "отказ на HEAD не сдвигает точку отсчёта периода" "$since0" \
+      "$(printf '%s' "$out" | jqget quota since)"
+# То же и для ответа БЕЗ чисел: проба прошла, но сказать ей нечего — решает загрузка.
+rm -f "$T/curl.log" "$T/curl.head.log"
+out="$(CURL_HEAD_HDRS='x-hwid-active: true' CURL_RESP_HDRS="$USERINFO" rpcd sub_quota)"
+check "проба без чисел не сдвигает точку отсчёта" "$since0" \
+      "$(printf '%s' "$out" | jqget quota since)"
+
+# Узлы вставлены ссылками vless:// — спрашивать некого, и это не отказ: человек ничего не
+# сделал не так, а кнопка «Обновить» у ссылки лишена смысла ровно по той же причине.
+out="$(rpcd sub_set '{"url":"vless://key@host:443#node"}')"
+rm -f "$T/curl.log"
+out="$(rpcd sub_quota)"
+check "для ссылок vless:// остаток не выдумывается" "true;false;no" \
+      "$(printf '%s' "$out" | jget ok);$(printf '%s' "$out" | jget asked);$([ -f "$T/curl.log" ] && echo yes || echo no)"
+check "и сказано, почему" "yes" \
+      "$(printf '%s' "$out" | jget why | grep -q 'сообщает панель' && echo yes || echo no)"
+
+# Начало периода панель не сообщает, а без него средний расход в сутки не посчитать. Оно
+# запоминается ПЕРВЫМ наблюдением и переносится дальше как есть — иначе темп считался бы от
+# каждого нового опроса и был бы тем меньше, чем чаще смотрят.
+rm -f "$T/etc/sub.userinfo"
+out="$(CURL_RESP_HDRS='subscription-userinfo: upload=0; download=1073741824; total=214748364800; expire=1789200000' rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
+since1="$(printf '%s' "$out" | jqget quota since)"
+check "первое наблюдение периода запомнено" "yes;1073741824" \
+      "$([ "$since1" -gt 0 ] 2>/dev/null && echo yes || echo no);$(printf '%s' "$out" | jqget quota since_used)"
+out="$(CURL_HEAD_HDRS='subscription-userinfo: upload=0; download=3221225472; total=214748364800; expire=1789200000' rpcd sub_quota)"
+check "точка отсчёта не переносится на каждый опрос" "$since1;1073741824" \
+      "$(printf '%s' "$out" | jqget quota since);$(printf '%s' "$out" | jqget quota since_used)"
+# Сменился срок — период новый, и точка отсчёта обязана переехать: иначе темп считался бы
+# по расходу, которого в этом периоде не было.
+out="$(CURL_HEAD_HDRS='subscription-userinfo: upload=0; download=104857600; total=214748364800; expire=1791792000' rpcd sub_quota)"
+check "смена срока начинает период заново" "104857600" \
+      "$(printf '%s' "$out" | jqget quota since_used)"
+# Панель обнулила расход, не меняя срок, — это тоже новый период.
+out="$(CURL_HEAD_HDRS='subscription-userinfo: upload=0; download=1048576; total=214748364800; expire=1791792000' rpcd sub_quota)"
+check "обнуление расхода начинает период заново" "1048576" \
+      "$(printf '%s' "$out" | jqget quota since_used)"
+
+# Метод обязан быть объявлен и в перечне, и в ACL — иначе rpcd его не отдаст, а сборка
+# splify2 упадёт на своей же проверке.
+check "sub_quota объявлен в перечне методов" "yes" \
+      "$(rpcd_list | grep -q '"sub_quota"' && echo yes || echo no)"
+check "sub_quota разрешён в ACL" "yes" \
+      "$(grep -q '"sub_quota"' "$ROOT/luci/root/usr/share/rpcd/acl.d/luci-app-splify2.json" && echo yes || echo no)"
 
 # И обратное свойство: за СПИСКАМИ идентификатор устройства не уходит. Издателю списков
 # незачем знать, какой у человека роутер, — это другой сервер и другая надобность.

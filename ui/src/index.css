@@ -9,14 +9,37 @@
    own defaults, keeping the look identical under Bootstrap or a headless test.
    Note: these are FULL colours (not HSL triplets) — tailwind.config wraps them
    in color-mix() so `/NN` opacity modifiers still work. */
+/* Andromeda 26.9: нейтральные СВОИ, акцент — чужой.
+ *
+ *  До Andromeda каждое значение здесь бралось у темы Argon, чтобы вид страницы не отличался
+ *  от остального LuCI. Дизайн 26.9 это меняет ровно в одном: нейтральные цвета (фон, карточка,
+ *  рельс, поле, линии, текст) заданы литералами и одинаковы под любой темой, а из темы берётся
+ *  ТОЛЬКО акцент (--sp-primary ниже) — он же остаётся единственным цветным в интерфейсе.
+ *
+ *  Почему так. Пульт перестал быть страницей-формой: у него свой рельс разделов, свои карточки
+ *  и своя плотность, и половина оттенков Argon (заливка заголовков, рамки по типам элементов,
+ *  сорокапиксельные контролы) с этим не сходится. Пока нейтральные брались у темы, «как
+ *  выглядит splify2» зависело от того, какая тема стоит, — то есть проверить вид было нельзя.
+ *
+ *  Что осталось от темы: акцент. Человек выбрал цвет в настройках Argon, и рельс, кнопки и
+ *  выбранные строки обязаны быть этого цвета. Состояния (работает / предупреждение / отказ)
+ *  наоборот заданы жёстко и в обеих темах одинаковы: зелёный, жёлтый и красный означают
+ *  состояние, а не оформление, и «зелёный потемнее в тёмной теме» — это уже другое состояние.
+ *
+ *  Значения — из дизайн-пака Andromeda 26.9 (Andromeda дизайн-пак.dc.html, раздел «Токены»). */
 @layer base {
   :root {
-    --sp-background: transparent;
-    --sp-foreground: var(--gray-dark, #32325d);
+    --sp-background: #f6f7f9;
+    --sp-foreground: #22252e;
     --sp-card: #ffffff;
-    --sp-card-foreground: var(--gray-dark, #32325d);
+    --sp-card-foreground: #22252e;
+    /* Рельс разделов: на полтона светлее карточки, чтобы отделяться от неё без линии. */
+    --sp-rail: #fbfbfd;
+    /* Второй текст: подписи строк и объяснения под ними. Между основным и совсем тусклым —
+     * без него объяснение либо кричит, либо не читается. */
+    --sp-fg2: #5b6478;
     --sp-popover: #ffffff;
-    --sp-popover-foreground: var(--gray-dark, #32325d);
+    --sp-popover-foreground: #22252e;
     /* Акцент берём у темы, какая бы стояла, и только потом свой.
      *
      * --primary есть у Argon; у bootstrap-* его нет вовсе, зато есть
@@ -25,56 +48,67 @@
      * «акцент» никогда не оказался пустым. */
     --sp-primary: var(--primary, var(--primary-color-medium, #5e72e4));
     --sp-primary-foreground: #ffffff;
-    --sp-secondary: #f0f0f0;
-    --sp-secondary-foreground: var(--gray-dark, #32325d);
-    --sp-muted: var(--background-color, #f4f5f7);
-    --sp-muted-foreground: var(--gray, #8898aa);
-    --sp-accent: var(--background-color, #f4f5f7);
-    --sp-accent-foreground: var(--gray-dark, #32325d);
-    --sp-destructive: var(--danger, #f5365c);
+    --sp-secondary: #f2f4f7;
+    --sp-secondary-foreground: #22252e;
+    /* Поле ввода и вложенный блок. */
+    --sp-muted: #f2f4f7;
+    --sp-muted-foreground: #8b93a5;
+    --sp-accent: #f2f4f7;
+    --sp-accent-foreground: #22252e;
+    /* Состояния — литералами и БЕЗ обращения к теме. Тема вправе называть свой --danger как
+     * угодно, но «отказ» — это не оформление: три цвета состояния должны читаться одинаково
+     * на любой теме и в любой из двух яркостей, иначе один и тот же роутер выглядит по-разному
+     * сломанным. */
+    --sp-destructive: #f5365c;
     --sp-destructive-foreground: #ffffff;
-    --sp-success: var(--success, #2dce89);
+    --sp-success: #2dce89;
     /* Янтарный, а не оранжево-красный: прежний запасной #fb6340 рядом с destructive
-     * читался как ошибка, и предупреждение выглядело поломкой. Тема, если она свой
-     * --warning объявляет, по-прежнему главнее. */
-    --sp-warning: var(--warning, #ffc107);
-    --sp-info: var(--info, #11cdef);
-    --sp-border: var(--lighter, #e9ecef);
-    --sp-input: #cccccc;
-    --sp-ring: var(--primary, #5e72e4);
+     * читался как ошибка, и предупреждение выглядело поломкой. */
+    --sp-warning: #ffc107;
+    --sp-info: #11cdef;
+    --sp-border: #eceef3;
+    --sp-input: #d9dee9;
+    --sp-ring: var(--primary, var(--primary-color-medium, #5e72e4));
     --sp-card-shadow: 0 0 1rem 0 rgba(136, 152, 170, 0.15);
-    --radius: 0.25rem;
+    /* Andromeda: кнопка и поле — 10, вложенный блок — 12 (rounded-xl), карточка — 16
+     * (rounded-2xl), бейдж — 6 (rounded-sm). Отсюда считаются только первые и последний:
+     * rounded-lg = --radius, rounded-md = −2, rounded-sm = −4 (см. tailwind.config.js).
+     * Двенадцать и шестнадцать берутся у стандартной шкалы Tailwind и здесь не объявлены —
+     * два объявления одного числа разошлись бы. */
+    --radius: 0.625rem;
   }
 
   .dark {
-    --sp-background: transparent;
-    --sp-foreground: #cccccc;
-    --sp-card: #1e1e1e;
-    --sp-card-foreground: #cccccc;
-    --sp-popover: #252526;
-    --sp-popover-foreground: #cccccc;
+    --sp-background: #121317;
+    --sp-foreground: #e8eaf0;
+    --sp-card: #1b1d22;
+    --sp-card-foreground: #e8eaf0;
+    --sp-rail: #17181c;
+    --sp-fg2: #b6bccb;
+    --sp-popover: #1b1d22;
+    --sp-popover-foreground: #e8eaf0;
     /* В тёмной теме прежний запасной цвет (#483d8b) на тёмной странице читался
      * как «не акцент, а просто тёмное пятно» — именно это и было видно на
      * bootstrap-dark, где --dark-primary не существует. Берём акцент темы, а
      * свой запасной делаем светлее фона, а не темнее. */
     --sp-primary: var(--dark-primary, var(--primary-color-high, #6b82f0));
     --sp-primary-foreground: #ffffff;
-    --sp-secondary: #2d2d2d;
-    --sp-secondary-foreground: #cccccc;
-    --sp-muted: #252526;
-    --sp-muted-foreground: #adb5bd;
-    --sp-accent: #2d2d2d;
-    --sp-accent-foreground: #ffffff;
-    --sp-destructive: #c60000;
+    --sp-secondary: #23252b;
+    --sp-secondary-foreground: #e8eaf0;
+    --sp-muted: #23252b;
+    --sp-muted-foreground: #8b93a7;
+    --sp-accent: #23252b;
+    --sp-accent-foreground: #e8eaf0;
+    /* Те же три цвета, что и в светлой: состояние не зависит от яркости страницы. Прежние
+     * тёмные варианты (#c60000, #00ad00) читались как «другой» отказ и «другое» «работает» —
+     * человек, сверяющий два роутера с разными темами, видел разные картинки одной беды. */
+    --sp-destructive: #f5365c;
     --sp-destructive-foreground: #ffffff;
-    --sp-success: #00ad00;
-    /* Янтарный, а не оранжево-красный: прежний запасной #fb6340 рядом с destructive
-     * читался как ошибка, и предупреждение выглядело поломкой. Тема, если она свой
-     * --warning объявляет, по-прежнему главнее. */
-    --sp-warning: var(--warning, #ffc107);
-    --sp-info: var(--info, #11cdef);
-    --sp-border: #3c3c3c;
-    --sp-input: #3c3c3c;
+    --sp-success: #2dce89;
+    --sp-warning: #ffc107;
+    --sp-info: #11cdef;
+    --sp-border: #2a2c33;
+    --sp-input: #3a3d47;
     --sp-ring: var(--dark-primary, var(--primary-color-high, #6b82f0));
     --sp-card-shadow: 0 0 0.5rem 0 rgba(0, 0, 0, 0.35);
   }
@@ -94,6 +128,20 @@
    Проявлялось это как «стили не применились»: галочки оставались в оформлении
    темы LuCI и съезжали вниз, кнопки не получали акцентного цвета. Причём в
    исходнике всё было на месте — поэтому и не находилось глазами. */
+  /* Пульт — своя поверхность, а не продолжение страницы LuCI.
+   *
+   *  Пока фон был `transparent`, рельс разделов и карточки стояли на фоне темы, и контраст
+   *  между ними зависел от неё же: на одной теме рельс был виден, на другой сливался. Теперь
+   *  фон свой, и вся раскладка Andromeda (рельс + карточки на полтона светлее) держится сама.
+   *
+   *  Отрицательных отступов и попыток занять окно целиком здесь нет намеренно: пульт живёт
+   *  внутри контейнера LuCI, и это решение дизайна 26.9 («интерфейс остаётся в LuCI, одно
+   *  окно, никакого splify2.lan»). */
+  .sp-root {
+    background: var(--sp-background);
+    border-radius: 1rem;
+    overflow: hidden;
+  }
   .splify-react-root {
     color: var(--sp-foreground);
     /* Argon renders the whole admin at .875rem over a 16px root — inherit the
@@ -155,6 +203,43 @@
        `h3 { background: #333333 }`. У нас заголовок — подпись внутри карточки, и
        эта заливка превращала её в серую плашку во всю ширину секции. */
     background: none;
+  }
+  /* Шкала заголовков Andromeda 26.9 — КЛАССАМИ, а не утилитами на самом h1.
+   *
+   *  Сброс выше объявляет `font-size: inherit` и `font-weight: inherit` у h1–h4, и он
+   *  написан ВНЕ каскадных слоёв (почему — в комментарии к сбросам). Утилиты Tailwind живут
+   *  в @layer utilities, а неслоёные правила по определению главнее любого слоя — поэтому
+   *  `<h1 className="text-[26px] font-semibold">` давал 14px и вес 400 при том, что в
+   *  разметке стояло 26 и 600. Специфичность тут не помогает: проигрывает слой, а не селектор.
+   *
+   *  Поймано на снимке живого роутера: вердикт «Маршрутизация работает» был ростом с
+   *  подпись в рельсе. Барьер на возврат к утилитам — в build.sh.
+   *
+   *  Значения — из дизайн-пака: вердикт 26/600, заголовок раздела 22/600, заголовок
+   *  карточки 15/600. Третий здесь для заголовков ВНЕ карточки (её собственный CardTitle —
+   *  div, и его утилиты работают). */
+  .splify-react-root .sp-verdict {
+    font-size: 26px;
+    font-weight: 600;
+    line-height: 1.15;
+  }
+  .splify-react-root .sp-title {
+    font-size: 22px;
+    font-weight: 600;
+    line-height: 1.2;
+  }
+  .splify-react-root .sp-sub {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.25;
+  }
+  /* Подпись группы полей («Что», «Кому», «Куда») — тот же случай: она стоит на h3, значит
+   *  размер и вес утилитами не задать. Регистр и разрядку утилиты по-прежнему задают сами:
+   *  сброс отбирает только эти два свойства. */
+  .splify-react-root .sp-label {
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.3;
   }
   .splify-react-root ol,
   .splify-react-root ul {

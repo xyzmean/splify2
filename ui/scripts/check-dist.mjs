@@ -17,10 +17,15 @@ const DIST = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist')
 // so an unexpected chunk means something is being served without cache-busting.
 const EXPECTED_JS = [
   'splify-index.js', 'splify-x.js',
-  // Вкладки пульта. StatusPage и SetupPage ушли: состояние переехало в закреплённую
-  // колонку, а мастер — в пустые состояния, и отдельного режима больше нет.
+  // Разделы пульта, загружаемые по требованию. StatusPage и SetupPage ушли раньше:
+  // состояние переехало на обзор, а мастер — в пустые состояния. Вместо вкладки
+  // «Логи steer» теперь два раздела: диагностика и система (Andromeda 26.9).
+  //
+  // Обзор здесь НЕ ленивый и своего куска не имеет намеренно: это первый экран, и
+  // отдельный запрос за ним означал бы пустое место в момент, когда человек только
+  // открыл страницу.
   'splify-RulesTab.js', 'splify-OutboundsTab.js', 'splify-CatalogTab.js',
-  'splify-LogsTab.js',
+  'splify-Diagnostics.js', 'splify-System.js',
 ]
 
 const js = readdirSync(DIST).filter((f) => f.endsWith('.js')).sort()
