@@ -69,7 +69,7 @@ function syncBleed(root: HTMLElement) {
 
 function mount(el?: HTMLElement | null) {
   const rootElement = el ?? document.getElementById('splify-root')
-  if (!rootElement) { console.error('splify-root not found!'); return }
+  if (!rootElement) return
   teardown()
 
   syncTheme()
@@ -94,4 +94,23 @@ function mount(el?: HTMLElement | null) {
 }
 
 window.__splifyMount = mount
-mount() // first evaluation mounts into the container already in the DOM
+
+// Контейнер может появиться ПОЗЖЕ модуля, и это теперь обычный порядок, а не сбой.
+//
+// Загрузчик (view/splify2/home.js) стартует бандл, не дожидаясь ответа build-id.txt: запрос к
+// нему стоит около 225 мс, и всё это время цепочка стояла. Значит модуль может успеть
+// исполниться раньше, чем LuCI вставит `#splify-root` в дерево, — раньше это кончилось бы
+// пустой страницей и строкой «splify-root not found» в консоли.
+//
+// Ждём появления контейнера кадрами, а не таймером: кадр — это ровно тот момент, когда
+// браузер уже применил изменения дерева. Предел в две секунды: дальше ждать бессмысленно,
+// раздел просто не открылся, и молчаливое ожидание скрыло бы настоящую беду.
+function mountWhenReady() {
+  if (window.__splifyRoot) return // уже смонтировал сам загрузчик — второй раз незачем
+  if (document.getElementById('splify-root')) { mount(); return }
+  if (waited++ < 120) requestAnimationFrame(mountWhenReady)
+  else console.error('splify-root not found!')
+}
+let waited = 0
+if (typeof requestAnimationFrame === 'function') mountWhenReady()
+else mount()
