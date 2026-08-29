@@ -50,9 +50,11 @@ describe('фикс Zapret Manager', () => {
         expect(screen.getByRole('switch')).toBeChecked()
     })
 
-    it('названо имя правила, которое появится в правилах', async () => {
-        vi.spyOn(rpc, 'zmFix').mockResolvedValue({ on: true, channel: 'zm_github' })
+    it('сказано, что фикс касается только роутера', async () => {
+        // Это главное свойство новой версии: в 1.2.3 фикс распространялся на устройства сети
+        // и висел в правилах. Человек должен видеть, что теперь это не так.
+        vi.spyOn(rpc, 'zmFix').mockResolvedValue({ on: true })
         render(<ZmFixCard />)
-        await waitFor(() => expect(screen.getByText(/zm_github/)).toBeInTheDocument())
+        await waitFor(() => expect(screen.getByText(/только самого роутера/)).toBeInTheDocument())
     })
 })

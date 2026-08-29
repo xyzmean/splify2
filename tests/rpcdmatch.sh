@@ -131,6 +131,10 @@ while [ $# -gt 0 ]; do
         *) shift ;;
     esac
 done
+# Без -i и -s настоящий jsonfilter читает ПОТОК — так его и зовут в скрипте
+# (`steer status | jsonfilter -e ...`). Поток вычитывается здесь, потому что дальше
+# стандартный ввод занят программой python.
+if [ -z "$file" ] && [ -z "$str" ]; then str="$(cat)"; fi
 # Выражения уезжают переменной окружения, а не потоком: программу python читает как раз
 # со стандартного ввода (`python3 -` плюс heredoc), и труба до неё не доходит.
 EXPRS="$exprs" python3 - "$file" "$str" <<'PY'
@@ -220,6 +224,15 @@ exit 0
 EOF
 # ubus: код возврата прежний (на машине разработчика его нет, и скрипт обязан это
 # переживать), но вызовы теперь протоколируются — сигнал экземпляру виден только так.
+# nft: ничего не делает, но записывает всё, что ему дали — и аргументами, и потоком.
+# Проверять фикс Zapret Manager иначе нечем: таблица собирается heredoc-ом.
+cat > "$T/bin/nft" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$SANDBOX/nft.log"
+case "$*" in *-f\ -*) cat >> "$SANDBOX/nft.log" ;; esac
+exit 0
+EOF
+
 cat > "$T/bin/ubus" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$SANDBOX/ubus.log"
@@ -284,6 +297,30 @@ case "${1:-}" in
         exit "${STEER_RC:-0}"
         ;;
 esac
+# status: собирается из спеки, чтобы у выходов была метка. Без неё фикс Zapret Manager
+# нечем проверить — он берёт метку именно оттуда, а не выдумывает.
+if [ "$1" = status ]; then
+    spec=""
+    while [ $# -gt 0 ]; do case "$1" in --spec) spec="$2"; shift 2 ;; *) shift ;; esac; done
+    [ -s "$spec" ] && python3 - "$spec" <<'PYEOF'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit(0)
+outs, mark = {}, 0x00100000
+for name, o in (d.get('outputs') or {}).items():
+    if not isinstance(o, dict):
+        continue
+    if o.get('kind') == 'direct':
+        outs[name] = {'kind': 'direct'}
+    else:
+        outs[name] = {'kind': o.get('kind'), 'up': True, 'mark': f'0x{mark:08x}', 'table': 300}
+        mark <<= 1
+print(json.dumps({'schema': 1, 'outputs': outs, 'channels': []}, ensure_ascii=False))
+PYEOF
+    exit 0
+fi
 if [ "$1" = outputs ]; then
     spec=""; kind=""; obfs=0
     while [ $# -gt 0 ]; do
@@ -1475,89 +1512,37 @@ check "выключается обратно" "off" "$(rpcd fetch_mode | jget mo
 
 mv "$T/bin/uci.stub" "$T/bin/uci"
 
-# ---- предупреждение движка не превращает ответ в ошибку ----------------------------
-# С живого экрана: вместо «ответ 53 мс» строка узла показывала красную полосу, а в ней —
-# человеческую строку движка вместе с сырым JSON. Движок пишет предупреждения в stderr
-# («соединился, пропущено мёртвых адресов: 2 из 15»), потоки здесь сливаются нарочно (без
-# stderr отказ было бы нечем объяснить), а проверка смотрела на ПЕРВЫЙ СИМВОЛ вывода — и
-# принимала годный ответ за мусор.
-PROBE_JSON='{"output":"vless","results":[{"index":0,"name":"узел","ok":true,"ttfb_ms":73}],"working":0}'
-out="$(STEER_NOISE='steer vless: auto.example:443 — соединился, пропущено мёртвых адресов: 2 из 15' \
-       STEER_JSON="$PROBE_JSON" rpcd vless_probe '{"output":"vless","node":0}')"
-check "предупреждение перед JSON не ломает проверку узла" "73" \
-      "$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["results"][0]["ttfb_ms"])' 2>/dev/null)"
-check "и сама человеческая строка в ответ не попадает" "" \
-      "$(printf '%s' "$out" | grep -c 'мёртвых адресов' | sed 's/^0$//')"
-
-out="$(STEER_NOISE='steer vless: подписка не прочиталась' STEER_JSON='' rpcd vless_probe '{"output":"vless","node":0}')"
-check "JSON не пришёл вовсе — отказ объясняется словами движка" "yes" \
-      "$(printf '%s' "$out" | jget error | grep -q 'подписка не прочиталась' && echo yes || echo no)"
-
-out="$(STEER_NOISE='steer vless: узлов 29 (пропущено 0)' \
-       STEER_JSON='{"output":"vless","node":1,"nodes":[]}' rpcd vless_nodes '{"output":"vless"}')"
-check "то же и у списка узлов" "vless" \
-      "$(printf '%s' "$out" | jget output)"
-
-# ---- переключатель фикса Zapret Manager --------------------------------------------
-# Умолчание — включено: фикс нужен именно тем, кто ещё ничего не настроил и до GitHub не
-# дошёл. Выключенным по умолчанию он не помог бы никому — кто про него знает, тот и правило
-# заведёт сам.
-cp "$T/bin/uci.stub" "$T/bin/uci" 2>/dev/null || printf '#!/bin/sh\nexit 1\n' > "$T/bin/uci"
-chmod +x "$T/bin/uci"
-check "по умолчанию фикс включён" "true" "$(rpcd zm_fix | jget on)"
-check "имя правила названо — интерфейсу есть что показать" "zm_github" "$(rpcd zm_fix | jget channel)"
-out="$(rpcd zm_fix_set '{"on":"мусор"}')"
-check "чужое значение отвергается" "false" "$(printf '%s' "$out" | jget ok)"
-
-printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo "ЕСТЬ ПРОВАЛЫ: $fails")"
-[ "$fails" -eq 0 ]
-
-# ---- фикс Zapret Manager: адреса GitHub уходят в туннель сами ----------------------
-# Zapret Manager ставится и обновляется с GitHub, а у той аудитории, ради которой splify2 и
-# существует, GitHub закрыт: человек упирается в это раньше, чем успевает что-нибудь
-# настроить. Канал заводится сам — и заводится В СПЕКЕ, а не рядом с ней: производную спеку я
-# пробовал первой, и на роутере она прожила до первого перезапуска службы, чей init-скрипт
-# применяет /etc/steer/spec.json (путь прошит). Зато теперь канал виден в правилах.
+# ---- фикс Zapret Manager: только сам роутер, и ничего в правилах ------------------
+# Zapret Manager ставится и обновляется с GitHub, а у аудитории splify2 GitHub закрыт.
+# Собственные обращения роутера уводятся в туннель сами — и ТОЛЬКО они: у устройств сети свои
+# средства обхода, и уводить их трафик за них никто не просил. Отсюда метка в цепочке
+# `output`: туда попадает только то, что роутер отправил сам.
+#
+# В 1.2.3 это было правилом в спеке, и оба свойства нарушались разом: канал касался клиентов
+# и висел у человека в правилах. Стенд сторожит, чтобы так больше не было.
 ZM_LIST_FIXTURE="$T/lists/zm-github.lst"
 mkdir -p "$T/lists"
-printf '140.82.112.0/20\n185.199.108.0/22\n' > "$ZM_LIST_FIXTURE"
-
-zm_apply() {  # СПЕКА -> спека после применения
-    printf '%s' "$1" > "$T/etc/spec.json"
-    ZM_LIST="$ZM_LIST_FIXTURE" rpcd apply >/dev/null 2>&1
-    cat "$T/etc/spec.json"
-}
-
-names() {  # < СПЕКА -> имена каналов через пробел
-    python3 -c 'import json,sys
-try: d = json.load(sys.stdin)
-except Exception: print("НЕ JSON"); raise SystemExit
-print(" ".join(c["name"] for c in d.get("channels", [])))'
-}
+printf '# комментарий\n140.82.112.0/20\n185.199.108.0/22\n' > "$ZM_LIST_FIXTURE"
 
 SPEC_ONE='{"schema":1,"outputs":{"direct":{"kind":"direct"},"vl":{"kind":"vless"}},"channels":[]}'
-check "канал GitHub заводится сам" "zm_github" "$(zm_apply "$SPEC_ONE" | names)"
-check "и ведёт на туннельный выход" "vl" \
-      "$(cat "$T/etc/spec.json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["channels"][0]["out"])' 2>/dev/null)"
-check "канал адресный, а не доменный: резолвер поднимать незачем" "yes" \
-      "$(cat "$T/etc/spec.json" | grep -q 'prefixes_files' && echo yes || echo no)"
-
-# Второе применение не должно завести второй такой же.
+printf '%s' "$SPEC_ONE" > "$T/etc/spec.json"
+: > "$T/nft.log"
 ZM_LIST="$ZM_LIST_FIXTURE" rpcd apply >/dev/null 2>&1
-check "повторное применение второго канала не добавляет" "zm_github" "$(cat "$T/etc/spec.json" | names)"
 
-# Каналы человека остаются на месте и в прежнем порядке.
-SPEC_TWO='{"schema":1,"outputs":{"direct":{"kind":"direct"},"vl":{"kind":"vless"}},"channels":[{"name":"my","match":{"prefixes_files":["/etc/steer/lists/a.lst"]},"out":"vl"}]}'
-check "прежние каналы остались" "zm_github my" "$(zm_apply "$SPEC_TWO" | names)"
+check "спека не правится: правил у человека не прибавилось" "$SPEC_ONE" "$(cat "$T/etc/spec.json")"
+check "метка ставится в цепочке output — сеть за роутером не затронута" "yes" \
+      "$(grep -q 'hook output' "$T/nft.log" && echo yes || echo no)"
+check "и только там: цепочек forward или prerouting не заводим" "" \
+      "$(grep -c 'hook forward\|hook prerouting' "$T/nft.log" | sed 's/^0$//')"
+check "адреса из списка попали в набор" "yes" \
+      "$(grep -q '140.82.112.0/20' "$T/nft.log" && echo yes || echo no)"
+check "комментарии из списка в набор не попали" "" \
+      "$(grep -c 'комментарий' "$T/nft.log" | sed 's/^0$//')"
+check "метка выхода взята у движка, а не выдумана" "yes" \
+      "$(grep -q '0x00100000' "$T/nft.log" && echo yes || echo no)"
 
-# Туннеля нет — вести GitHub некуда, спеку не трогаем.
-SPEC_NONE='{"schema":1,"outputs":{"direct":{"kind":"direct"}},"channels":[]}'
-check "без туннеля спека не правится" "$SPEC_NONE" "$(zm_apply "$SPEC_NONE")"
-
-# Выключено человеком — фикса нет вовсе.
-: > "$T/uci.store"
-echo 'splify2.main.zm_fix=0' >> "$T/uci.store"
-cp "$T/bin/uci" "$T/bin/uci.off" 2>/dev/null || true
+# Выключено человеком — таблица снимается, а не остаётся висеть.
+: > "$T/nft.log"
 cat > "$T/bin/uci" <<'STUB'
 #!/bin/sh
 key=""
@@ -1565,7 +1550,23 @@ for a in "$@"; do key="$a"; done
 case "$key" in splify2.main.zm_fix) echo 0 ;; *) exit 1 ;; esac
 STUB
 chmod +x "$T/bin/uci"
-check "выключенный фикс спеку не трогает" "$SPEC_ONE" "$(zm_apply "$SPEC_ONE")"
+ZM_LIST="$ZM_LIST_FIXTURE" rpcd apply >/dev/null 2>&1
+check "выключенный фикс снимает таблицу" "yes" \
+      "$(grep -q 'delete table inet splify2_zm' "$T/nft.log" && echo yes || echo no)"
+check "и ничего не собирает" "" \
+      "$(grep -c 'hook output' "$T/nft.log" | sed 's/^0$//')"
+cp "$T/bin/uci.stub" "$T/bin/uci" 2>/dev/null || printf '#!/bin/sh\nexit 1\n' > "$T/bin/uci"
+chmod +x "$T/bin/uci"
+
+# Наследство 1.2.3: канал, дописанный прошлой версией, убирается из спеки.
+SPEC_OLD='{"schema":1,"outputs":{"direct":{"kind":"direct"},"vl":{"kind":"vless"}},"channels":[{"name":"zm_github","match":{"prefixes_files":["/etc/steer/lists/zm-github.lst"]},"out":"vl"},{"name":"my","match":{"prefixes_files":["/etc/steer/lists/a.lst"]},"out":"vl"}]}'
+printf '%s' "$SPEC_OLD" > "$T/etc/spec.json"
+ZM_LIST="$ZM_LIST_FIXTURE" rpcd apply >/dev/null 2>&1
+check "канал от 1.2.3 убран из правил" "my" \
+      "$(python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: print("НЕ JSON"); raise SystemExit
+print(" ".join(c["name"] for c in d.get("channels", [])))' "$T/etc/spec.json")"
 
 # ---- переключатель фикса Zapret Manager --------------------------------------------
 # Умолчание — включено: фикс нужен именно тем, кто ещё ничего не настроил и до GitHub не
