@@ -33,7 +33,13 @@ const info = (p: Record<string, unknown> = {}) =>
     ({ kind: 'url', path: '/etc/steer/sub.txt', present: true, ...p }) as never
 
 describe('карточка «Подписка»: остаток трафика (Andromeda 26.9)', () => {
-    beforeEach(() => vi.restoreAllMocks())
+    /* Карточка помнит прошлое состояние в localStorage и рисует его до первого ответа —
+     * иначе на открытии несколько секунд пусто. Между проверками память чистится: без этого
+     * каждая следующая начинала бы с чужого состояния, и порядок проверок стал бы значимым. */
+    beforeEach(() => {
+        vi.restoreAllMocks()
+        window.localStorage.clear()
+    })
 
     it('свежие числа берутся из sub_info и наружу никто не идёт', async () => {
         const sub = vi.spyOn(rpc, 'subInfo').mockResolvedValue(info({ quota: quota() }))
@@ -145,7 +151,10 @@ const nodes = (name: string) =>
                { index: 1, name, host: 'b.example', port: 443 }] }) as never
 
 describe('локация и туннель без подписки', () => {
-    beforeEach(() => vi.restoreAllMocks())
+    beforeEach(() => {
+        vi.restoreAllMocks()
+        window.localStorage.clear()
+    })
 
     it('локация названа в том же блоке, что и остаток', async () => {
         vi.spyOn(rpc, 'subInfo').mockResolvedValue(info({ quota: quota() }))
@@ -207,5 +216,99 @@ describe('локация и туннель без подписки', () => {
         render(<SubscriptionCard outputs={OUT_VLESS} />)
         expect(await screen.findByText(/68,0 ГБ/)).toBeInTheDocument()
         expect(screen.queryByText(/панель продавца|обнуляются при перезагрузке/i)).toBeNull()
+    })
+})
+
+// Три претензии владельца к открытию страницы, и все три — про ожидание:
+//   «обновлять остатки при открытии», «старый статус должен храниться, чтобы данные сразу
+//   появлялись», «обновление с анимацией», «задержка в 4-5 секунд напрягает».
+//
+// Отсюда и проверки: карточка обязана рисовать запомненное СРАЗУ (до первого ответа ubus),
+// обязана всё равно сходить к панели, и локацию обязана определять сама — измерением через
+// выход, а не подписью продавца.
+
+describe('открытие страницы: запомненное сразу, свежее следом', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks()
+        window.localStorage.clear()
+    })
+
+    it('числа прошлого открытия видны ДО первого ответа роутера', () => {
+        window.localStorage.setItem(
+            'splify2:card',
+            JSON.stringify({ kind: 'url', quota: quota() }),
+        )
+        // Роутер молчит вовсе: ни один ответ не придёт за время проверки.
+        vi.spyOn(rpc, 'subInfo').mockReturnValue(new Promise(() => {}) as never)
+        vi.spyOn(rpc, 'subQuota').mockReturnValue(new Promise(() => {}) as never)
+        render(<SubscriptionCard outputs={OUT_VLESS} />)
+        // Без await: числа обязаны быть в первом же кадре, иначе карточка снова пустая.
+        expect(screen.getByText(/68,0 ГБ/)).toBeInTheDocument()
+    })
+
+    it('панель спрашивается при открытии, даже когда запомненное свежее', async () => {
+        vi.spyOn(rpc, 'subInfo').mockResolvedValue(info({ quota: quota({ at: now() }) }))
+        const ask = vi.spyOn(rpc, 'subQuota').mockResolvedValue({ quota: quota(), kind: 'url' } as never)
+        render(<SubscriptionCard outputs={OUT_VLESS} />)
+        await waitFor(() => expect(ask).toHaveBeenCalled())
+    })
+
+    it('и спрашивается ровно один раз за открытие', async () => {
+        vi.spyOn(rpc, 'subInfo').mockResolvedValue(info({ quota: quota() }))
+        const ask = vi.spyOn(rpc, 'subQuota').mockResolvedValue({ quota: quota(), kind: 'url' } as never)
+        render(<SubscriptionCard outputs={OUT_VLESS} />)
+        await waitFor(() => expect(ask).toHaveBeenCalled())
+        await new Promise((r) => setTimeout(r, 60))
+        expect(ask).toHaveBeenCalledTimes(1)
+    })
+
+    it('приехавшие числа заменяют запомненные', async () => {
+        window.localStorage.setItem(
+            'splify2:card',
+            JSON.stringify({ kind: 'url', quota: quota() }),
+        )
+        vi.spyOn(rpc, 'subInfo').mockResolvedValue(info({ quota: quota() }))
+        vi.spyOn(rpc, 'subQuota').mockResolvedValue({
+            quota: quota({ down: String(180 * GB) }),
+            kind: 'url',
+        } as never)
+        render(<SubscriptionCard outputs={OUT_VLESS} />)
+        expect(screen.getByText(/68,0 ГБ/)).toBeInTheDocument()
+        expect(await screen.findByText(/18,0 ГБ/)).toBeInTheDocument()
+    })
+})
+
+describe('локация меряется сама, а не читается из подписки', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks()
+        window.localStorage.clear()
+    })
+
+    it('страна берётся из измерения через выход', async () => {
+        vi.spyOn(rpc, 'subInfo').mockResolvedValue(info({ quota: quota() }))
+        vi.spyOn(rpc, 'subQuota').mockResolvedValue({ quota: quota(), kind: 'url' } as never)
+        vi.spyOn(rpc, 'outboundGeo').mockResolvedValue({ output: 'vl', cc: 'NL', ip: '1.2.3.4' })
+        // Подпись продавца намеренно ДРУГАЯ: узел переехал, и верить надо измерению.
+        vi.spyOn(rpc, 'vlessNodes').mockResolvedValue(nodes('🇩🇪 Германия №2 — Riot VPN'))
+        render(<SubscriptionCard outputs={OUT_VLESS} />)
+        expect(await screen.findByText(/Нидерланды/)).toBeInTheDocument()
+        expect(screen.queryByText(/Германия/)).toBeNull()
+    })
+
+    it('WireGuard: локация тоже меряется — узлов у него нет вовсе', async () => {
+        vi.spyOn(rpc, 'subInfo').mockResolvedValue(info({ kind: 'none', present: false }))
+        const geo = vi.spyOn(rpc, 'outboundGeo').mockResolvedValue({ output: 'wg0', cc: 'SE' })
+        render(<SubscriptionCard outputs={OUT_WG} />)
+        expect(await screen.findByText(/Швеция/)).toBeInTheDocument()
+        expect(geo).toHaveBeenCalledWith('wg0', false)
+    })
+
+    it('измерения нет — остаётся подпись продавца, а не пустота', async () => {
+        vi.spyOn(rpc, 'subInfo').mockResolvedValue(info({ quota: quota() }))
+        vi.spyOn(rpc, 'subQuota').mockResolvedValue({ quota: quota(), kind: 'url' } as never)
+        vi.spyOn(rpc, 'outboundGeo').mockResolvedValue({ output: 'vl', why: 'выход не поднят' })
+        vi.spyOn(rpc, 'vlessNodes').mockResolvedValue(nodes('🇩🇪 Германия №2 — Riot VPN'))
+        render(<SubscriptionCard outputs={OUT_VLESS} />)
+        expect(await screen.findByText(/Германия №2/)).toBeInTheDocument()
     })
 })

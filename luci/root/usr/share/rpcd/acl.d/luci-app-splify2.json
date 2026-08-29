@@ -29,7 +29,8 @@
           "outbound_probe",
           "leases",
           "splify2_versions",
-          "fetch_mode"
+          "fetch_mode",
+          "outbound_geo"
         ]
       }
     },

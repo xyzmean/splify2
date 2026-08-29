@@ -35,6 +35,21 @@ SUB="${SUB:-/etc/steer/sub.txt}"
 # «панель не сообщает остаток» на подписке, которая его сообщает.
 SUB_INFO="${SUB_INFO:-${SUB%.txt}.userinfo}"
 MANIFEST="${MANIFEST:-/etc/splify2/manifest.json}"
+# Где выходит трафик выхода: страна и адрес, как их видит внешняя сторона. Хранится по файлу
+# на выход и переживает перезагрузку страницы — интерфейс рисует запомненное сразу, не дожидаясь
+# ответа из сети.
+#
+# В /var/lib, а не в /etc: это измерение, а не настройка, и переписывается оно чаще, чем стоит
+# трогать overlay-раздел. Переживать перезагрузку РОУТЕРА ему незачем — узел мог смениться.
+GEO_DIR="${GEO_DIR:-/var/lib/splify2}"
+# Кто отвечает на вопрос «какой у меня адрес и в какой он стране». cdn-cgi/trace выбран за
+# три вещи: отвечает любой узел Cloudflare (то есть ближайший), не требует ни ключа, ни
+# учётной записи, и отдаёт две строки простого текста вместо JSON — разбирать его в shell
+# нечем и не нужно. Адрес переопределяется: `uci set splify2.main.geo_url=...`.
+GEO_URL_DEFAULT="https://www.cloudflare.com/cdn-cgi/trace"
+# Сколько считать измерение свежим. Узел подписки движок меняет при отказе, но не ежеминутно,
+# а каждый опрос — это обращение наружу через туннель со своим таймаутом.
+GEO_TTL="${GEO_TTL:-900}"
 # Сервис и файл описания системы — абсолютные пути, поэтому подменить их заглушкой в
 # PATH нельзя, а стенду нужны оба: через первый идёт вся установка движка, по второму
 # выбирается архитектура пакета.
@@ -1494,6 +1509,9 @@ list)
     json_add_object diag; json_close_object
     json_add_object net_info; json_close_object
     json_add_object outbound_probe; json_add_string output; json_close_object
+    json_add_object outbound_geo
+        json_add_string output; json_add_boolean fresh
+    json_close_object
     json_add_object leases; json_close_object
     json_add_object engine_state; json_close_object
     json_add_object ui_get; json_close_object
@@ -2738,6 +2756,97 @@ splify2: набор обфускаторов изменился — экземп
             [ -z "$active" ] && active=0
         fi
         json_add_int active_clients "$active"
+        json_dump
+        ;;
+
+    outbound_geo)
+        # Где выходит трафик этого выхода: страна и адрес, как их видит внешняя сторона.
+        #
+        # ЗАЧЕМ МЕРИТЬ, А НЕ ЧИТАТЬ. Имя узла подписки («🇩🇪 Германия №2») пишет продавец, и
+        # это подпись, а не факт: узел мог переехать, а у выходов поверх WireGuard и xsteer
+        # имени нет вовсе. Поэтому спрашиваем у внешней стороны — и спрашиваем ЧЕРЕЗ САМ
+        # ВЫХОД, привязав запрос к его устройству (`curl --interface`). Тогда ответ описывает
+        # ровно ту точку, из которой роутер выходит в интернет, и способ один на все виды
+        # выходов: у vless устройство создаёт сам движок, у остальных оно и так есть.
+        #
+        # ПОЧЕМУ ОТВЕТ ЗАПОМИНАЕТСЯ. Обращение наружу стоит секунд, а страница открывается
+        # часто. Свежее измерение отдаётся из файла мгновенно, и только устаревшее (старше
+        # GEO_TTL) заставляет сходить в сеть. Интерфейс к тому же рисует запомненное ещё до
+        # ответа метода — вместе это и убирает паузу на открытии.
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var output output
+        json_get_var fresh fresh
+        [ -n "$output" ] || fail "не указан выход"
+        case "$output" in *[!a-zA-Z0-9_-]*) fail "недопустимое имя выхода" ;; esac
+
+        _geo_f="$GEO_DIR/geo-$output"
+        _geo_now="$(date +%s)"
+        _geo_ip=''; _geo_cc=''; _geo_at=0
+        if [ -s "$_geo_f" ]; then
+            read -r _geo_at _geo_cc _geo_ip < "$_geo_f"
+            case "${_geo_at:-}" in ''|*[!0-9]*) _geo_at=0 ;; esac
+            # Прочерк в файле означает «страну не назвали»: поле в строке обязано быть,
+            # иначе следующее (адрес) прочиталось бы на его место.
+            [ "${_geo_cc:-}" = "-" ] && _geo_cc=''
+        fi
+        _geo_age=$(( _geo_now - _geo_at ))
+
+        # Запомненного хватает: свежее и его не просили обновить.
+        if [ "$_geo_at" -gt 0 ] && [ "$_geo_age" -lt "$GEO_TTL" ] && [ "$fresh" != "1" ] && [ "$fresh" != "true" ]; then
+            json_init
+            json_add_string output "$output"
+            json_add_string ip "$_geo_ip"
+            json_add_string cc "$_geo_cc"
+            json_add_int at "$_geo_at"
+            json_add_boolean cached 1
+            json_dump
+            exit 0
+        fi
+
+        _geo_dev="$("$STEER" status --spec "$SPEC" 2>/dev/null |
+            sed -n "s/.*\"$output\":{[^}]*\"device\":\"\([^\"]*\)\".*/\1/p" | head -1)"
+        json_init
+        json_add_string output "$output"
+        if [ -z "$_geo_dev" ]; then
+            # Устройства нет — выход не поднят, и мерить нечего. Прежнее измерение всё равно
+            # отдаём: «где мы выходили в прошлый раз» полезнее пустоты, а его возраст виден.
+            [ -n "$_geo_ip" ] && json_add_string ip "$_geo_ip"
+            [ -n "$_geo_cc" ] && json_add_string cc "$_geo_cc"
+            [ "$_geo_at" -gt 0 ] && json_add_int at "$_geo_at"
+            json_add_string why "выход не поднят: устройства нет"
+            json_dump; exit 0
+        fi
+        if ! command -v curl >/dev/null 2>&1; then
+            [ -n "$_geo_ip" ] && json_add_string ip "$_geo_ip"
+            [ -n "$_geo_cc" ] && json_add_string cc "$_geo_cc"
+            [ "$_geo_at" -gt 0 ] && json_add_int at "$_geo_at"
+            # uclient-fetch привязать к устройству нечем: у него нет ни --interface, ни
+            # аналога. Городить ради этого правило маршрутизации на время запроса — цена
+            # выше пользы: строка на обзоре не стоит правки таблиц.
+            json_add_string why "нужен curl: привязать запрос к устройству выхода больше нечем"
+            json_dump; exit 0
+        fi
+
+        _geo_url="$(uci -q get splify2.main.geo_url)"
+        [ -n "$_geo_url" ] || _geo_url="$GEO_URL_DEFAULT"
+        _geo_out="$(curl -4 -fsS --interface "$_geo_dev" --connect-timeout 4 --max-time 8 \
+            "$_geo_url" 2>/dev/null)"
+        _geo_new_ip="$(printf '%s\n' "$_geo_out" | sed -n 's/^ip=\(.*\)$/\1/p' | head -1)"
+        _geo_new_cc="$(printf '%s\n' "$_geo_out" | sed -n 's/^loc=\([A-Za-z][A-Za-z]\)$/\1/p' | head -1)"
+        if [ -n "$_geo_new_ip" ]; then
+            mkdir -p "$GEO_DIR" 2>/dev/null
+            printf '%s %s %s\n' "$_geo_now" "${_geo_new_cc:--}" "$_geo_new_ip" > "$_geo_f" 2>/dev/null
+            json_add_string ip "$_geo_new_ip"
+            [ -n "$_geo_new_cc" ] && json_add_string cc "$_geo_new_cc"
+            json_add_int at "$_geo_now"
+            json_add_boolean cached 0
+        else
+            [ -n "$_geo_ip" ] && json_add_string ip "$_geo_ip"
+            [ -n "$_geo_cc" ] && json_add_string cc "$_geo_cc"
+            [ "$_geo_at" -gt 0 ] && json_add_int at "$_geo_at"
+            json_add_string why "через выход не ответили: $_geo_url"
+        fi
         json_dump
         ;;
 
