@@ -69,6 +69,14 @@ function injectBuild(buildId) {
 		script.id = id;
 		script.src = L.resource('splify2/splify-index.js') + v;
 		script.type = 'module';
+		// Второй пояс к тому, который держит сам бандл. Модуль стартует раньше, чем LuCI
+		// вставит контейнер, и монтируется, когда тот появится; но если бандл догрузился
+		// ПОСЛЕ того, как render() уже отработал, звать его было некому — и раздел
+		// открывался пустым экраном. Теперь зовём отсюда, по факту загрузки.
+		script.onload = function () {
+			var el = document.getElementById('splify-root');
+			if (el && window.__splifyMount) window.__splifyMount(el);
+		};
 		document.head.appendChild(script);
 		return true;
 	}

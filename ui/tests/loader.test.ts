@@ -100,3 +100,43 @@ describe('загрузчик: бандл уходит в загрузку, не 
         expect(el.id).toBe('splify-root')
     })
 })
+
+// Пустой экран, который увидел владелец. Порядок такой: бандл стартовал рано, LuCI вставила
+// контейнер позже, а модуль к тому времени перестал ждать — и звать его было некому, потому
+// что render() уже отработал. Отсюда второй пояс: загрузчик монтирует сам, как только модуль
+// догрузился, независимо от того, кто был первым.
+describe('пустой экран: некому смонтировать', () => {
+    beforeEach(() => {
+        document.head.innerHTML = ''
+        document.body.innerHTML = ''
+        window.localStorage.clear()
+        vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+        delete (window as unknown as Record<string, unknown>).__splifyBuildId
+        delete (window as unknown as Record<string, unknown>).__splifyMount
+    })
+
+    it('бандл догрузился после render — загрузчик монтирует его сам', () => {
+        window.localStorage.setItem('splify2:build-id', '26.9.12')
+        const v = loadView()
+        const el = v.render('26.9.12')
+        document.body.appendChild(el) // LuCI вставила контейнер в дерево
+
+        // Только теперь бандл догрузился и объявил себя.
+        const mount = vi.fn()
+        ;(window as unknown as Record<string, unknown>).__splifyMount = mount
+        const script = document.head.querySelector('script[type=module]') as HTMLScriptElement
+        script.onload?.(new Event('load'))
+
+        expect(mount).toHaveBeenCalledWith(el)
+    })
+
+    it('контейнера ещё нет — загрузчик никого не зовёт и не падает', () => {
+        window.localStorage.setItem('splify2:build-id', '26.9.12')
+        loadView()
+        const mount = vi.fn()
+        ;(window as unknown as Record<string, unknown>).__splifyMount = mount
+        const script = document.head.querySelector('script[type=module]') as HTMLScriptElement
+        expect(() => script.onload?.(new Event('load'))).not.toThrow()
+        expect(mount).not.toHaveBeenCalled()
+    })
+})

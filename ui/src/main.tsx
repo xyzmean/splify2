@@ -102,20 +102,35 @@ window.__splifyMount = mount
 // исполниться раньше, чем LuCI вставит `#splify-root` в дерево, — раньше это кончилось бы
 // пустой страницей и строкой «splify-root not found» в консоли.
 //
-// Ждём появления контейнера кадрами, а не таймером: кадр — это ровно тот момент, когда
-// браузер уже применил изменения дерева. Предел в две секунды: дальше ждать бессмысленно,
-// раздел просто не открылся, и молчаливое ожидание скрыло бы настоящую беду.
-function mountWhenReady() {
-  /* Признак СВОЙ на каждый экземпляр модуля, а не общий на страницу. Общий («кто-то уже
-   * смонтировал») выглядел естественно и был неверен: после смены сборки загрузчик держит в
-   * документе два модуля — прежний успел смонтироваться первым, и новый по такому признаку
-   * не монтировался бы никогда. На экране это выглядело как «выложил, а изменений нет». */
-  if (mountedByMe) return
-  if (document.getElementById('splify-root')) { mountedByMe = true; mount(); return }
-  if (waited++ < 120) requestAnimationFrame(mountWhenReady)
-  else console.error('splify-root not found!')
-}
-let waited = 0
+/** Контейнер может появиться ПОЗЖЕ модуля, и это обычный порядок, а не сбой.
+ *
+ *  Загрузчик (view/splify2/home.js) стартует бандл, не дожидаясь ответа build-id.txt: запрос к
+ *  нему стоит около 225 мс, и всё это время цепочка стояла. Значит модуль может успеть
+ *  исполниться раньше, чем LuCI вставит `#splify-root` в дерево.
+ *
+ *  Ждём НАБЛЮДАТЕЛЕМ, а не отсчётом кадров. Отсчёт я уже поставил и получил пустой экран:
+ *  предел в две секунды казался щедрым, но на медленном роутере LuCI успевает вставить
+ *  контейнер позже, а второго шанса у модуля не было — загрузчик к тому моменту уже отработал
+ *  и звать было некого. Наблюдатель ждёт столько, сколько нужно, и снимается сам, как только
+ *  контейнер найден.
+ *
+ *  Признак СВОЙ на каждый экземпляр модуля, а не общий на страницу: после смены сборки в
+ *  документе живут два модуля, и общий признак не дал бы новому смонтироваться вовсе. */
 let mountedByMe = false
-if (typeof requestAnimationFrame === 'function') mountWhenReady()
-else mount()
+
+function mountWhenReady() {
+  if (mountedByMe) return
+  const el = document.getElementById('splify-root')
+  if (!el) return
+  mountedByMe = true
+  mount(el)
+}
+
+mountWhenReady()
+if (!mountedByMe && typeof MutationObserver === 'function') {
+  const waiting = new MutationObserver(() => {
+    mountWhenReady()
+    if (mountedByMe) waiting.disconnect()
+  })
+  waiting.observe(document.documentElement, { childList: true, subtree: true })
+}
