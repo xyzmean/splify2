@@ -166,6 +166,7 @@ LISTS="$T/lists" \
 MANIFEST="$T/etc/manifest.json" \
 STAMP="$T/var/last-update" \
 LOCK="$T/var/update.lock" \
+REPORT="$T/report" \
 FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
     sh "$SCRIPT" > "$T/out" 2>&1
 
@@ -183,6 +184,18 @@ check "доменный файл содержит домены, а не CIDR" \
 
 check "адресный файл содержит CIDR" \
       "10.0.0.0/8" "$(head -1 "$T/lists/news.lst")"
+
+# REPORT — то же, что уходит в syslog, но файлом. Через него отвечает кнопка «Обновить
+# списки» в каталоге: rpcd зовёт этот же скрипт не из терминала, где его log() молчит, и
+# без файла человеку осталось бы читать журнал ради ответа на нажатие кнопки.
+check "отчёт файлом заполнен" \
+      "yes" "$([ -s "$T/report" ] && echo yes || echo no)"
+
+check "в отчёте те же строки, что в журнале" \
+      "yes" "$(grep -q 'news.lst: обновлён' "$T/report" && echo yes || echo no)"
+
+check "прогон без REPORT ничего лишнего не пишет" \
+      "yes" "$([ ! -f "$T/lists/report" ] && echo yes || echo no)"
 
 check "в журнале нет обвинения издателя в непохожем содержимом" \
       "" "$(grep -o 'не похожи на [a-z]*-записи' "$T/syslog" 2>/dev/null | head -1)"

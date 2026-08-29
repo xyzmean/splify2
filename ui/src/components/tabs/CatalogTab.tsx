@@ -75,6 +75,9 @@ export default function CatalogTab({ onUseInRule }: Props) {
     /** Форма своих списков — по кнопке, а не всегда: за ней приходят редко, а место
      *  над каталогом она занимала всегда. Открытой остаётся, пока вкладку не покинули. */
     const [customOpen, setCustomOpen] = useState(false)
+    /** Идёт общий прогон обновления. Отдельно от `busy`: тот про одну запись, а этот
+     *  запирает кнопку целиком — два прогона разом скрипт всё равно не пустит. */
+    const [updating, setUpdating] = useState(false)
 
     useEffect(() => {
         rpc.manifest().then((m) => setManifest(toCatalog(m))).catch(() => setManifest(null))
@@ -117,6 +120,23 @@ export default function CatalogTab({ onUseInRule }: Props) {
             else notify(`${sv.name}: обновлено${via ? ` (${via})` : ''}`)
         } finally {
             unmark(sv.id)
+        }
+    }
+
+    /** Обновить всё, что используют правила. Ровно то же, что делает расписание:
+     *  скачать, подогнать, проверить и применить. */
+    async function updateAll() {
+        setUpdating(true)
+        try {
+            const r = await rpc.listsUpdate()
+            setLocal((await rpc.localLists()).files || {})
+            if (!r.ok) notify(r.error || `Не обновилось списков: ${r.failed || 1}`, 'warning')
+            else if (r.updated) notify(`Обновлено списков: ${r.updated}`)
+            else notify('Списки уже свежие')
+        } catch {
+            notify('Обновить списки не удалось', 'warning')
+        } finally {
+            setUpdating(false)
         }
     }
 
@@ -203,6 +223,13 @@ export default function CatalogTab({ onUseInRule }: Props) {
                         </button>
                     ))}
                 </div>
+                <Button variant="secondary" onClick={updateAll} disabled={updating}>
+                    <RefreshCw
+                        className={`mr-1 h-4 w-4${updating ? ' animate-spin' : ''}`}
+                        aria-hidden="true"
+                    />{' '}
+                    Обновить списки
+                </Button>
                 <Button variant="secondary" onClick={() => setCustomOpen((v) => !v)} aria-expanded={customOpen}>
                     <Plus className="mr-1 h-4 w-4" aria-hidden="true" /> Свой список
                 </Button>

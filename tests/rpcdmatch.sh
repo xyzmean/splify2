@@ -434,6 +434,7 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         APK_ADD_RC="${APK_ADD_RC:-0}" \
         APK_ADD_OUT="${APK_ADD_OUT:-}" \
         PM_FIXTURE="${PM_FIXTURE:-}" \
+        UPDATE_LISTS="${UPDATE_LISTS:-$T/bin/update-lists}" \
         ENGINE_ENABLED="${ENGINE_ENABLED:-0}" \
         sh "$SCRIPT" call "$1" 2>"$T/stderr"
 }
@@ -1610,6 +1611,47 @@ check "после отказа по зависимости списки обно
 check "и установка повторяется" "2" "$(grep -c '^install' "$T/opkg.log")"
 check "человеку сказано, что списки были пусты" "yes" \
       "$(printf '%s' "$out" | jget output | grep -q 'списки пакетов были пусты' && echo yes || echo no)"
+
+# ---- кнопка «Обновить списки» в каталоге ---------------------------------------------
+# Метод не делает работу сам, а зовёт splify2-update-lists — тот же, что ходит по
+# расписанию. Проверяется здесь то, что ломается молча: числа в ответе считаются по
+# отчёту прогона, а не выдумываются, и неудачный прогон не выдаётся за успех.
+cat > "$T/bin/update-lists" <<'EOF'
+#!/bin/sh
+printf 'youtube.lst: обновлён (100 записей)\nrkn.lst: обновлён (3 записи)\nправила применены\n' >> "$REPORT"
+exit 0
+EOF
+chmod +x "$T/bin/update-lists"
+out="$(rpcd lists_update)"
+check "прогон удался" "true" "$(printf '%s' "$out" | jget ok)"
+check "обновлённые посчитаны по отчёту" "2" "$(printf '%s' "$out" | jget updated)"
+check "строки прогона отданы интерфейсу" "yes"       "$(printf '%s' "$out" | jget lines | grep -q 'правила применены' && echo yes || echo no)"
+
+cat > "$T/bin/update-lists" <<'EOF'
+#!/bin/sh
+printf 'rkn.lst: не скачался, оставлен прежний\n' >> "$REPORT"
+exit 1
+EOF
+chmod +x "$T/bin/update-lists"
+out="$(rpcd lists_update)"
+check "неудача прогона не выдаётся за успех" "false" "$(printf '%s' "$out" | jget ok)"
+check "неудавшиеся посчитаны" "1" "$(printf '%s' "$out" | jget failed)"
+
+cat > "$T/bin/update-lists" <<'EOF'
+#!/bin/sh
+printf 'изменений нет\n' >> "$REPORT"
+exit 0
+EOF
+chmod +x "$T/bin/update-lists"
+out="$(rpcd lists_update)"
+check "прогон без изменений — успех, а не отказ" "true" "$(printf '%s' "$out" | jget ok)"
+check "и обновлённых в нём ноль" "0" "$(printf '%s' "$out" | jget updated)"
+
+rm -f "$T/bin/update-lists"
+out="$(rpcd lists_update)"
+check "без обновлятора метод честно отказывается" "false" "$(printf '%s' "$out" | jget ok)"
+
+check "метод объявлен в списке ubus" "yes"       "$(rpcd_list | grep -q lists_update && echo yes || echo no)"
 
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo "ЕСТЬ ПРОВАЛЫ: $fails")"
 [ "$fails" -eq 0 ]

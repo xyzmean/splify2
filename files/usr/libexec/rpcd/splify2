@@ -138,6 +138,10 @@ manifest_url() {
 FETCH_TIMEOUT=${FETCH_TIMEOUT:-60}
 . "${FETCH_SH:-/usr/lib/splify2/fetch.sh}"
 
+# Обновлятор списков — тот же, что ходит по расписанию. Путь швом по той же причине, что и
+# у fetch.sh: на машине разработчика его нет, стенд подставляет свой.
+UPDATE_LISTS=${UPDATE_LISTS:-/usr/sbin/splify2-update-lists}
+
 # ---- идентификатор устройства для панели подписки (HWID) ----------------------------
 #
 # ЗАЧЕМ. Панели (Remnawave и родня) умеют привязывать подписку к устройствам и требуют, чтобы
@@ -1639,6 +1643,7 @@ list)
     json_add_object list_fetch; json_add_string id; json_add_string kind; json_close_object
     json_add_object devices; json_close_object
     json_add_object local_lists; json_close_object
+    json_add_object lists_update; json_close_object
     json_add_object list_remove
         json_add_string id; json_add_string kind; json_add_string name
     json_close_object
@@ -1954,6 +1959,41 @@ splify2: набор обфускаторов изменился — экземп
         # есть что показать вместо молчаливой паузы в полминуты.
         [ -n "$FETCH_NOTE" ] && json_add_string via "$FETCH_NOTE"
         json_dump
+        ;;
+
+    lists_update)
+        # Обновить всё, что используется, прямо сейчас — кнопка в каталоге.
+        #
+        # Зовётся ТОТ ЖЕ скрипт, что ходит по расписанию, а не своя укладка рядом. Он
+        # один знает всё, что к обновлению прилагается: подгонку адресных списков под
+        # память (`steer fit`), проверку скачанного до подмены, откат на прежние копии,
+        # если движок отверг новое, и apply в конце. Вторая реализация разошлась бы с
+        # первой на первом же изменении, а расходиться ей есть где.
+        #
+        # Скрипт умеет только syslog: его log() печатает в stdout лишь под терминалом, а
+        # здесь терминала нет. Поэтому ему передаётся REPORT — файл, куда он дублирует те
+        # же строки. Отправлять человека в журнал за ответом на нажатие кнопки нельзя.
+        [ -x "$UPDATE_LISTS" ] || fail "обновлятор списков не найден"
+        rep="/tmp/splify2-lists-update.$$"
+        rm -f "$rep"
+        : > "$rep"
+        REPORT="$rep" "$UPDATE_LISTS" >/dev/null 2>&1
+        lu_rc=$?
+        lu_changed="$(grep -c ': обновлён' "$rep" 2>/dev/null)"
+        lu_failed="$(grep -c 'оставлен прежний\|не скачался' "$rep" 2>/dev/null)"
+        json_init
+        # ok=0 только тогда, когда что-то не обновилось. Прогон без изменений — успех:
+        # значит списки уже свежие.
+        json_add_boolean ok "$([ "$lu_rc" = 0 ] && echo 1 || echo 0)"
+        json_add_int updated "${lu_changed:-0}"
+        json_add_int failed "${lu_failed:-0}"
+        json_add_array lines
+        while read -r lu_line; do
+            [ -n "$lu_line" ] && json_add_string "" "$lu_line"
+        done < "$rep"
+        json_close_array
+        json_dump
+        rm -f "$rep"
         ;;
 
     list_put)

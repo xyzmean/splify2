@@ -45,6 +45,7 @@
           "spec_set",
           "apply",
           "list_fetch",
+          "lists_update",
           "list_remove",
           "sub_set",
           "sub_quota",

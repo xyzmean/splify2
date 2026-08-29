@@ -144,6 +144,18 @@ export const rpc = {
      *  without that difference, "Download" sits over a list that is already there. */
     localLists: declare<{ files: Record<string, { count: number; mtime: number }> }>('local_lists'),
 
+    /** Обновить разом всё, что используют правила. Тот же прогон, что идёт по
+     *  расписанию: скачивание, подгонка под память, проверка скачанного и apply в конце.
+     *  `updated` — сколько файлов сменилось, `failed` — сколько осталось прежними,
+     *  `lines` — строки прогона для тех, кто захочет подробностей. */
+    listsUpdate: declare<{
+        ok: boolean
+        updated?: number
+        failed?: number
+        lines?: string[]
+        error?: string
+    }>('lists_update'),
+
     /** Delete a downloaded list. Refuses while a channel still points at it: the
      *  engine reads the file when it compiles, so removing it under a live channel
      *  turns the next apply into a failure. */

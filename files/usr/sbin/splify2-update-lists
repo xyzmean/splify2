@@ -22,7 +22,18 @@ MANIFEST=${MANIFEST:-/etc/splify2/manifest.json}
 STAMP=${STAMP:-/var/lib/splify2/last-update}
 LOCK=${LOCK:-/var/lock/splify2-update.lock}
 
-log() { logger -t splify2-update "$*"; [ -t 1 ] && echo "$*"; }
+# Куда писать отчёт о прогоне, кроме syslog. Пусто — только syslog, как было.
+# Заполняет его rpcd (кнопка «Обновить списки» в каталоге): вызов идёт не из терминала,
+# поэтому echo молчит, а рассказывать человеку по журналу — значит просить его открыть
+# журнал ради ответа на нажатие кнопки.
+REPORT=${REPORT:-}
+
+log() {
+    logger -t splify2-update "$*"
+    [ -n "$REPORT" ] && printf '%s\n' "$*" >> "$REPORT"
+    [ -t 1 ] && echo "$*"
+    return 0
+}
 
 [ -s "$SPEC" ] || { log "спеки нет — обновлять нечего"; exit 0; }
 
