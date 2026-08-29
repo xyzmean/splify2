@@ -191,16 +191,28 @@ export default function EngineCard({ engine, releases, onInstalled }: Props) {
                     </Button>
                 </div>
 
+                {/* Почему версия одна и без названия выпуска. Приходит только с запасного
+                    пути (splify2#15): перечень релизов живёт на api.github.com, и там, где
+                    его закрыли, бэкенд откатывается на VERSION главной ветки. Молчание тут
+                    означало бы, что у проекта один релиз. */}
+                {!!releases?.note && versions?.length !== 0 && (
+                    <p className="text-xs text-muted-foreground">{releases.note}</p>
+                )}
+
                 {versions?.length === 0 && (
                     <p className="text-xs text-muted-foreground">
                         {t('Список версий не пришёл — проверьте интернет на роутере. Можно поставить пакет вручную:')}{' '}
+                        {/* Зеркало, а не github.com: у того, кто видит этот текст, закрыт
+                            обычно именно GitHub, и ссылка туда бесполезна ровно для того,
+                            кому адресована. В ветке dist лежат те же пакеты релиза, и
+                            зеркалится она сама — в отличие от файлов релиза. */}
                         <a
-                            href="https://github.com/xyzmean/steer/releases"
+                            href="https://gitlab.com/xyzmean/steer/-/tree/dist"
                             target="_blank"
                             rel="noreferrer"
                             className="underline decoration-dotted"
                         >
-                            github.com/xyzmean/steer/releases
+                            gitlab.com/xyzmean/steer (ветка dist)
                         </a>
                     </p>
                 )}

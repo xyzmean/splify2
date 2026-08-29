@@ -106,6 +106,30 @@ export default function SelfUpdateCard({
                     </Button>
                 </div>
 
+                {/* Почему версия одна и без названия выпуска — см. ту же строку в карточке
+                    движка (splify2#15). */}
+                {!!info?.note && versions.length > 0 && (
+                    <p className="text-xs text-muted-foreground">{info.note}</p>
+                )}
+
+                {/* Список не приехал вовсе. До этого единственным следом была строка
+                    «релизов не найдено» внутри выпадающего списка — то есть утверждение,
+                    что релизов нет, вместо признания, что спросить не удалось. Карточка
+                    движка объясняла это с самого начала, карточка интерфейса молчала. */}
+                {info !== null && versions.length === 0 && (
+                    <p className="text-xs text-muted-foreground">
+                        {t('Список версий не пришёл — проверьте интернет на роутере. Можно поставить пакет вручную:')}{' '}
+                        <a
+                            href="https://gitlab.com/xyzmean/splify2/-/tree/dist"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="underline decoration-dotted"
+                        >
+                            gitlab.com/xyzmean/splify2 (ветка dist)
+                        </a>
+                    </p>
+                )}
+
                 {/* Сказанное установщиком. Единственное место, где текст приходит от
                     менеджера пакетов как есть — и единственный канал, которым post-install
                     может о чём-то попросить человека с браузером. */}

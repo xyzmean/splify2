@@ -139,8 +139,10 @@ export default function Console() {
 
                     <div className="mt-6 border-t border-border pt-3 text-right text-xs text-muted-foreground">
                         powered by{' '}
+                        {/* Зеркало, а не github.com: README называет домом steer именно его,
+                            и по этой ссылке доходят те, кому закрыли GitHub (splify2#15). */}
                         <a
-                            href="https://github.com/xyzmean/steer"
+                            href="https://gitlab.com/xyzmean/steer"
                             target="_blank"
                             rel="noreferrer"
                             className="underline decoration-dotted hover:text-foreground"

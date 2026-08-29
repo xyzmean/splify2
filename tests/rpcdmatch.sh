@@ -100,6 +100,11 @@ case "$url" in
         # места нет. В наборе намеренно есть релиз без заголовка (null) и заголовок с
         # вертикальной чертой: обе ветки отката на число проверяются ниже.
         #
+        # GH_FAIL=1 — «хост не отвечает вовсе»: так это и выглядит у человека, которому
+        # закрыли api.github.com или у которого за CGNAT выбрали неавторизованный лимит
+        # (splify2#5). Отличается от GH_BODY='не json' тем, что ответа нет, а не что он плох.
+        [ -n "${GH_FAIL:-}" ] && exit 1
+        #
         # Уезжает в ФАЙЛ, когда его просят (-qO файл), и в поток, когда просят поток: список
         # версий читается jsonfilter-ом, а тому нужен файл.
         if [ -n "${GH_BODY:-}" ]; then body="$GH_BODY"; else
@@ -429,6 +434,7 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         BACKUP_MAX_BYTES="${BACKUP_MAX_BYTES:-262144}" \
         STEER_RC="${STEER_RC:-0}" \
         GH_BODY="${GH_BODY-}" \
+        GH_FAIL="${GH_FAIL-}" \
         GH_CACHE="$T/var/releases.json" \
         STEER_ERR="${STEER_ERR:-}" \
         APK_ADD_RC="${APK_ADD_RC:-0}" \
@@ -626,6 +632,48 @@ check "интерфейс отдаёт названия тем же полем" 
 out="$(GH_BODY='не json' rpcd steer_versions)"
 check "нечитаемый ответ GitHub не роняет метод" "true;[];{}" \
       "$([ -n "$out" ] && echo true || echo false);$(printf '%s' "$out" | jget versions);$(printf '%s' "$out" | jget names)"
+
+# ---- splify2#15: перечень версий переживает закрытый api.github.com ------------------
+# Пакеты и списки обход получили ещё в запуске 59 (общая download() с лестницей «зеркало →
+# contents API → архив → туннель»), а ПЕРЕЧЕНЬ версий остался спрошенным у одного хоста.
+# Там, где api.github.com закрыт или где за CGNAT выбран его неавторизованный лимит (60
+# запросов в час на адрес — так и пришла splify2#5), обе карточки показывали пустой список:
+# обновиться из интерфейса нельзя, хотя сам пакет с зеркала скачался бы. Установщик этот
+# путь имеет с запуска 48 (R-048, VERSION в main вторым источником) — бэкенд не имел.
+reset_logs
+out="$(GH_FAIL=1 CURL_BODY='1.2.9' rpcd steer_versions)"
+check "api.github.com молчит — версия берётся из VERSION (splify2#15)" '["1.2.9"]' \
+      "$(printf '%s' "$out" | jget versions)"
+check "запасной путь идёт общей download(), а не своим wget" \
+      "https://raw.githubusercontent.com/xyzmean/steer/main/VERSION" \
+      "$(grep 'VERSION' "$T/curl.log" | head -1)"
+check "почему список короткий — сказано словами, а не пустотой" "yes" \
+      "$(printf '%s' "$out" | jget note | grep -q 'VERSION' && echo yes || echo no)"
+check "единственная версия называет себя сама" "1.2.9" \
+      "$(printf '%s' "$out" | jqget names 1.2.9)"
+
+out="$(GH_FAIL=1 CURL_BODY='1.2.9' rpcd splify2_versions)"
+check "интерфейс берёт свою версию тем же путём (splify2#15)" '["1.2.9"]' \
+      "$(printf '%s' "$out" | jget versions)"
+
+# VERSION содержит ТОЛЬКО цифры и точки — на это стоит барьер в build.sh. Всё остальное
+# отвергается целиком: подставить мусор в имя файла пакета хуже, чем остаться без версии.
+out="$(GH_FAIL=1 CURL_BODY='v1.2.9-rc1' rpcd steer_versions)"
+check "VERSION не вида «цифры и точки» не берётся" "[]" \
+      "$(printf '%s' "$out" | jget versions)"
+
+# Не ответил никто. Метод обязан ОТВЕТИТЬ пустым списком: карточка на нём говорит «список
+# версий не пришёл», и это правда, а падение метода выглядело бы как поломка интерфейса.
+out="$(GH_FAIL=1 CURL_RC=1 rpcd steer_versions)"
+check "не ответил никто — метод всё равно отвечает" "true;[]" \
+      "$([ -n "$out" ] && echo true || echo false);$(printf '%s' "$out" | jget versions)"
+
+# Обычный путь запасным не подменяется: пока API отвечает, VERSION не спрашивается вовсе.
+reset_logs
+out="$(rpcd steer_versions)"
+check "API ответил — за VERSION никто не ходит" "" \
+      "$(grep 'VERSION' "$T/curl.log" 2>/dev/null | head -1)"
+check "API ответил — примечания нет" "" "$(printf '%s' "$out" | jget note)"
 
 out="$(rpcd splify2_versions)"
 check "установленная версия названа, чтобы было с чем сравнить (R-042)" \
