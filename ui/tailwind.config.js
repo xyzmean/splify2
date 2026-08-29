@@ -38,7 +38,11 @@ module.exports = {
           background: "var(--sp-background)",
           foreground: mix("--sp-foreground"),
           success: mix("--sp-success"),
+          // Янтарный для рамки и подложки блока (`border-warning/40 bg-warning/10`) и
+          // ОТДЕЛЬНЫЙ токен для текста: сам янтарный буквами на белой карточке нечитаем.
+          // Два значения — из дизайн-пака 26.9, у него на каждую яркость свой текст.
           warning: mix("--sp-warning"),
+          "warning-fg": mix("--sp-warning-fg"),
           info: mix("--sp-info"),
           primary: {
             DEFAULT: mix("--sp-primary"),

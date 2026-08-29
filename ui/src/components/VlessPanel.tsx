@@ -257,7 +257,7 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
               * роутера, через секунды и словами про код возврата. Тот же ответ рядом с полем
               * и сразу понятнее, и не требует похода в сеть. */}
             {urlErr && (
-                <p id={`sub-url-err-${name}`} role="alert" className="text-xs text-warning">
+                <p id={`sub-url-err-${name}`} role="alert" className="text-xs text-warning-fg">
                     {urlErr}
                 </p>
             )}
@@ -317,13 +317,13 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
             )}
 
             {!sub?.present && (
-                <p className="text-xs text-warning">
+                <p className="text-xs text-warning-fg">
                     Подписки нет. Без неё выход никуда не ведёт: узлы движок берёт только из файла.
                 </p>
             )}
 
             {sub?.present && !saved && (
-                <p className="text-xs text-warning">
+                <p className="text-xs text-warning-fg">
                     Сохраните выход — узлы движок покажет для уже сохранённой настройки.
                 </p>
             )}

@@ -114,7 +114,7 @@ export default function SelfUpdateCard({
                     может о чём-то попросить человека с браузером. */}
                 {notes && (
                     <div className="rounded-md border border-warning/40 bg-warning/10 p-3">
-                        <p className="text-xs font-semibold text-warning">{t('Установщик сказал')}:</p>
+                        <p className="text-xs font-semibold text-warning-fg">{t('Установщик сказал')}:</p>
                         <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs">
                             {notes}
                         </pre>

@@ -88,7 +88,7 @@ export default function Rail({ live, section, onSection, counts }: RailProps) {
                                 {c && (
                                     <span
                                         className={`ml-auto text-[11px] ${
-                                            c.alarm ? 'font-semibold text-warning' : 'text-muted-foreground'
+                                            c.alarm ? 'font-semibold text-warning-fg' : 'text-muted-foreground'
                                         }`}
                                     >
                                         {c.text}

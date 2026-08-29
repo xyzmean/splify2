@@ -55,6 +55,19 @@ check "на его отсутствие в пакете стоит барьер"
 check "обе половины подключают именно его" "2" \
     "$(grep -c 'FETCH_SH:-/usr/lib/splify2/fetch.sh' files/usr/libexec/rpcd/splify2 files/usr/sbin/splify2-update-lists | awk -F: '{s+=$2} END {print s}')"
 
+# Акцент Andromeda не подменяется общей переменной темы. `--primary-color-medium` и
+# `--primary-color-high` объявляет ЛЮБАЯ тема семейства bootstrap — просто как цвет ссылок,
+# безо всякого выбора человека. Пока они стояли в цепочке, единственный цветной элемент
+# страницы переставал быть цветом проекта: замерено на роутере под стоковой темой OpenWrt
+# 25.12 — светлая #1564c0, тёмная выцветшая бирюза #4da1c0. Выбор человека в Argon
+# (`--primary` / `--dark-primary`) уважается по-прежнему, он остаётся первым в цепочке.
+# Считается ОБРАЩЕНИЕ (`var(--primary-color-...`), а не упоминание: имена этих переменных
+# названы в комментарии выше самой цепочки — там объяснено, почему их там нет.
+check "акцент не подменяется общей переменной темы" "0" \
+    "$(grep -c 'var(--primary-color-' ui/src/index.css)"
+check "у предупреждения свой цвет текста в каждой яркости" "2" \
+    "$(grep -c -- '--sp-warning-fg:' ui/src/index.css)"
+
 check "build.sh собирает apk" "1" "$(grep -c 'info name:luci-app-splify2' build.sh)"
 check "build.sh собирает ipk" "1" "$(grep -c 'Package: luci-app-splify2' build.sh)"
 check "build.sh берёт родной ipkg-build из OpenWrt" "1" \

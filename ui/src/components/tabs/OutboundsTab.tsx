@@ -455,7 +455,7 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                                 работающее, и сам вернётся наверх, когда основное оживёт.
                                             </div>
                                             {list.length === 0 && (
-                                                <p className="py-1 text-xs text-warning">
+                                                <p className="py-1 text-xs text-warning-fg">
                                                     Устройств нет — выход никуда не ведёт.
                                                 </p>
                                             )}

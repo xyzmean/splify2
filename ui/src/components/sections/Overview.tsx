@@ -183,7 +183,7 @@ export default function Overview({
                     ].join(' ')}
                 >
                     <TriangleAlert
-                        className={`h-4 w-4 shrink-0 ${live.diag?.fail ? 'text-destructive' : 'text-warning'}`}
+                        className={`h-4 w-4 shrink-0 ${live.diag?.fail ? 'text-destructive' : 'text-warning-fg'}`}
                         aria-hidden="true"
                     />
                     <span className="min-w-0 flex-1">{v.why}</span>
@@ -217,7 +217,7 @@ export default function Overview({
                 получается — на роутере с поднятым туннелем ни одна из веток не срабатывает. */}
             {(nowhere || noDevice.length > 0 || dead.length > 0) && (
                 <div className="rounded-2xl border border-warning/40 bg-warning/10 p-4">
-                    <h2 className="sp-sub flex items-center gap-2 text-warning">
+                    <h2 className="sp-sub flex items-center gap-2 text-warning-fg">
                         <TriangleAlert className="h-4 w-4" aria-hidden="true" /> Трафику некуда идти
                     </h2>
                     {nowhere ? (
@@ -260,7 +260,7 @@ export default function Overview({
                 текст приходит от steer как есть: сокращать его нельзя, там названа причина. */}
             {(live.status?.warnings?.length ?? 0) > 0 && (
                 <div className="rounded-2xl border border-warning/40 bg-warning/10 p-4">
-                    <h2 className="sp-sub flex items-center gap-2 text-warning">
+                    <h2 className="sp-sub flex items-center gap-2 text-warning-fg">
                         <TriangleAlert className="h-4 w-4" aria-hidden="true" /> Предупреждения steer
                     </h2>
                     <ul className="mt-2 space-y-2 text-xs">

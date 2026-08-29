@@ -145,7 +145,7 @@ export default function SubscriptionCard() {
                             {v.forecastDays !== null && (
                                 <div className="flex items-baseline justify-between gap-2">
                                     <dt className="text-subtle">хватит при таком темпе</dt>
-                                    <dd className={`font-medium ${v.tight ? 'text-warning' : ''}`}>
+                                    <dd className={`font-medium ${v.tight ? 'text-warning-fg' : ''}`}>
                                         на {daysText(v.forecastDays)}
                                     </dd>
                                 </div>

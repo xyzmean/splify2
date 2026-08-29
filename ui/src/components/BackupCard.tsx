@@ -182,7 +182,7 @@ export default function BackupCard({
                 </p>
                 {/* Сказать это до нажатия, а не после: в файле лежат ссылки vless:// с
                     ключами, то есть он секретен ровно как пароль от VPN. */}
-                <p className="text-xs text-warning">
+                <p className="text-xs text-warning-fg">
                     В файле есть ссылки vless:// с ключами. Храните его как пароль.
                 </p>
 

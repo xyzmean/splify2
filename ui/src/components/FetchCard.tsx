@@ -110,7 +110,7 @@ export default function FetchCard() {
                             {t('Пойдёт через выход')} <span className="font-medium text-foreground">{out}</span>.
                         </p>
                     ) : (
-                        <p className="text-xs text-warning">
+                        <p className="text-xs text-warning-fg">
                             {t('Поднятого выхода со своей таблицей маршрутизации сейчас нет — скачивание пойдёт обычным порядком, пока он не появится.')}
                         </p>
                     ))}

@@ -64,7 +64,7 @@ export default function Diagnostics({ live }: { live: Live }) {
                                 {c.verdict === 'fail' ? (
                                     <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
                                 ) : (
-                                    <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
+                                    <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning-fg" aria-hidden="true" />
                                 )}
                                 <div className="min-w-0">
                                     <div>{c.what}</div>
@@ -132,7 +132,7 @@ export default function Diagnostics({ live }: { live: Live }) {
                                         {m && (
                                             <span
                                                 className={`shrink-0 font-mono ${
-                                                    m[1] === 'warn' ? 'text-warning' : 'text-muted-foreground'
+                                                    m[1] === 'warn' ? 'text-warning-fg' : 'text-muted-foreground'
                                                 }`}
                                             >
                                                 {m[1]}

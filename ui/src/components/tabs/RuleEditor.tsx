@@ -267,7 +267,7 @@ export default function RuleEditor({
                         домены, и адреса, в правило попадут оба. Домены точнее (адрес сервиса меняется, имя
                         нет), адреса работают и когда клиент не спрашивает наш DNS.
                     </p>
-                    {clash && <p className="mt-1 text-xs text-warning">{clash}</p>}
+                    {clash && <p className="mt-1 text-xs text-warning-fg">{clash}</p>}
                 </section>
 
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -391,13 +391,13 @@ export default function RuleEditor({
                         </h3>
                         <div className="mt-2 space-y-2">
                             {outNames.length === 0 && (
-                                <p className="text-xs text-warning">
+                                <p className="text-xs text-warning-fg">
                                     Outbound-ов нет — правилу некуда вести. Заведите его на вкладке
                                     «Outbounds».
                                 </p>
                             )}
                             {orphans.map((d) => (
-                                <p key={d.name} className="text-xs text-warning">
+                                <p key={d.name} className="text-xs text-warning-fg">
                                     Туннель {d.name} поднят, но выхода на него нет — завести на вкладке
                                     «Outbounds». Правило ведёт в выход, а не в устройство напрямую.
                                 </p>

@@ -130,18 +130,18 @@ export default function ObfsPanel({ output, onChange }: Props) {
                         DNS, который сам может идти в этот туннель. Говорим об этом до
                         сохранения, а не отказом движка после. */}
                     {host.length === 0 && (
-                        <p className="text-xs text-warning">
+                        <p className="text-xs text-warning-fg">
                             Без адреса сервера обфускации выход не сохранится.
                         </p>
                     )}
                     {hostBad && (
-                        <p className="text-xs text-warning">
+                        <p className="text-xs text-warning-fg">
                             Нужен адрес, а не имя: движок не разрешает имена — запрос к DNS мог бы
                             уйти в тот самый туннель, который через этот сервер и поднимается.
                         </p>
                     )}
                     {(sportBad || lportBad) && (
-                        <p className="text-xs text-warning">Порт — число от 1 до 65535.</p>
+                        <p className="text-xs text-warning-fg">Порт — число от 1 до 65535.</p>
                     )}
 
                     <p className="text-xs text-muted-foreground">

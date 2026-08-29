@@ -251,7 +251,7 @@ export default function CatalogTab({ onUseInRule }: Props) {
                                             /* Прочитать это надо ДО включения: адресный список у пары
                                                совпадает побайтово, и второй выбор не добавляет ни
                                                одного адреса. Причина — издателя, не наша. */
-                                            <div className="mt-0.5 text-xs text-warning">
+                                            <div className="mt-0.5 text-xs text-warning-fg">
                                                 <Hint
                                                     /* Причина — строка издателя, и она вставляется
                                                        как есть: своей формулировки у интерфейса
@@ -279,7 +279,7 @@ export default function CatalogTab({ onUseInRule }: Props) {
                                                в дополнении — но дополнение это ОТДЕЛЬНАЯ строка
                                                каталога. Промолчать здесь значит оставить человека с
                                                включённым зеркалом и тем же отсутствующим доменом. */
-                                            <div className="mt-0.5 text-xs text-warning">
+                                            <div className="mt-0.5 text-xs text-warning-fg">
                                                 <Hint
                                                     tip={
                                                         sv.complement.ours

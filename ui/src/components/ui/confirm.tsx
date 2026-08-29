@@ -49,7 +49,7 @@ export function useConfirm(): [(req: ConfirmRequest) => Promise<boolean>, React.
       <Card className="w-full max-w-md shadow-lg">
         <CardContent className="p-5">
           <h4 className="sp-sub flex items-center gap-2">
-            <AlertTriangle className={pending.tone === 'default' ? 'size-4 text-primary' : 'size-4 text-warning'} />
+            <AlertTriangle className={pending.tone === 'default' ? 'size-4 text-primary' : 'size-4 text-warning-fg'} />
             {pending.title}
           </h4>
           {pending.body && <p className="mt-2 text-sm text-muted-foreground">{pending.body}</p>}
