@@ -403,6 +403,35 @@ printf '9c:53:22:1f:0a:bc\n' > "$T/sys/class/net/br-lan/address"
 printf '0a:11:22:33:44:55\n' > "$T/sys/class/net/wlan0/address"
 printf 'Xiaomi AX3000T\n'    > "$T/etc/sysinfo-model"
 
+# Поддельное /sys/class/net для перечня СЕТЕЙ КЛИЕНТОВ (splify2#16). Набор списан с
+# роутера человека из обращения: домашний мост, порт внутри этого моста, wan, туннель
+# Tailscale и мост ZeroTier. Каждое устройство здесь отвечает на свой вопрос отбора.
+mkdir -p "$T/sysnet/lo" "$T/sysnet/br-lan" "$T/sysnet/lan1" "$T/sysnet/wan" \
+         "$T/sysnet/tailscale0" "$T/sysnet/ztrfyzwvfa" "$T/sysnet/br-guest"
+ln -s ../br-lan "$T/sysnet/lan1/master"          # порт внутри моста — не своя сеть
+for d in lo br-lan lan1 wan tailscale0 ztrfyzwvfa; do printf 'up\n' > "$T/sysnet/$d/operstate"; done
+printf 'down\n' > "$T/sysnet/br-guest/operstate"  # гостевой мост поднимут позже
+
+# ip: единственная подкоманда, которая нужна перечню сетей, — адреса устройства. Форма
+# строки как у настоящего `ip -4 -o addr show`, включая хвост после префикса: разбор обязан
+# брать второе поле, а не всю строку. У Tailscale адрес /32 — сеть из одного адреса, и это
+# не выдумка стенда, а то, из-за чего перечень обязан показывать ВЫВЕДЕННУЮ сеть.
+cat > "$T/bin/ip" <<'EOF'
+#!/bin/sh
+dev=""
+for a in "$@"; do dev="$a"; done
+case "$1" in rule|route) exit 0 ;; esac
+case "$dev" in
+    br-lan)     echo "3: br-lan    inet 192.168.1.1/24 brd 192.168.1.255 scope global br-lan" ;;
+    wan)        echo "4: wan    inet 46.42.17.15/22 brd 46.42.19.255 scope global wan" ;;
+    tailscale0) echo "9: tailscale0    inet 100.64.1.5/32 scope global tailscale0" ;;
+    ztrfyzwvfa) echo "8: ztrfyzwvfa    inet 10.147.17.20/24 brd 10.147.17.255 scope global ztrfyzwvfa" ;;
+    lo)         echo "1: lo    inet 127.0.0.1/8 scope host lo" ;;
+esac
+exit 0
+EOF
+chmod +x "$T/bin/ip"
+
 # ---- вызов настоящего скрипта -------------------------------------------------
 # Один вход на все проверки: разница между ними — только в фикстурах и переменных.
 rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; для перечня методов есть rpcd_list
@@ -421,6 +450,7 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         VLESS_DIRTY="$T/var/vless-dirty" \
         OBFS_DIRTY="$T/var/obfs-dirty" \
         HWID_SYSNET="${HWID_SYSNET_FIXTURE:-$T/sys/class/net}" \
+        SYSNET="${SYSNET_FIXTURE:-$T/sysnet}" \
         UCI_SPLIFY2="${UCI_SPLIFY2_FIXTURE:-$T/etc/config/splify2}" \
         SYSINFO_MODEL="$T/etc/sysinfo-model" \
         CURL_RESP_HDRS="${CURL_RESP_HDRS:-}" \
@@ -1580,7 +1610,11 @@ check "и в uci ничего не изменилось" "always" \
 out="$(rpcd fetch_mode_set '{"mode":"off"}')"
 check "выключается обратно" "off" "$(rpcd fetch_mode | jget mode)"
 
-mv "$T/bin/uci.stub" "$T/bin/uci"
+# Копией, а не переносом. Ниже по файлу общая заглушка восстанавливается ещё дважды
+# (`cp "$T/bin/uci.stub" ...`), и перенос уносил образец — восстановление молча падало в
+# запасную ветку «uci отвечает отказом на всё». Проверки, писавшие после этого в uci, шли
+# против команды, которая не умеет ничего: зелёными они были не по существу.
+cp "$T/bin/uci.stub" "$T/bin/uci"
 
 # ---- фикс Zapret Manager: только сам роутер, и ничего в правилах ------------------
 # Zapret Manager ставится и обновляется с GitHub, а у аудитории splify2 GitHub закрыт.
@@ -1700,6 +1734,48 @@ out="$(rpcd lists_update)"
 check "без обновлятора метод честно отказывается" "false" "$(printf '%s' "$out" | jget ok)"
 
 check "метод объявлен в списке ubus" "yes"       "$(rpcd_list | grep -q lists_update && echo yes || echo no)"
+
+# ---- splify2#16: не только устройства из br-lan --------------------------------------
+# Человек держит роутер выходной точкой ещё и для хостов из Tailscale/ZeroTier и хочет
+# применить к ним те же правила. В splify1 это был перечень интерфейсов через запятую в
+# /etc/config; здесь у интерфейса не было даже перечня того, из чего выбирать: метод
+# `devices` отбирает ТУННЕЛИ (кандидаты в выход), а сети клиентов не перечислял никто.
+#
+# Отбор здесь именно про «откуда приходят клиенты», и каждая проверка ниже — про одну
+# ошибку, которую легко сделать именем: lo, порт внутри моста, wan.
+#
+# Какое устройство наружу — знает uci, а не имя. Фикстура ставится ЗДЕСЬ, а не в общей
+# подготовке: проверки выбора «откуда качать» выше по файлу чистят хранилище uci за собой.
+printf 'network.wan.device=wan\n' >> "$T/uci.store"
+out="$(rpcd client_nets)"
+names() { printf '%s' "$1" | python3 -c 'import json,sys
+print(" ".join(d["name"] for d in json.load(sys.stdin)["nets"]))'; }
+netof() { printf '%s' "$1" | python3 -c 'import json,sys
+n=[d for d in json.load(sys.stdin)["nets"] if d["name"]==sys.argv[1]]
+print(",".join(n[0].get("subnets") or []) if n else "НЕТ")' "$2"; }
+flagof() { printf '%s' "$1" | python3 -c 'import json,sys
+n=[d for d in json.load(sys.stdin)["nets"] if d["name"]==sys.argv[1]]
+print(json.dumps(n[0].get(sys.argv[2])) if n else "НЕТ")' "$2" "$3"; }
+
+check "сети клиентов перечислены по алфавиту, без lo и без портов моста (splify2#16)" \
+      "br-guest br-lan tailscale0 wan ztrfyzwvfa" "$(names "$out")"
+check "у моста названа его сеть, а не адрес роутера" "192.168.1.0/24" "$(netof "$out" br-lan)"
+# Адрес /32 — норма для Tailscale, и выведенная сеть равна самому адресу. Прятать такое
+# устройство нельзя (человек из обращения ходит именно через него), но и молчать о том, что
+# из его адреса подсеть не выводится, тоже: соседей по Tailscale придётся дописать руками.
+check "туннель с адресом /32 остаётся в перечне" "100.64.1.5/32" "$(netof "$out" tailscale0)"
+check "мост ZeroTier — обычная сеть" "10.147.17.0/24" "$(netof "$out" ztrfyzwvfa)"
+# wan назван, а не выкинут: выкинутое устройство человек ищет глазами и не находит, а
+# помеченное он не выберет. Выбрать wan сетью клиентов — это увести в туннель всё, что
+# роутер получает снаружи.
+check "wan помечен, а не спрятан" "true" "$(flagof "$out" wan wan)"
+check "домашний мост wan-ом не помечен" "false" "$(flagof "$out" br-lan wan)"
+check "поднятое устройство названо поднятым" "true" "$(flagof "$out" br-lan up)"
+check "опущенное — опущенным, но из перечня не исчезает" "false" "$(flagof "$out" br-guest up)"
+# Устройства без адреса IPv4 (ещё не поднято) перечень отдаёт без подсетей, а не пропускает:
+# выбрать его законно, сеть появится вместе с адресом.
+check "у устройства без адреса подсетей нет" "" "$(netof "$out" br-guest)"
+check "метод объявлен в списке ubus" "yes" "$(rpcd_list | grep -q client_nets && echo yes || echo no)"
 
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo "ЕСТЬ ПРОВАЛЫ: $fails")"
 [ "$fails" -eq 0 ]
