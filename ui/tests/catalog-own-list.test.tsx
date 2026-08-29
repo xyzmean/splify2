@@ -79,8 +79,9 @@ describe('каталог: наш доменный список рядом с з�
         const note = await screen.findByText(/^список наш$/)
         fireEvent.mouseEnter(note.parentElement as HTMLElement)
         const tip = await waitFor(() => screen.getByRole('tooltip'))
-        expect(tip.textContent).toMatch(/предложите его сюда/)
-        expect(tip.textContent).toContain('xyzmean/ru-bypass-ipsets')
+        // Подсказка стала короткой: техническое объяснение убрано с экрана целиком, осталось
+        // то, после чего человек делает следующий шаг.
+        expect(tip.textContent).toMatch(/предложите его в наш список/)
         // Пометка зеркала на своей строке осталась: признак ровно один на список.
         expect(screen.getByText(/список внешний/)).toBeInTheDocument()
     })

@@ -1444,7 +1444,7 @@ chmod +x "$T/bin/uci"
 rm -f "$T/uci.store"
 
 out="$(rpcd fetch_mode)"
-check "по умолчанию туннель последним, а не первым" "auto" "$(printf '%s' "$out" | jget mode)"
+check "по умолчанию туннель не трогается" "off" "$(printf '%s' "$out" | jget mode)"
 check "имя выхода отдаётся полем, даже когда его нет" "" "$(printf '%s' "$out" | jget out)"
 
 out="$(rpcd fetch_mode_set '{"mode":"always"}')"
@@ -1457,12 +1457,12 @@ check "прочитан обратно" "always" "$(rpcd fetch_mode | jget mode)
 out="$(rpcd fetch_mode_set '{"mode":"через туннель"}')"
 check "чужое значение отвергается" "false" "$(printf '%s' "$out" | jget ok)"
 check "в отказе названы допустимые" "yes" \
-      "$(printf '%s' "$out" | jget error | grep -q 'auto, always или off' && echo yes || echo no)"
+      "$(printf '%s' "$out" | jget error | grep -q 'always или off' && echo yes || echo no)"
 check "и в uci ничего не изменилось" "always" \
       "$(grep '^splify2.main.fetch_via_tunnel=' "$T/uci.store" | tail -1 | cut -d= -f2)"
 
 out="$(rpcd fetch_mode_set '{"mode":"off"}')"
-check "туннель можно запретить вовсе" "off" "$(rpcd fetch_mode | jget mode)"
+check "выключается обратно" "off" "$(rpcd fetch_mode | jget mode)"
 
 mv "$T/bin/uci.stub" "$T/bin/uci"
 

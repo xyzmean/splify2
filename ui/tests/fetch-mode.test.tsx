@@ -27,7 +27,7 @@ describe('качать списки через туннель (splify2#15)', () 
     })
 
     it('включение просит именно «через туннель»', async () => {
-        vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'auto', out: 'vl' })
+        vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'off', out: 'vl' })
         const set = vi.spyOn(rpc, 'fetchModeSet').mockResolvedValue({ ok: true, mode: 'always' })
         render(<FetchCard />)
         await waitFor(() => expect(rpc.fetchMode).toHaveBeenCalled())
@@ -47,18 +47,18 @@ describe('качать списки через туннель (splify2#15)', () 
         await waitFor(() => expect(set).toHaveBeenCalledWith('off'))
     })
 
-    it('нетронутый роутер (auto) показан выключенным: человек ничего не выбирал', async () => {
-        vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'auto', out: 'vl' })
+    it('нетронутый роутер показан выключенным: туннель по умолчанию не трогаем', async () => {
+        vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'off', out: 'vl' })
         render(<FetchCard />)
         await waitFor(() => expect(rpc.fetchMode).toHaveBeenCalled())
         expect(screen.getByRole('switch')).not.toBeChecked()
     })
 
     it('отказ записи возвращает прежнее положение, а не оставляет ложное', async () => {
-        vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'auto', out: 'vl' })
+        vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'off', out: 'vl' })
         vi.spyOn(rpc, 'fetchModeSet').mockResolvedValue({
             ok: false,
-            error: 'режим бывает auto, always или off',
+            error: 'режим бывает always или off',
         })
         render(<FetchCard />)
         await waitFor(() => expect(rpc.fetchMode).toHaveBeenCalled())
@@ -81,7 +81,7 @@ describe('качать списки через туннель (splify2#15)', () 
     })
 
     it('выключено — про выход не говорит ничего: он и не понадобится', async () => {
-        vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'auto', out: '' })
+        vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'off', out: '' })
         render(<FetchCard />)
         await waitFor(() => expect(rpc.fetchMode).toHaveBeenCalled())
         expect(screen.queryByText(/пойдёт через выход|поднятого выхода/)).toBeNull()

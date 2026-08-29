@@ -37,6 +37,7 @@ interface Verdict {
  *  находки, у него нет ни пятого случая, ни оттенков. Что именно нашлось — читается в
  *  диагностике, дословно словами движка. */
 function verdict(live: Live): Verdict {
+
     /* Советы (note) в цвет не идут: они верны всегда, и красить ими состояние значило бы
      * держать роутер вечно нездоровым. Полный перечень остаётся в диагностике. */
     const notes = (live.diag?.checks || []).filter((c) => c.verdict === 'note')
@@ -57,6 +58,17 @@ function verdict(live: Live): Verdict {
         why: notes.length ? `советов: ${notes.length}` : '',
         notes,
     }
+}
+
+/** Вердикт с поправкой на то, что роутер ещё не ответил.
+ *
+ *  На экране снимок прошлого открытия. Утверждать по нему «Маршрутизация работает» нельзя:
+ *  это уже не задержка, а неправда. Поэтому заголовок говорит «Обновление…» жёлтой точкой —
+ *  «подожди секунду», — а всё найденное в прошлый раз остаётся под ним: ради него страницу и
+ *  открывают. */
+function verdictNow(live: Live): Verdict {
+    const v = verdict(live)
+    return live.stale ? { ...v, text: 'Обновление…', tone: 'warn' } : v
 }
 
 /** «4 ч 12 мин» — то, как об этом говорят. Секунды показываем только первую минуту: дальше они
@@ -85,7 +97,7 @@ export default function Overview({
     live: Live
     onSection: (s: SectionId) => void
 }) {
-    const v = verdict(live)
+    const v = verdictNow(live)
     const outputs = Object.entries(live.status?.outputs || {})
 
     /* R-064: «движок стоит, а туннеля нет». Состояние, при котором интерфейс работает, правила
@@ -140,23 +152,12 @@ export default function Overview({
         <div className="space-y-4">
             <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
-                    {/* `stale` — на экране снимок прошлого открытия: роутер ещё не ответил.
-                        Показываем его приглушённым и говорим об этом вслух. Молча выдать
-                        вчерашнее «Работает» за сегодняшнее нельзя — это уже не задержка, а
-                        неправда; но и держать «Загрузка…» три секунды, когда прошлое
-                        состояние известно, незачем: человек открывает страницу, чтобы
-                        увидеть состояние, а не крутилку. */}
-                    <div className={`flex items-center gap-2.5 ${live.stale ? 'opacity-60' : ''}`}>
+                    <div className="flex items-center gap-2.5">
                         <span
                             className={`h-2.5 w-2.5 shrink-0 rounded-full ${DOT[v.tone]}`}
                             aria-hidden="true"
                         />
                         <h1 className="sp-verdict">{v.text}</h1>
-                        {live.stale && (
-                            <span className="shrink-0 text-xs font-normal text-muted-foreground">
-                                по прошлому опросу, обновляется…
-                            </span>
-                        )}
                     </div>
                     {/* Счётчики написаны подписью, двоеточием и числом — тогда не нужны
                         склонения после числительного, а перевод сводится к переводу подписи. */}

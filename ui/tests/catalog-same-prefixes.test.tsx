@@ -107,8 +107,8 @@ describe('каталог: доменный список — зеркало чу�
         const note = await screen.findByText(/список внешний/)
         fireEvent.mouseEnter(note.parentElement as HTMLElement)
         const tip = await waitFor(() => screen.getByRole('tooltip'))
-        expect(tip.textContent).toMatch(/предложите его апстриму/)
-        expect(tip.textContent).toMatch(/свой список/)
+        expect(tip.textContent).toMatch(/Добавить домен можно у апстрима/)
+        expect(tip.textContent).toMatch(/своим списком/)
         expect(tip.textContent).toContain('itdoginfo/allow-domains')
     })
 

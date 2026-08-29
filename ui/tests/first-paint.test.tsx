@@ -30,21 +30,23 @@ describe('первая отрисовка: прошлое как прошлое 
         vi.spyOn(rpc, 'subInfo').mockResolvedValue({ kind: 'none', present: false } as never)
     })
 
-    it('снимок прошлого опроса показан вердиктом, а не «Загрузка…»', () => {
+    it('пока роутер не ответил — «Обновление…», а не «Загрузка…» и не прежний вердикт', () => {
         render(<Overview live={live({ ...OK, stale: true })} onSection={() => {}} onRule={() => {}} />)
-        expect(screen.getByRole('heading', { name: /Маршрутизация работает/ })).toBeInTheDocument()
+        expect(screen.getByRole('heading', { name: /Обновление/ })).toBeInTheDocument()
         expect(screen.queryByText(/Загрузка/)).toBeNull()
+        // Прежний вердикт не выдаётся за сегодняшний: «работает» скажем, когда ответят.
+        expect(screen.queryByRole('heading', { name: /Маршрутизация работает/ })).toBeNull()
     })
 
-    it('и назван прошлым вслух: молча выдать его за живое нельзя', () => {
+    it('числа из снимка при этом видны сразу — ради них страницу и открывают', () => {
         render(<Overview live={live({ ...OK, stale: true })} onSection={() => {}} onRule={() => {}} />)
-        expect(screen.getByText(/по прошлому опросу/)).toBeInTheDocument()
+        expect(screen.getByText(/устройств в сети: 3/)).toBeInTheDocument()
     })
 
-    it('пришёл ответ роутера — приписки нет', () => {
+    it('пришёл ответ роутера — обычный вердикт', () => {
         render(<Overview live={live({ ...OK, stale: false })} onSection={() => {}} onRule={() => {}} />)
         expect(screen.getByRole('heading', { name: /Маршрутизация работает/ })).toBeInTheDocument()
-        expect(screen.queryByText(/по прошлому опросу/)).toBeNull()
+        expect(screen.queryByRole('heading', { name: /Обновление/ })).toBeNull()
     })
 
     it('снимка нет вовсе — «Загрузка…» остаётся: выдумывать состояние нечем', () => {
@@ -64,7 +66,9 @@ describe('первая отрисовка: прошлое как прошлое 
                 onRule={() => {}}
             />,
         )
-        expect(screen.getByRole('heading', { name: /Есть поломки/ })).toBeInTheDocument()
+        // Вердикт пока «Обновление…» — роутер не ответил, — но найденное в прошлый раз уже
+        // на экране: ради него страницу и открывают.
+        expect(screen.getByRole('heading', { name: /Обновление/ })).toBeInTheDocument()
         await waitFor(() => expect(screen.getByText(/проверок с отказом: 1/)).toBeInTheDocument())
     })
 })

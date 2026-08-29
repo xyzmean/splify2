@@ -64,16 +64,30 @@ declare global {
     }
 }
 
+/** Мост к ubus берётся В МОМЕНТ ВЫЗОВА, а не при загрузке модуля.
+ *
+ *  Раньше он читался здесь же, при объявлении методов, и это стало ловушкой, когда загрузчик
+ *  начал стартовать бандл, не дожидаясь build-id.txt: модуль успевал исполниться раньше, чем
+ *  LuCI отдавала мост (`window.luci_rpc` выставляется в render()), и ВСЕ методы навсегда
+ *  становились заглушкой «ubus is unavailable outside LuCI». Через раз — потому что гонка.
+ *
+ *  Мост, однажды полученный, запоминается: `rpc.declare` у LuCI не бесплатный, а методов
+ *  под сорок. */
 function declare<T>(method: string, params: string[] = []) {
-    const rpc = window.luci_rpc
-    if (!rpc) {
-        // Standalone (vite dev) — fail loudly rather than pretending to have data.
-        return async (): Promise<T> => {
-            throw new Error(`ubus is unavailable outside LuCI (splify.${method})`)
+    let call: ((...a: unknown[]) => Promise<unknown>) | null = null
+    return (...args: unknown[]): Promise<T> => {
+        if (!call) {
+            const bridge = window.luci_rpc
+            // Standalone (vite dev) — fail loudly rather than pretending to have data.
+            if (!bridge) {
+                return Promise.reject(
+                    new Error(`ubus is unavailable outside LuCI (splify.${method})`),
+                ) as Promise<T>
+            }
+            call = bridge.declare({ object: 'splify2', method, params })
         }
+        return call(...args) as Promise<T>
     }
-    const fn = rpc.declare({ object: 'splify2', method, params })
-    return (...args: unknown[]) => fn(...args) as Promise<T>
 }
 
 const specGetRaw = declare<Spec>('spec_get')

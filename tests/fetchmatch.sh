@@ -308,8 +308,11 @@ printf 'codeload.github.com\t%s\n' "$T/dist.tgz" > "$S/serve"
 res="$(run "$REL")"
 check "пакет вынут и из архива ветки dist" "PKG-from-tarball" "$(cat "$T/got" 2>/dev/null)"
 
-# ---- 6. закрыт весь GitHub: остаётся туннель --------------------------------------
+# ---- 6. закрыт весь GitHub: выручает включённый туннель ----------------------------
+# Туннель трогается ТОЛЬКО когда человек его включил: состояния «сами решим, если не вышло»
+# больше нет — владелец забраковал его дважды.
 reset
+echo always > "$S/uci.splify2_main_fetch_via_tunnel"
 printf 'api.github.com\ncodeload.github.com\ngitlab.com\n' > "$S/blocked-always"
 printf 'githubusercontent.com\n' > "$S/blocked"
 res="$(run "$RAW")"
@@ -327,6 +330,7 @@ check "выход назван человеку" "yes" \
 # ---- 7. отказы обхода через туннель ------------------------------------------------
 # Поднятого выхода нет: `up` снят, и таблицы у выхода нет.
 reset
+echo always > "$S/uci.splify2_main_fetch_via_tunnel"
 printf 'api.github.com\ncodeload.github.com\ngitlab.com\n' > "$S/blocked-always"
 printf 'githubusercontent.com\n' > "$S/blocked"
 cat > "$S/status.json" <<'EOF'
@@ -343,6 +347,7 @@ EOF
 
 # Издатель живёт на адресе узла подписки — увести это в туннель значит закольцевать движок.
 reset
+echo always > "$S/uci.splify2_main_fetch_via_tunnel"
 printf 'api.github.com\ncodeload.github.com\ngitlab.com\n' > "$S/blocked-always"
 printf 'githubusercontent.com\n' > "$S/blocked"
 printf 'Name:\traw.githubusercontent.com\nAddress: 198.51.100.7\n' > "$S/dns/raw.githubusercontent.com"
@@ -354,6 +359,7 @@ check "правил при этом не добавлено" "" "$(grep -c '^rul
 
 # fake-IP: адрес выдан нашим же резолвером, обратного перевода для роутера нет.
 reset
+echo always > "$S/uci.splify2_main_fetch_via_tunnel"
 printf 'api.github.com\ncodeload.github.com\ngitlab.com\n' > "$S/blocked-always"
 printf 'githubusercontent.com\n' > "$S/blocked"
 printf 'Name:\traw.githubusercontent.com\nAddress: 198.18.0.5\n' > "$S/dns/raw.githubusercontent.com"
@@ -369,12 +375,12 @@ printf 'api.github.com\ncodeload.github.com\ngitlab.com\n' > "$S/blocked-always"
 printf 'githubusercontent.com\n' > "$S/blocked"
 echo 0 > "$S/uci.splify2_main_fetch_via_tunnel"
 res="$(run "$RAW")"
-check "выключенный обход через туннель не делается" "RC1=1" "$(echo "$res" | grep '^RC1=')"
+check "выключенный туннель не трогается" "RC1=1" "$(echo "$res" | grep '^RC1=')"
 check "выключение названо словами" "yes" \
-      "$(echo "$res" | grep -q 'NOTE1=.*выключен' && echo yes || echo no)"
+      "$(echo "$res" | grep -q 'NOTE1=.*туннель выключен' && echo yes || echo no)"
 check "правил не добавлено" "" "$(grep -c '^rule add' "$S/ip.log" | sed 's/^0$//')"
 
-# ---- 7b. режим always: туннель первым, а не последним ------------------------------
+# ---- 7b. включённый переключатель: туннель первым ----------------------------------
 # Выбор человека, у которого GitHub закрыт насовсем. Смысл в порядке: по своему прямому
 # адресу файл едет одним запросом, тогда как обход по хостам GitHub — это лишний запрос, а в
 # худшем случае архив ветки целиком ради одного списка.
@@ -386,8 +392,8 @@ check "always: запрос был ровно один и по IPv4" "1;yes" \
       "$(grep -c . "$S/curl.log");$(grep -q 'four=yes' "$S/curl.log" && echo yes || echo no)"
 check "always: обход по хостам GitHub не понадобился" "" \
       "$(grep -c 'api.github.com\|codeload' "$S/curl.log" | sed 's/^0$//')"
-check "always: сказано, что так настроено" "yes" \
-      "$(echo "$res" | grep -q 'NOTE1=.*так настроено' && echo yes || echo no)"
+check "включено: назван выход, через который пошло" "yes" \
+      "$(echo "$res" | grep -q 'NOTE1=.*через выход vl' && echo yes || echo no)"
 check "always: правило снято" "0" "$(cat "$S/rules" 2>/dev/null || echo 0)"
 
 # Туннеля нет — режим не должен превращаться в отказ: прямой путь по-прежнему работает.
@@ -410,12 +416,13 @@ echo always > "$S/uci.splify2_main_fetch_via_tunnel"
 printf 'githubusercontent.com\ngitlab.com\n' > "$S/blocked-always"
 printf 'api.github.com\t%s\n' "$T/api-body" > "$S/serve"
 res="$(run "$RAW")"
-check "always: не вышло туннелем — выручает обход по GitHub" "from-api" "$(cat "$T/got" 2>/dev/null)"
-check "always: в туннель второй раз не ходили" "1" \
+check "включено: не вышло туннелем — выручает обход по GitHub" "from-api" "$(cat "$T/got" 2>/dev/null)"
+check "включено: в туннель второй раз не ходили" "1" \
       "$(grep -c 'githubusercontent.com.*four=yes' "$S/curl.log")"
 
 # ---- 8. правила снимаются и когда повтор не удался ---------------------------------
 reset
+echo always > "$S/uci.splify2_main_fetch_via_tunnel"
 printf 'api.github.com\ncodeload.github.com\ngithubusercontent.com\ngitlab.com\n' > "$S/blocked-always"
 res="$(run "$RAW")"
 check "нечем спастись: отказ" "RC1=1" "$(echo "$res" | grep '^RC1=')"
@@ -425,6 +432,7 @@ check "и всё равно снято" "0" "$(cat "$S/rules" 2>/dev/null || ech
 
 # ---- 9. незнакомый адрес обходить нечем, но туннель работает -----------------------
 reset
+echo always > "$S/uci.splify2_main_fetch_via_tunnel"
 printf 'files.example.org\n' > "$S/blocked"
 res="$(run "https://files.example.org/my.lst")"
 check "чужой хост: обхода по GitHub нет, помог туннель" "direct:https://files.example.org/my.lst" \
