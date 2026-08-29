@@ -3,7 +3,7 @@ import { LoaderCircle, RefreshCw } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { rpc, type SubQuota } from '@/lib/rpc'
 import { human } from '@/lib/live'
-import type { Status } from '@/lib/model'
+import type { OutputStatus, Status } from '@/lib/model'
 import { cacheGet, cacheSet } from '@/lib/cache'
 import { place } from '@/lib/geo'
 import { daysText, readQuota, resetText } from '@/lib/quota'
@@ -73,6 +73,12 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
      * Имя узла остаётся ЗАПАСНЫМ вариантом: пока измерение не пришло (или выход не поднят и
      * мерить нечем), подпись продавца лучше пустоты. */
     const tunnelOut = vlessOut || wgOut?.[0]
+    /* Состояние туннеля решает, о чём вообще эта карточка. Пока соединения нет, остаток
+     * трафика — не ответ на вопрос человека: у него не работает, а мы показываем, сколько
+     * гигабайт не потрачено. Поэтому сначала беда, и только у поднятого выхода — числа. */
+    const st = tunnelOut ? (outputs || {})[tunnelOut] : undefined
+    const up = st?.up === true
+    const probing = st?.probe?.state === 'probing'
     const [geo, setGeo] = useState<{ cc?: string; ip?: string } | null>(seen.current.geo ?? null)
     const [node, setNode] = useState<string | null>(seen.current.node ?? null)
     useEffect(() => {
@@ -220,7 +226,11 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
                 </div>
             </CardHeader>
             <CardContent>
-                {wg ? (
+                {known && tunnelOut && !up ? (
+                    /* Соединения нет. Ни остатка, ни бесконечности: и то и другое отвечало бы
+                       на вопрос, которого сейчас не задают. */
+                    <Trouble st={st} name={tunnelOut} probing={probing} />
+                ) : wg ? (
                     /* WireGuard: объёма не считает никто — ни роутер, ни та сторона. Это не
                        «неизвестно», а «ограничения нет», поэтому знак бесконечности, а не
                        прочерк. */
@@ -228,6 +238,7 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
                         <Unlimited note="объём не ограничен: у туннеля нет счётчика" />
                         <dl className="mt-3 space-y-1 text-[13px]">
                             <Location name={place(geo?.cc) || node} />
+                            <Address ip={geo?.ip} />
                         </dl>
                     </>
                 ) : v && v.total !== null && v.left !== null ? (
@@ -283,6 +294,7 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
                                 </div>
                             )}
                             <Location name={place(geo?.cc) || node} />
+                            <Address ip={geo?.ip} />
                         </dl>
                         {v.tight && (
                             <p className="mt-3 rounded-xl border border-warning/40 bg-warning/10 p-2 text-xs">
@@ -307,6 +319,7 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
                                 </div>
                             )}
                             <Location name={place(geo?.cc) || node} />
+                            <Address ip={geo?.ip} />
                         </dl>
                     </>
                 ) : kind === 'url' ? (
@@ -317,13 +330,15 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
                         {why && <p className="mt-1 text-xs text-muted-foreground">{why}</p>}
                         <dl className="mt-3 space-y-1 text-[13px]">
                             <Location name={place(geo?.cc) || node} />
+                            <Address ip={geo?.ip} />
                         </dl>
                     </>
                 ) : (
                     /* Вставленные руками ссылки: остатка не существует, и говорить о нём
                        нечего. Остаётся то, что человеку и нужно, — куда он сейчас выходит. */
                     <dl className="space-y-1 text-[13px]">
-                        <Location name={node} />
+                        <Location name={place(geo?.cc) || node} />
+                        <Address ip={geo?.ip} />
                     </dl>
                 )}
             </CardContent>
@@ -395,4 +410,57 @@ function useTween(target: number | null): number | null {
         return () => cancelAnimationFrame(raf)
     }, [target])
     return shown
+}
+
+/** Внешний адрес — тот, которым роутер виден снаружи через этот выход.
+ *
+ *  Показывается только когда соединение работает: адрес, оставшийся от прошлого измерения,
+ *  рядом со сломанным туннелем читался бы как «всё в порядке». */
+function Address({ ip }: { ip?: string }) {
+    if (!ip) return null
+    return (
+        <div className="flex items-baseline justify-between gap-2">
+            <dt className="text-subtle">внешний адрес</dt>
+            <dd className="min-w-0 truncate text-right font-mono text-[12px] font-medium">{ip}</dd>
+        </div>
+    )
+}
+
+/** Беда вместо чисел.
+ *
+ *  Пока туннель не поднят, «осталось 800 ГБ» — не ответ, а издевательство: у человека не
+ *  работает, а карточка рассказывает, сколько он не потратил. Поэтому здесь ровно то, что
+ *  сейчас имеет значение: что именно не так и на каком выходе.
+ *
+ *  Перебор узлов — отдельное состояние, а не отказ: движок обходит узлы подписки по восемь
+ *  секунд на узел, и «нет соединения» в этот момент было бы неправдой (I-100). */
+function Trouble({
+    st, name, probing,
+}: { st?: OutputStatus; name: string; probing: boolean }) {
+    if (probing) {
+        const n = st?.probe?.node
+        const total = st?.probe?.total
+        return (
+            <>
+                <div className="text-[15px] font-medium text-warning-fg">Подключается…</div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                    {n && total ? `проверяем узлы подписки: ${n} из ${total}` : `поднимаем выход ${name}`}
+                </p>
+            </>
+        )
+    }
+    const failed = st?.probe?.state === 'failed'
+    return (
+        <>
+            <div className="text-[15px] font-medium text-destructive">Нет соединения</div>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                {failed
+                    ? st?.probe?.total === 0
+                        ? 'в подписке нет пригодных узлов'
+                        : 'ни один узел подписки не ответил'
+                    : `выход ${name} не поднят: устройства нет`}
+                . Пока его нет, трафик этого выхода никуда не идёт — смотрите диагностику.
+            </p>
+        </>
+    )
 }

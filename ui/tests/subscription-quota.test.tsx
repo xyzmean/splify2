@@ -312,3 +312,69 @@ describe('локация меряется сама, а не читается и�
         expect(await screen.findByText(/Германия №2/)).toBeInTheDocument()
     })
 })
+
+// «Если соединения нет — не нужно писать остаток трафика, а писать о проблеме; укажи внешний
+// IP, если соединение работает нормально».
+//
+// Смысл в том, на какой вопрос отвечает блок. Пока туннель не поднят, «осталось 800 ГБ» — не
+// ответ, а издевательство: у человека не работает, а карточка рассказывает, сколько он не
+// потратил. И наоборот: когда всё работает, внешний адрес — то, чем проверяют, что трафик
+// действительно уходит через туннель, а не мимо.
+
+const DOWN = { vl: { name: 'vl', kind: 'vless' as const, device: 'vl', up: false } }
+const PROBING = {
+    vl: {
+        name: 'vl', kind: 'vless' as const, device: 'vl', up: false,
+        probe: { state: 'probing' as const, node: 3, total: 29 },
+    },
+}
+const FAILED = {
+    vl: {
+        name: 'vl', kind: 'vless' as const, device: 'vl', up: false,
+        probe: { state: 'failed' as const, total: 29 },
+    },
+}
+
+describe('соединения нет — карточка про беду, а не про гигабайты', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks()
+        window.localStorage.clear()
+        vi.spyOn(rpc, 'subInfo').mockResolvedValue(info({ quota: quota() }))
+        vi.spyOn(rpc, 'subQuota').mockResolvedValue({ quota: quota(), kind: 'url' } as never)
+        vi.spyOn(rpc, 'outboundGeo').mockResolvedValue({ output: 'vl', cc: 'DE', ip: '1.2.3.4' })
+        vi.spyOn(rpc, 'vlessNodes').mockResolvedValue(nodes('🇩🇪 Германия №2'))
+    })
+
+    it('выход не поднят: сказано о беде, остатка нет', async () => {
+        render(<SubscriptionCard outputs={DOWN} />)
+        expect(await screen.findByText('Нет соединения')).toBeInTheDocument()
+        expect(screen.queryByText(/осталось|∞/)).toBeNull()
+        expect(screen.getByText(/трафик этого выхода никуда не идёт/)).toBeInTheDocument()
+    })
+
+    it('и прошлый внешний адрес рядом со сломанным туннелем не показывается', async () => {
+        render(<SubscriptionCard outputs={DOWN} />)
+        expect(await screen.findByText('Нет соединения')).toBeInTheDocument()
+        expect(screen.queryByText(/1\.2\.3\.4/)).toBeNull()
+    })
+
+    it('перебор узлов — это не отказ, а «подключается»', async () => {
+        render(<SubscriptionCard outputs={PROBING} />)
+        expect(await screen.findByText('Подключается…')).toBeInTheDocument()
+        expect(screen.getByText(/3 из 29/)).toBeInTheDocument()
+        expect(screen.queryByText('Нет соединения')).toBeNull()
+    })
+
+    it('узлы перебрали и ни один не ответил — сказано именно это', async () => {
+        render(<SubscriptionCard outputs={FAILED} />)
+        expect(await screen.findByText('Нет соединения')).toBeInTheDocument()
+        expect(screen.getByText(/ни один узел подписки не ответил/)).toBeInTheDocument()
+    })
+
+    it('соединение работает — внешний адрес назван рядом с локацией', async () => {
+        render(<SubscriptionCard outputs={OUT_VLESS} />)
+        expect(await screen.findByText(/Германия/)).toBeInTheDocument()
+        expect(screen.getByText('внешний адрес')).toBeInTheDocument()
+        expect(screen.getByText('1.2.3.4')).toBeInTheDocument()
+    })
+})

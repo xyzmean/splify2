@@ -106,11 +106,16 @@ window.__splifyMount = mount
 // браузер уже применил изменения дерева. Предел в две секунды: дальше ждать бессмысленно,
 // раздел просто не открылся, и молчаливое ожидание скрыло бы настоящую беду.
 function mountWhenReady() {
-  if (window.__splifyRoot) return // уже смонтировал сам загрузчик — второй раз незачем
-  if (document.getElementById('splify-root')) { mount(); return }
+  /* Признак СВОЙ на каждый экземпляр модуля, а не общий на страницу. Общий («кто-то уже
+   * смонтировал») выглядел естественно и был неверен: после смены сборки загрузчик держит в
+   * документе два модуля — прежний успел смонтироваться первым, и новый по такому признаку
+   * не монтировался бы никогда. На экране это выглядело как «выложил, а изменений нет». */
+  if (mountedByMe) return
+  if (document.getElementById('splify-root')) { mountedByMe = true; mount(); return }
   if (waited++ < 120) requestAnimationFrame(mountWhenReady)
   else console.error('splify-root not found!')
 }
 let waited = 0
+let mountedByMe = false
 if (typeof requestAnimationFrame === 'function') mountWhenReady()
 else mount()
