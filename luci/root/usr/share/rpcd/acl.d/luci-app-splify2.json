@@ -30,7 +30,8 @@
           "leases",
           "splify2_versions",
           "fetch_mode",
-          "outbound_geo"
+          "outbound_geo",
+          "zm_fix"
         ]
       }
     },
@@ -54,7 +55,8 @@
           "engine_start",
           "splify2_install",
           "list_put",
-          "fetch_mode_set"
+          "fetch_mode_set",
+          "zm_fix_set"
         ]
       }
     }

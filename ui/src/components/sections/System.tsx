@@ -2,6 +2,7 @@ import EngineCard from '@/components/EngineCard'
 import SelfUpdateCard from '@/components/SelfUpdateCard'
 import BackupCard from '@/components/BackupCard'
 import FetchCard from '@/components/FetchCard'
+import ZmFixCard from '@/components/ZmFixCard'
 import { type Live } from '@/lib/live'
 
 /** Система: пакеты и архив настроек — то, что относится к коробке целиком, а не к
@@ -24,6 +25,7 @@ export default function System({ live }: { live: Live }) {
             {/* Откуда качать — сразу под пакетами: это про то, как коробка берёт файлы из
                 интернета, и относится к обеим карточкам выше, а не только к спискам. */}
             <FetchCard />
+            <ZmFixCard />
             <BackupCard />
         </div>
     )

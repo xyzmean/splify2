@@ -913,10 +913,10 @@ check "путь файла настройки — шов, а не литерал
       "$(grep -c '^UCI_SPLIFY2=' "$SCRIPT")"
 check "прямых путей /etc/config/splify2 в коде не осталось" "1" \
       "$(grep -c '/etc/config/splify2' "$SCRIPT")"
-# Четыре места: sub_set, backup-подобная ветка настроек, ui_get|ui_set и fetch_mode|
-# fetch_mode_set. Число растёт вместе с методами, которые пишут в uci, — и это ровно тот
+# Пять мест: sub_set, ветка настроек, ui_get|ui_set, fetch_mode|fetch_mode_set и
+# zm_fix|zm_fix_set. Число растёт вместе с методами, которые пишут в uci, — и это ровно тот
 # случай, когда барьер должен ломаться: новый метод обязан заводить файл той же функцией.
-check "файл заводится одной функцией на все места" "4" \
+check "файл заводится одной функцией на все места" "5" \
       "$(grep -c '^ *uci_file ||' "$SCRIPT")"
 check "перенаправлением файл больше не заводится" "0" \
       "$(grep -c ': > "\?/etc/config' "$SCRIPT")"
@@ -1498,6 +1498,17 @@ out="$(STEER_NOISE='steer vless: узлов 29 (пропущено 0)' \
 check "то же и у списка узлов" "vless" \
       "$(printf '%s' "$out" | jget output)"
 
+# ---- переключатель фикса Zapret Manager --------------------------------------------
+# Умолчание — включено: фикс нужен именно тем, кто ещё ничего не настроил и до GitHub не
+# дошёл. Выключенным по умолчанию он не помог бы никому — кто про него знает, тот и правило
+# заведёт сам.
+cp "$T/bin/uci.stub" "$T/bin/uci" 2>/dev/null || printf '#!/bin/sh\nexit 1\n' > "$T/bin/uci"
+chmod +x "$T/bin/uci"
+check "по умолчанию фикс включён" "true" "$(rpcd zm_fix | jget on)"
+check "имя правила названо — интерфейсу есть что показать" "zm_github" "$(rpcd zm_fix | jget channel)"
+out="$(rpcd zm_fix_set '{"on":"мусор"}')"
+check "чужое значение отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo "ЕСТЬ ПРОВАЛЫ: $fails")"
 [ "$fails" -eq 0 ]
 
@@ -1555,6 +1566,17 @@ case "$key" in splify2.main.zm_fix) echo 0 ;; *) exit 1 ;; esac
 STUB
 chmod +x "$T/bin/uci"
 check "выключенный фикс спеку не трогает" "$SPEC_ONE" "$(zm_apply "$SPEC_ONE")"
+
+# ---- переключатель фикса Zapret Manager --------------------------------------------
+# Умолчание — включено: фикс нужен именно тем, кто ещё ничего не настроил и до GitHub не
+# дошёл. Выключенным по умолчанию он не помог бы никому — кто про него знает, тот и правило
+# заведёт сам.
+cp "$T/bin/uci.stub" "$T/bin/uci" 2>/dev/null || printf '#!/bin/sh\nexit 1\n' > "$T/bin/uci"
+chmod +x "$T/bin/uci"
+check "по умолчанию фикс включён" "true" "$(rpcd zm_fix | jget on)"
+check "имя правила названо — интерфейсу есть что показать" "zm_github" "$(rpcd zm_fix | jget channel)"
+out="$(rpcd zm_fix_set '{"on":"мусор"}')"
+check "чужое значение отвергается" "false" "$(printf '%s' "$out" | jget ok)"
 
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo "ЕСТЬ ПРОВАЛЫ: $fails")"
 [ "$fails" -eq 0 ]

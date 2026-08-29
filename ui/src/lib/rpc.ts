@@ -389,6 +389,11 @@ export const rpc = {
     /** Чем роутер качает списки и обновления: `auto` — туннель последним, `always` — первым,
      *  `off` — не трогать. `out` — выход, через который пойдёт скачивание; пусто означает,
      *  что поднятого выхода нет и `always` ничего не даст (splify2#15). */
+    /** Фикс Zapret Manager: уводить ли адреса GitHub в туннель. Включён по умолчанию — он
+     *  нужен именно тем, кто ещё ничего не настроил и до GitHub не дошёл. */
+    zmFix: declare<{ on?: boolean; channel?: string }>('zm_fix'),
+    zmFixSet: declare<{ ok: boolean; on?: boolean; error?: string }>('zm_fix_set', ['on']),
+
     fetchMode: declare<{ mode?: string; out?: string }>('fetch_mode'),
     fetchModeSet: declare<{ ok: boolean; mode?: string; error?: string }>('fetch_mode_set', ['mode']),
 
