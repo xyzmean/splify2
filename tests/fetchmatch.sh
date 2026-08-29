@@ -320,7 +320,12 @@ check "закрыт весь GitHub: скачано через туннель" "
 check "правило добавлено на оба адреса издателя" "2" \
       "$(grep -c '^rule add to 185.199.10' "$S/ip.log")"
 check "правило ведёт в таблицу выхода" "yes" \
-      "$(grep -q 'rule add to 185.199.108.133 lookup 300 pref 30000' "$S/ip.log" && echo yes || echo no)"
+      "$(grep -q 'rule add to 185.199.108.133 uidrange 0-0 lookup 300 pref 30000' "$S/ip.log" && echo yes || echo no)"
+# Правило по адресу назначения действует на весь трафик к нему, включая чужой через роутер.
+# Условие по владельцу оставляет в нём только наши собственные запросы: у пересылаемого
+# пакета сокета нет, и владельца у него нет тоже.
+check "устройств сети правило не касается" "2" \
+      "$(grep -c 'uidrange 0-0' "$S/ip.log")"
 check "после скачивания правил не осталось" "0" "$(cat "$S/rules" 2>/dev/null || echo 0)"
 check "повтор шёл только по IPv4" "yes" \
       "$(grep 'githubusercontent' "$S/curl.log" | tail -1 | grep -q 'four=yes' && echo yes || echo no)"
