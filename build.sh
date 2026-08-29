@@ -116,6 +116,10 @@ cp files/usr/sbin/splify2-update-lists "$PKG/usr/sbin/splify2-update-lists"
 # (`. /usr/lib/splify2/fetch.sh` в шапке), поэтому ниже стоит барьер.
 mkdir -p "$PKG/usr/lib/splify2"
 cp files/usr/lib/splify2/fetch.sh "$PKG/usr/lib/splify2/fetch.sh"
+# Домены GitHub для фикса Zapret Manager. Едут В ПАКЕТЕ, а не скачиваются: список нужен ровно
+# тогда, когда до GitHub не дойти, и качать его оттуда же было бы замкнутым кругом.
+mkdir -p "$PKG/etc/steer/lists"
+cp files/etc/steer/lists/zm-github.lst "$PKG/etc/steer/lists/zm-github.lst"
 # Настройка uci объявляется системе пакетом: почему именно так — в шапке самого файла.
 mkdir -p "$PKG/etc/uci-defaults"
 cp files/etc/uci-defaults/99-splify2 "$PKG/etc/uci-defaults/99-splify2"
@@ -225,6 +229,10 @@ chmod +x build/scripts/post-install
 # при этом выглядит как «раздел splify2 пропал из LuCI», то есть виной кажется интерфейс.
 test -s "$PKG/usr/lib/splify2/fetch.sh" || {
     echo "в пакете нет usr/lib/splify2/fetch.sh — rpcd-объект не запустится"; exit 1; }
+# Без списка фикс Zapret Manager молча превращается в ничто: канал не заводится, домены
+# GitHub идут напрямую, и человек упирается ровно в то, ради чего фикс и сделан.
+test -s "$PKG/etc/steer/lists/zm-github.lst" || {
+    echo "в пакете нет etc/steer/lists/zm-github.lst — фикс Zapret Manager не сработает"; exit 1; }
 
 mkdir -p "$OUT"
 docker run --rm -v "$PWD":/w -w /w alpine:latest sh -c \

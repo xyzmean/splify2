@@ -1313,5 +1313,57 @@ check "туннель можно запретить вовсе" "off" "$(rpcd fe
 
 mv "$T/bin/uci.stub" "$T/bin/uci"
 
-printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo "ЕСТЬ ПРОВАЛЫ: $fails")"
-[ "$fails" -eq 0 ]
+# ---- фикс Zapret Manager: адреса GitHub уходят в туннель сами ----------------------
+# Zapret Manager ставится и обновляется с GitHub, а у той аудитории, ради которой splify2 и
+# существует, GitHub закрыт: человек упирается в это раньше, чем успевает что-нибудь
+# настроить. Канал заводится сам — и заводится В СПЕКЕ, а не рядом с ней: производную спеку я
+# пробовал первой, и на роутере она прожила до первого перезапуска службы, чей init-скрипт
+# применяет /etc/steer/spec.json (путь прошит). Зато теперь канал виден в правилах.
+ZM_LIST_FIXTURE="$T/lists/zm-github.lst"
+mkdir -p "$T/lists"
+printf '140.82.112.0/20\n185.199.108.0/22\n' > "$ZM_LIST_FIXTURE"
+
+zm_apply() {  # СПЕКА -> спека после применения
+    printf '%s' "$1" > "$T/etc/spec.json"
+    ZM_LIST="$ZM_LIST_FIXTURE" rpcd apply >/dev/null 2>&1
+    cat "$T/etc/spec.json"
+}
+
+names() {  # < СПЕКА -> имена каналов через пробел
+    python3 -c 'import json,sys
+try: d = json.load(sys.stdin)
+except Exception: print("НЕ JSON"); raise SystemExit
+print(" ".join(c["name"] for c in d.get("channels", [])))'
+}
+
+SPEC_ONE='{"schema":1,"outputs":{"direct":{"kind":"direct"},"vl":{"kind":"vless"}},"channels":[]}'
+check "канал GitHub заводится сам" "zm_github" "$(zm_apply "$SPEC_ONE" | names)"
+check "и ведёт на туннельный выход" "vl" \
+      "$(cat "$T/etc/spec.json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["channels"][0]["out"])' 2>/dev/null)"
+check "канал адресный, а не доменный: резолвер поднимать незачем" "yes" \
+      "$(cat "$T/etc/spec.json" | grep -q 'prefixes_files' && echo yes || echo no)"
+
+# Второе применение не должно завести второй такой же.
+ZM_LIST="$ZM_LIST_FIXTURE" rpcd apply >/dev/null 2>&1
+check "повторное применение второго канала не добавляет" "zm_github" "$(cat "$T/etc/spec.json" | names)"
+
+# Каналы человека остаются на месте и в прежнем порядке.
+SPEC_TWO='{"schema":1,"outputs":{"direct":{"kind":"direct"},"vl":{"kind":"vless"}},"channels":[{"name":"my","match":{"prefixes_files":["/etc/steer/lists/a.lst"]},"out":"vl"}]}'
+check "прежние каналы остались" "zm_github my" "$(zm_apply "$SPEC_TWO" | names)"
+
+# Туннеля нет — вести GitHub некуда, спеку не трогаем.
+SPEC_NONE='{"schema":1,"outputs":{"direct":{"kind":"direct"}},"channels":[]}'
+check "без туннеля спека не правится" "$SPEC_NONE" "$(zm_apply "$SPEC_NONE")"
+
+# Выключено человеком — фикса нет вовсе.
+: > "$T/uci.store"
+echo 'splify2.main.zm_fix=0' >> "$T/uci.store"
+cp "$T/bin/uci" "$T/bin/uci.off" 2>/dev/null || true
+cat > "$T/bin/uci" <<'STUB'
+#!/bin/sh
+key=""
+for a in "$@"; do key="$a"; done
+case "$key" in splify2.main.zm_fix) echo 0 ;; *) exit 1 ;; esac
+STUB
+chmod +x "$T/bin/uci"
+check "выключенный фикс спеку не трогает" "$SPEC_ONE" "$(zm_apply "$SPEC_ONE")"
