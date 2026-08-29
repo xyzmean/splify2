@@ -5,7 +5,8 @@ import { rpc, type SubQuota } from '@/lib/rpc'
 import { human } from '@/lib/live'
 import type { OutputStatus, Status } from '@/lib/model'
 import { cacheGet, cacheSet } from '@/lib/cache'
-import { place } from '@/lib/geo'
+import { country } from '@/lib/geo'
+import Flag from '@/components/Flag'
 import { daysText, readQuota, resetText } from '@/lib/quota'
 
 /** Сколько трафика осталось и через какую точку он выходит. Один факт — одно место: только
@@ -237,7 +238,7 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
                     <>
                         <Unlimited note="объём не ограничен: у туннеля нет счётчика" />
                         <dl className="mt-3 space-y-1 text-[13px]">
-                            <Location name={place(geo?.cc) || node} />
+                            <Location cc={geo?.cc} name={country(geo?.cc) || node} />
                             <Address ip={geo?.ip} />
                         </dl>
                     </>
@@ -293,7 +294,7 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
                                     </dd>
                                 </div>
                             )}
-                            <Location name={place(geo?.cc) || node} />
+                            <Location cc={geo?.cc} name={country(geo?.cc) || node} />
                             <Address ip={geo?.ip} />
                         </dl>
                         {v.tight && (
@@ -318,7 +319,7 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
                                     <dd className="font-medium">{daysText(v.daysLeft)}</dd>
                                 </div>
                             )}
-                            <Location name={place(geo?.cc) || node} />
+                            <Location cc={geo?.cc} name={country(geo?.cc) || node} />
                             <Address ip={geo?.ip} />
                         </dl>
                     </>
@@ -329,7 +330,7 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
                             пустая строка означает ровно это, и повторять её словами незачем. */}
                         {why && <p className="mt-1 text-xs text-muted-foreground">{why}</p>}
                         <dl className="mt-3 space-y-1 text-[13px]">
-                            <Location name={place(geo?.cc) || node} />
+                            <Location cc={geo?.cc} name={country(geo?.cc) || node} />
                             <Address ip={geo?.ip} />
                         </dl>
                     </>
@@ -337,7 +338,7 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
                     /* Вставленные руками ссылки: остатка не существует, и говорить о нём
                        нечего. Остаётся то, что человеку и нужно, — куда он сейчас выходит. */
                     <dl className="space-y-1 text-[13px]">
-                        <Location name={place(geo?.cc) || node} />
+                        <Location cc={geo?.cc} name={country(geo?.cc) || node} />
                         <Address ip={geo?.ip} />
                     </dl>
                 )}
@@ -348,12 +349,15 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
 
 /** Строка локации. Отдельным куском, потому что она одна и та же во всех четырёх состояниях
  *  карточки, а повторить её четырьмя копиями значит однажды поправить три. */
-function Location({ name }: { name: string | null }) {
+function Location({ cc, name }: { cc?: string; name: string | null }) {
     if (!name) return null
     return (
         <div className="flex items-baseline justify-between gap-2">
             <dt className="text-subtle">локация</dt>
-            <dd className="min-w-0 text-right font-medium">{name}</dd>
+            <dd className="flex min-w-0 items-baseline justify-end gap-1.5 text-right font-medium">
+                <Flag cc={cc} />
+                <span className="min-w-0 truncate">{name}</span>
+            </dd>
         </div>
     )
 }
