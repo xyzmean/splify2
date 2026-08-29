@@ -425,6 +425,46 @@ check "включено: не вышло туннелем — выручает �
 check "включено: в туннель второй раз не ходили" "1" \
       "$(grep -c 'githubusercontent.com.*four=yes' "$S/curl.log")"
 
+# ---- 7в. без полного iproute2 в туннель не идём ------------------------------------
+# Условие по владельцу (uidrange) понимает только ip-full; busybox отвечает отказом. Без него
+# правило увело бы в туннель и трафик устройств сети — тогда лучше не идти туннелем вовсе и
+# сказать, чего не хватает.
+reset
+echo always > "$S/uci.splify2_main_fetch_via_tunnel"
+printf 'api.github.com\ncodeload.github.com\ngitlab.com\n' > "$S/blocked-always"
+printf 'githubusercontent.com\n' > "$S/blocked"
+cat > "$T/bin/ip" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$STATE/ip.log"
+case "$*" in
+    *uidrange*) echo "ip: invalid argument 'uidrange' to 'ip'" >&2; exit 1 ;;
+esac
+n=$(cat "$STATE/rules" 2>/dev/null || echo 0)
+case "$*" in
+    "rule add"*) echo $((n + 1)) > "$STATE/rules"; exit 0 ;;
+    "rule del"*) [ "$n" -gt 0 ] || exit 2; echo $((n - 1)) > "$STATE/rules"; exit 0 ;;
+esac
+exit 0
+EOF
+chmod +x "$T/bin/ip"
+res="$(run "$RAW")"
+check "без ip-full туннелем не идём" "RC1=1" "$(echo "$res" | grep '^RC1=')"
+check "и сказано, чего не хватает" "yes" \
+      "$(echo "$res" | grep -q 'NOTE1=.*ip-full' && echo yes || echo no)"
+check "правил при этом не осталось" "0" "$(cat "$S/rules" 2>/dev/null || echo 0)"
+# Возвращаем обычную заглушку ip.
+cat > "$T/bin/ip" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$STATE/ip.log"
+n=$(cat "$STATE/rules" 2>/dev/null || echo 0)
+case "$*" in
+    "rule add"*) echo $((n + 1)) > "$STATE/rules"; exit 0 ;;
+    "rule del"*) [ "$n" -gt 0 ] || exit 2; echo $((n - 1)) > "$STATE/rules"; exit 0 ;;
+esac
+exit 0
+EOF
+chmod +x "$T/bin/ip"
+
 # ---- 8. правила снимаются и когда повтор не удался ---------------------------------
 reset
 echo always > "$S/uci.splify2_main_fetch_via_tunnel"

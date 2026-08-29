@@ -1135,7 +1135,11 @@ gh_add_releases() {
 # самообновление интерфейса не работало бы вовсе.
 #
 # Единожды на запуск скрипта: ниже это спрашивают трижды.
-if command -v apk >/dev/null 2>&1; then PM=apk
+# PM_FIXTURE — шов для стенда: на машине разработчика есть только заглушки, и обе сразу,
+# поэтому иначе ветка opkg (а именно на ней и случаются беды с зависимостями) не проверяется
+# никогда. На роутере переменной нет, и всё решает наличие менеджера.
+if [ -n "${PM_FIXTURE:-}" ]; then PM="$PM_FIXTURE"
+elif command -v apk >/dev/null 2>&1; then PM=apk
 elif command -v opkg >/dev/null 2>&1; then PM=opkg
 else PM=none
 fi
@@ -1178,12 +1182,31 @@ pkg_version() {  # ИМЯ_ПАКЕТА
 # Поставить локальный файл тем менеджером, который есть. --force-overwrite понимают оба
 # и нужен обоим (см. выше про общий /usr/sbin/steer); --allow-untrusted — только apk:
 # у opkg проверки подписи для локального файла нет вовсе, и такого флага он не знает.
+#
+# У opkg есть беда, которой нет у apk: зависимости локального файла он ищет в СПИСКАХ
+# ПАКЕТОВ, а на свежей прошивке их нет — списки не переживают перезагрузку. Тогда установка
+# падает на «cannot find dependency ip-full for steer», хотя пакет скачан и лежит рядом.
+# Списки обновляются и установка повторяется ровно один раз: если зависимости нет и после
+# обновления, дело не в списках.
 pkg_add_file() {  # ФАЙЛ
     if [ "$PM" = apk ]; then
         apk add --allow-untrusted --force-overwrite "$1" 2>&1
-    else
-        opkg install --force-overwrite "$1" 2>&1
+        return $?
     fi
+    _pa_out="$(opkg install --force-overwrite "$1" 2>&1)"
+    _pa_rc=$?
+    if [ "$_pa_rc" != 0 ]; then
+        case "$_pa_out" in
+            *"cannot find dependency"*|*"unresolved"*|*"incompatible with the architectures"*)
+                opkg update >/dev/null 2>&1
+                _pa_out="$(opkg install --force-overwrite "$1" 2>&1)
+списки пакетов были пусты — обновил их (opkg update) и повторил"
+                _pa_rc=$?
+                ;;
+        esac
+    fi
+    printf '%s' "$_pa_out"
+    return $_pa_rc
 }
 
 pkg_del() {  # ИМЯ
@@ -2359,6 +2382,10 @@ splify2: набор обфускаторов изменился — экземп
         json_add_boolean ok 1
         json_add_string installed "$name"
         json_add_boolean restarted "$restarted"
+        # Слова менеджера пакетов — и на успехе тоже: именно там сказано, например, что
+        # списки пакетов были пусты и их пришлось обновить. Без этой строки человек видит
+        # «установлено» и не знает, что по дороге чинилось.
+        [ -n "$out" ] && json_add_string output "$out"
         json_dump
         ;;
 

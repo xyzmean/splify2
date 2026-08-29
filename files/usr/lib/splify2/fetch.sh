@@ -333,9 +333,19 @@ fetch_via_tunnel() {  # URL ФАЙЛ
     # дело и не то, о чём человека спрашивали. У пересылаемого пакета сокета нет, значит нет
     # и владельца: условие по владельцу его не выбирает вовсе, а наш собственный запрос идёт
     # от root. Проверено на роутере: правило с таким условием ядро принимает.
+    _vt_added=0
     for _vt_a in $_vt_addrs; do
-        ip rule add to "$_vt_a" uidrange 0-0 lookup "$_vt_table" pref "$FETCH_RULE_PREF" 2>/dev/null
+        ip rule add to "$_vt_a" uidrange 0-0 lookup "$_vt_table" pref "$FETCH_RULE_PREF" 2>/dev/null &&
+            _vt_added=$((_vt_added + 1))
     done
+    # Условие по владельцу понимает только полный iproute2; busybox отвечает «invalid
+    # argument 'uidrange'» (проверено на роутере). Без него правило увело бы в туннель и
+    # трафик устройств сети, а этого делать нельзя — тогда лучше не идти туннелем вовсе.
+    if [ "$_vt_added" = 0 ]; then
+        fetch_rules_flush
+        FETCH_NOTE="через туннель не выйдет: нужен полный iproute2 (пакет ip-full)"
+        return 1
+    fi
     fetch_get "$1" "$2" 4
     _vt_rc=$?
     fetch_rules_flush
