@@ -47,7 +47,9 @@ export default function Rail({ live, section, onSection, counts }: RailProps) {
     return (
         <>
             {/* ── широкий экран: колонка слева ─────────────────────────────────────── */}
-            <aside className="hidden shrink-0 flex-col gap-4 border-r border-border bg-rail p-4 lg:flex lg:w-[236px]">
+            {/* self-stretch: у подложки есть нижняя граница высоты (см. .sp-root), и рельс
+                обязан тянуться вместе с ней — иначе под ним видна ступенька другого фона. */}
+            <aside className="hidden shrink-0 self-stretch flex-col gap-4 border-r border-border bg-rail p-4 lg:flex lg:w-[236px]">
                 <div className="flex items-center gap-2.5 px-1.5">
                     <span
                         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-primary text-[15px] font-semibold text-primary-foreground"

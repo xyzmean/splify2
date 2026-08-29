@@ -69,7 +69,11 @@ export default function Console() {
 
     return (
         <div className="sp-root text-foreground">
-            <div className="flex min-h-[32rem] flex-col lg:flex-row">
+            {/* Ряд тянется на всю подложку (у неё своя нижняя граница высоты), иначе рельс
+                кончается там, где кончился его список, и под ним видна ступенька другого
+                фона. `min-h-full` работает от родителя с известной высотой — им и является
+                .sp-root. */}
+            <div className="flex min-h-full flex-col lg:flex-row">
                 <Rail live={live} section={section} onSection={setSection} counts={counts} />
 
                 {/* Отступ снизу на узком экране — под нижнюю панель разделов: без него последняя

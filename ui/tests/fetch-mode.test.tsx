@@ -13,7 +13,7 @@ import { rpc } from '@/lib/rpc'
 // предупреждает, когда поднятого выхода нет — иначе человек выберет режим, который ничего не
 // изменит, и будет ждать.
 
-describe('качать списки через туннель (splify2#15)', () => {
+describe('качать списки и обновления через туннель (splify2#15)', () => {
     beforeEach(() => {
         vi.restoreAllMocks()
         document.body.innerHTML = ''
@@ -71,6 +71,18 @@ describe('качать списки через туннель (splify2#15)', () 
         vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'always', out: '' })
         render(<FetchCard />)
         await waitFor(() => expect(screen.getByText(/поднятого выхода сейчас нет/)).toBeInTheDocument())
+    })
+
+    it('переключатель назван так, чтобы было видно: через туннель идут и обновления', async () => {
+        // Через туннель идёт всё, что роутер берёт из интернета: списки, манифест каталога и
+        // пакеты движка с интерфейсом. Настройка одна — значит и названа она должна быть
+        // целиком, иначе человек ждёт от неё только половину.
+        vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'off', out: 'vl' })
+        render(<FetchCard />)
+        await waitFor(() => expect(rpc.fetchMode).toHaveBeenCalled())
+        expect(
+            screen.getByRole('switch', { name: 'Скачивать списки и обновления через туннель' }),
+        ).toBeInTheDocument()
     })
 
     it('включено и выход есть — сказано, через какой пойдёт', async () => {
