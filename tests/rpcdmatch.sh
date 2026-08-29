@@ -1367,3 +1367,6 @@ case "$key" in splify2.main.zm_fix) echo 0 ;; *) exit 1 ;; esac
 STUB
 chmod +x "$T/bin/uci"
 check "выключенный фикс спеку не трогает" "$SPEC_ONE" "$(zm_apply "$SPEC_ONE")"
+
+printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo "ЕСТЬ ПРОВАЛЫ: $fails")"
+[ "$fails" -eq 0 ]
