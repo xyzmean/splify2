@@ -3,22 +3,28 @@ import { LoaderCircle, RefreshCw } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { rpc, type SubQuota } from '@/lib/rpc'
 import { human } from '@/lib/live'
+import type { Status } from '@/lib/model'
 import { daysText, isStale, readQuota, resetText } from '@/lib/quota'
 
-/** Остаток трафика подписки. Один факт — одно место: только здесь, только на обзоре.
+/** Сколько трафика осталось и через какую точку он выходит. Один факт — одно место: только
+ *  здесь, только на обзоре.
  *
- *  Числа принадлежат ПАНЕЛИ продавца, а не роутеру, и это главное, что карточка обязана
- *  сказать помимо самих чисел. Счётчики роутера выше на этом же экране показывают другое и
- *  никогда не сойдутся с этими: они обнуляются при перезагрузке и не видят трафик, ушедший с
- *  телефона мимо роутера. Пока это не было сказано словами, расхождение читалось как ошибка
- *  одного из двух счётчиков.
+ *  ОСТАТОК СЧИТАЕТСЯ ТОЛЬКО У ПОДПИСКИ, и это не оптимизация. Числа принадлежат панели
+ *  продавца и приезжают заголовком ответа на запрос подписки (`subscription-userinfo`), а не
+ *  телом. У вставленных руками ссылок `vless://` такого ответа нет вовсе, у WireGuard нет и
+ *  самого понятия: считать нечего, и спрашивать не у кого. Обращается бэкенд (`sub_quota`), а
+ *  карточка решает, когда пора: при открытии, если запомненному больше четверти часа, и по
+ *  нажатию.
  *
- *  Панель отдаёт их заголовком ответа на запрос подписки (`subscription-userinfo`) — не
- *  телом, — поэтому узнать остаток можно только обращением к ней. Обращается бэкенд
- *  (`sub_quota`), а карточка решает, когда пора: при открытии, если запомненному больше
- *  четверти часа, и по нажатию. */
+ *  ТУННЕЛЬ БЕЗ ПОДПИСКИ показывает бесконечность вместо числа. Это не «много осталось», а
+ *  «ограничения нет»: у WireGuard объём не считает никто, и подставить сюда ноль или прочерк
+ *  значило бы соврать в обе стороны.
+ *
+ *  ЛОКАЦИЯ — здесь же, а не отдельной карточкой: «сколько осталось» и «откуда я сейчас
+ *  выхожу» — один вопрос про один туннель, и разносить их по экрану значит заставлять
+ *  человека сводить их глазами. */
 
-export default function SubscriptionCard() {
+export default function SubscriptionCard({ outputs }: { outputs?: Status['outputs'] }) {
     const [kind, setKind] = useState<'url' | 'links' | 'none' | null>(null)
     const [quota, setQuota] = useState<SubQuota | undefined>()
     /** null — ещё не знаем; строка — панель молчит, и вот почему. */
@@ -29,6 +35,28 @@ export default function SubscriptionCard() {
     const asked = useRef(false)
     const alive = useRef(true)
     useEffect(() => () => { alive.current = false }, [])
+
+    /* Через что сейчас выходит трафик. Из состояния движка, а не из спеки: спека говорит,
+     * чего человек хотел, а вопрос здесь — что работает прямо сейчас. */
+    const entries = Object.entries(outputs ?? {})
+    const vlessOut = entries.find(([, o]) => o.kind === 'vless')?.[0]
+    const wgOut = entries.find(([, o]) => o.kind === 'interface')
+    /* Имя активного узла подписки — это и есть «локация»: у продавцов оно называет страну и
+     * номер («🇩🇪 Германия №2»). Спрашивается только у выхода kind=vless: у остальных
+     * узлов подписки нет вовсе. */
+    const [node, setNode] = useState<string | null>(null)
+    useEffect(() => {
+        if (!vlessOut) { setNode(null); return }
+        let stop = false
+        rpc.vlessNodes(vlessOut)
+            .then((r) => {
+                if (stop) return
+                const n = (r.nodes || []).find((x) => x.index === r.node)
+                setNode(n?.name || null)
+            })
+            .catch(() => { if (!stop) setNode(null) })
+        return () => { stop = true }
+    }, [vlessOut])
 
     const refresh = useCallback(async () => {
         setBusy(true)
@@ -67,24 +95,36 @@ export default function SubscriptionCard() {
         return () => { stop = true }
     }, [refresh])
 
-    /* Источника узлов нет вовсе — карточке нечего показывать и не о чем предупреждать:
-     * подписки нет, значит и остатка её быть не может. Место занимать незачем. */
-    if (kind === null || kind === 'none') return null
+    /* Считать нечего и показывать нечего: ни подписки, ни туннеля. Пустая карточка на
+     * обзоре занимала бы место ради строки «ничего нет». */
+    const wg = !vlessOut && !!wgOut
+    if ((kind === null || kind === 'none') && !wg) return null
 
-    const v = quota ? readQuota(quota) : null
+    /* Остаток — ТОЛЬКО у подписки. У вставленных ссылок и у WireGuard его не существует, и
+     * прежние запомненные числа рядом с ними были бы числами от другой настройки.
+     *
+     * Решает АКТИВНЫЙ туннель, а не то, что осталось в настройках: ссылка подписки может
+     * лежать в uci с прошлой попытки, а трафик идти через WireGuard — и остаток подписки,
+     * которой сейчас никто не пользуется, был бы числом не про этот роутер. */
+    const v = !wg && kind === 'url' && quota ? readQuota(quota) : null
+    const sub = !wg && (kind === 'url' || kind === 'links')
 
     return (
         <Card>
             {/* Строка переносится: «обновлено 12 мин назад» плюс кнопка не влезают рядом с
                 заголовком в 390 пикселях, и кнопка уезжала за край карточки. */}
             <CardHeader className="flex-row flex-wrap items-baseline justify-between gap-x-2 gap-y-1 space-y-0">
-                <CardTitle>Подписка</CardTitle>
+                {/* Без подписки блок называется по тому, о чём он: у WireGuard подписки
+                    нет, а туннель есть — и остаток у него не «неизвестен», а не существует. */}
+                <CardTitle>{sub ? 'Подписка' : 'Туннель'}</CardTitle>
                 <div className="flex items-baseline gap-2 text-xs text-muted-foreground">
                     {v?.age && <span>обновлено {v.age}</span>}
                     {/* Кнопка есть и когда числа свежие: «обновлено 3 мин назад» — это повод
                         не ходить наружу самим, а не запрет человеку спросить. У вставленных
-                        ссылок vless:// кнопки нет — обновлять там нечего. */}
-                    {kind === 'url' && (
+                        ссылок vless:// кнопки нет — обновлять там нечего, и у работающего
+                        WireGuard тоже: остаток подписки, которой никто не пользуется, эта
+                        кнопка спросила бы у панели впустую. */}
+                    {!wg && kind === 'url' && (
                         <button
                             type="button"
                             onClick={() => void refresh()}
@@ -102,7 +142,17 @@ export default function SubscriptionCard() {
                 </div>
             </CardHeader>
             <CardContent>
-                {v && v.total !== null && v.left !== null ? (
+                {wg ? (
+                    /* WireGuard: объёма не считает никто — ни роутер, ни та сторона. Это не
+                       «неизвестно», а «ограничения нет», поэтому знак бесконечности, а не
+                       прочерк. */
+                    <>
+                        <Unlimited note="объём не ограничен: у туннеля нет счётчика" />
+                        <dl className="mt-3 space-y-1 text-[13px]">
+                            <Location name={node} />
+                        </dl>
+                    </>
+                ) : v && v.total !== null && v.left !== null ? (
                     <>
                         <div className="flex flex-wrap items-baseline gap-x-2">
                             <span className="text-[30px] font-semibold leading-none">
@@ -150,6 +200,7 @@ export default function SubscriptionCard() {
                                     </dd>
                                 </div>
                             )}
+                            <Location name={node} />
                         </dl>
                         {v.tight && (
                             <p className="mt-3 rounded-xl border border-warning/40 bg-warning/10 p-2 text-xs">
@@ -160,40 +211,67 @@ export default function SubscriptionCard() {
                                 выхода.
                             </p>
                         )}
-                        <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-                            Цифры считает панель продавца и отдаёт в заголовке ответа на запрос
-                            подписки. Они не совпадут со счётчиками роутера выше: те обнуляются
-                            при перезагрузке и не видят трафик, ушедший с телефона мимо роутера.
-                        </p>
                     </>
                 ) : v && v.expire !== null ? (
                     /* Объёма нет, срок есть — подписка без ограничения по трафику. Показывать
                        «осталось 0 из 0» было бы выдумкой интерфейса. */
                     <>
-                        <div className="text-[15px]">Без ограничения по объёму</div>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                            панель назвала только срок: сброс {resetText(v.expire)}
-                            {v.daysLeft !== null && <>, до конца периода {daysText(v.daysLeft)}</>}
-                        </p>
+                        <Unlimited note={`панель назвала только срок: сброс ${resetText(v.expire)}`} />
+                        <dl className="mt-3 space-y-1 text-[13px]">
+                            {v.daysLeft !== null && (
+                                <div className="flex items-baseline justify-between gap-2">
+                                    <dt className="text-subtle">до конца периода</dt>
+                                    <dd className="font-medium">{daysText(v.daysLeft)}</dd>
+                                </div>
+                            )}
+                            <Location name={node} />
+                        </dl>
                     </>
-                ) : (
+                ) : kind === 'url' ? (
                     <>
                         <div className="text-[15px]">Панель не сообщает остаток</div>
-                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                            Остаток берётся из заголовка ответа подписки. Его отдают не все
-                            панели, а вставленные руками ссылки{' '}
-                            <code className="font-mono">vless://</code> не несут его вовсе —
-                            тогда считать нечего.
-                        </p>
                         {/* Причина показывается только когда она НЕ «панель промолчала»:
-                            пустая строка означает ровно то, что написано абзацем выше, и
-                            повторять это второй раз другими словами незачем. */}
-                        {why && (
-                            <p className="mt-2 text-xs text-muted-foreground">{why}</p>
-                        )}
+                            пустая строка означает ровно это, и повторять её словами незачем. */}
+                        {why && <p className="mt-1 text-xs text-muted-foreground">{why}</p>}
+                        <dl className="mt-3 space-y-1 text-[13px]">
+                            <Location name={node} />
+                        </dl>
                     </>
+                ) : (
+                    /* Вставленные руками ссылки: остатка не существует, и говорить о нём
+                       нечего. Остаётся то, что человеку и нужно, — куда он сейчас выходит. */
+                    <dl className="space-y-1 text-[13px]">
+                        <Location name={node} />
+                    </dl>
                 )}
             </CardContent>
         </Card>
+    )
+}
+
+/** Строка локации. Отдельным куском, потому что она одна и та же во всех четырёх состояниях
+ *  карточки, а повторить её четырьмя копиями значит однажды поправить три. */
+function Location({ name }: { name: string | null }) {
+    if (!name) return null
+    return (
+        <div className="flex items-baseline justify-between gap-2">
+            <dt className="text-subtle">локация</dt>
+            <dd className="min-w-0 text-right font-medium">{name}</dd>
+        </div>
+    )
+}
+
+/** Бесконечность вместо числа. Знак, а не слово: он занимает то же место, что и остаток, и
+ *  читается с той же строки — человек сравнивает «сколько осталось» глазами, не читая. */
+function Unlimited({ note }: { note: string }) {
+    return (
+        <>
+            <div className="flex flex-wrap items-baseline gap-x-2">
+                <span className="text-[30px] font-semibold leading-none" aria-label="без ограничения">
+                    ∞
+                </span>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">{note}</p>
+        </>
     )
 }

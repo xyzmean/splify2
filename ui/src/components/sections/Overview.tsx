@@ -280,7 +280,9 @@ export default function Overview({
                     <ExplainCard />
                 </div>
                 <div className="min-w-0">
-                    <SubscriptionCard />
+                    {/* Выходы — чтобы карточка знала, чем человек выходит: у подписки она
+                        считает остаток и называет узел, у WireGuard остатка не существует. */}
+                    <SubscriptionCard outputs={live.status?.outputs} />
                 </div>
             </div>
         </div>
