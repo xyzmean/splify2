@@ -275,6 +275,15 @@ cat > "$T/bin/steer" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$SANDBOX/steer.log"
 [ -n "${STEER_ERR:-}" ] && echo "$STEER_ERR" >&2
+# Проверка узла: движок пишет предупреждения в stderr, а JSON — в stdout. Стенду нужно уметь
+# воспроизводить обе половины сразу: именно их смешение и ломало ответ.
+case "${1:-}" in
+    vless-probe|vless-nodes)
+        [ -n "${STEER_NOISE:-}" ] && echo "$STEER_NOISE" >&2
+        [ -n "${STEER_JSON:-}" ] && printf '%s\n' "$STEER_JSON"
+        exit "${STEER_RC:-0}"
+        ;;
+esac
 if [ "$1" = outputs ]; then
     spec=""; kind=""; obfs=0
     while [ $# -gt 0 ]; do
@@ -1465,6 +1474,29 @@ out="$(rpcd fetch_mode_set '{"mode":"off"}')"
 check "выключается обратно" "off" "$(rpcd fetch_mode | jget mode)"
 
 mv "$T/bin/uci.stub" "$T/bin/uci"
+
+# ---- предупреждение движка не превращает ответ в ошибку ----------------------------
+# С живого экрана: вместо «ответ 53 мс» строка узла показывала красную полосу, а в ней —
+# человеческую строку движка вместе с сырым JSON. Движок пишет предупреждения в stderr
+# («соединился, пропущено мёртвых адресов: 2 из 15»), потоки здесь сливаются нарочно (без
+# stderr отказ было бы нечем объяснить), а проверка смотрела на ПЕРВЫЙ СИМВОЛ вывода — и
+# принимала годный ответ за мусор.
+PROBE_JSON='{"output":"vless","results":[{"index":0,"name":"узел","ok":true,"ttfb_ms":73}],"working":0}'
+out="$(STEER_NOISE='steer vless: auto.example:443 — соединился, пропущено мёртвых адресов: 2 из 15' \
+       STEER_JSON="$PROBE_JSON" rpcd vless_probe '{"output":"vless","node":0}')"
+check "предупреждение перед JSON не ломает проверку узла" "73" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["results"][0]["ttfb_ms"])' 2>/dev/null)"
+check "и сама человеческая строка в ответ не попадает" "" \
+      "$(printf '%s' "$out" | grep -c 'мёртвых адресов' | sed 's/^0$//')"
+
+out="$(STEER_NOISE='steer vless: подписка не прочиталась' STEER_JSON='' rpcd vless_probe '{"output":"vless","node":0}')"
+check "JSON не пришёл вовсе — отказ объясняется словами движка" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'подписка не прочиталась' && echo yes || echo no)"
+
+out="$(STEER_NOISE='steer vless: узлов 29 (пропущено 0)' \
+       STEER_JSON='{"output":"vless","node":1,"nodes":[]}' rpcd vless_nodes '{"output":"vless"}')"
+check "то же и у списка узлов" "vless" \
+      "$(printf '%s' "$out" | jget output)"
 
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo "ЕСТЬ ПРОВАЛЫ: $fails")"
 [ "$fails" -eq 0 ]
