@@ -16,25 +16,12 @@ import { t } from '@/lib/i18n'
  *  Имя выхода показано рядом с выбором, а не спрятано в подсказке: без поднятого выхода
  *  «через туннель» не даст ничего, и знать это надо ДО того, как человек его выберет. */
 
+/** Три значения хранит бэкенд (`auto` — туннель последней ступенью, `always` — первой, `off` —
+ *  не трогать вовсе), но человеку показывается ОДИН переключатель: «качать через туннель» или
+ *  нет. Три варианта требовали прочитать и сравнить три подписи ради настройки, которую
+ *  меняют раз в жизни. `off` остаётся для того, кто дойдёт до uci: запретить туннель совсем —
+ *  это уже не выбор пути, а его запрет. */
 type Mode = 'auto' | 'always' | 'off'
-
-const CHOICES: { id: Mode; label: string; hint: string }[] = [
-    {
-        id: 'auto',
-        label: 'Сам разберётся',
-        hint: 'Сначала напрямую, потом с других адресов GitHub, и только потом через туннель.',
-    },
-    {
-        id: 'always',
-        label: 'Через туннель',
-        hint: 'Сразу через туннель — одним запросом, без обходных адресов. Если GitHub у вас закрыт, берите этот.',
-    },
-    {
-        id: 'off',
-        label: 'Только напрямую',
-        hint: 'Туннель не трогать. Списки и обновления пойдут только своим каналом.',
-    },
-]
 
 export default function FetchCard() {
     const [mode, setMode] = useState<Mode | null>(null)
@@ -69,42 +56,35 @@ export default function FetchCard() {
         }
     }
 
+    const on = mode === 'always'
+
     return (
         <Card>
             <CardHeader>
-                <CardTitle className="text-base">{t('Откуда качать списки и обновления')}</CardTitle>
+                <CardTitle className="text-base">{t('Качать списки через туннель')}</CardTitle>
                 <CardDescription>
-                    {t('Списки, каталог и пакеты роутер берёт с GitHub. У части провайдеров githubusercontent.com закрыт — тогда роутер может ходить за ними через ваш туннель.')}
+                    {t('Списки, каталог и пакеты роутер берёт с GitHub. У части провайдеров githubusercontent.com закрыт — тогда роутер сходит за ними через ваш туннель.')}
                 </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3">
-                <div className="flex flex-wrap gap-1" role="radiogroup" aria-label={t('Откуда качать')}>
-                    {CHOICES.map((c) => (
-                        <button
-                            key={c.id}
-                            type="button"
-                            role="radio"
-                            aria-checked={mode === c.id}
-                            disabled={busy || mode === null}
-                            onClick={() => choose(c.id)}
-                            className={[
-                                'rounded-lg border px-3 py-1.5 text-sm transition-colors',
-                                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
-                                mode === c.id
-                                    ? 'border-primary bg-primary/10 font-medium text-primary'
-                                    : 'border-input text-muted-foreground hover:text-foreground',
-                            ].join(' ')}
-                        >
-                            {t(c.label)}
-                        </button>
-                    ))}
-                </div>
+            <CardContent className="space-y-2">
+                <label className="flex cursor-pointer items-center gap-3">
+                    <input
+                        type="checkbox"
+                        role="switch"
+                        checked={on}
+                        disabled={busy || mode === null}
+                        onChange={() => void choose(on ? 'auto' : 'always')}
+                        className="h-4 w-4 accent-[var(--sp-primary)]"
+                    />
+                    <span className="text-[13px]">
+                        {on ? t('Да, сразу через туннель') : t('Нет, только если не вышло напрямую')}
+                    </span>
+                </label>
 
-                <p className="text-xs text-muted-foreground">
-                    {t(CHOICES.find((c) => c.id === mode)?.hint || '')}
-                </p>
-
-                {mode === 'always' &&
+                {/* Имя выхода — рядом с переключателем, а не в подсказке: без поднятого выхода
+                    «через туннель» не даст ничего, и знать это надо ДО того, как человек его
+                    включит. */}
+                {on &&
                     (out ? (
                         <p className="text-xs text-muted-foreground">
                             {t('Пойдёт через выход')} <span className="font-medium text-foreground">{out}</span>.

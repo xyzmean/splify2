@@ -13,7 +13,7 @@ import { rpc } from '@/lib/rpc'
 // предупреждает, когда поднятого выхода нет — иначе человек выберет режим, который ничего не
 // изменит, и будет ждать.
 
-describe('откуда качать списки и обновления (splify2#15)', () => {
+describe('качать списки через туннель (splify2#15)', () => {
     beforeEach(() => {
         vi.restoreAllMocks()
         document.body.innerHTML = ''
@@ -22,25 +22,32 @@ describe('откуда качать списки и обновления (splify
     it('показывает то, что стоит на роутере', async () => {
         vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'always', out: 'vl' })
         render(<FetchCard />)
-        await waitFor(() =>
-            expect(screen.getByRole('radio', { name: 'Через туннель' })).toHaveAttribute(
-                'aria-checked',
-                'true',
-            ),
-        )
+        await waitFor(() => expect(screen.getByRole('switch')).toBeChecked())
         expect(screen.getByText(/vl/)).toBeInTheDocument()
     })
 
-    it('выбор уезжает на роутер именно тем значением, которое понимает бэкенд', async () => {
+    it('выключенное состояние — это «auto», а не запрет туннеля', async () => {
+        // Запрет (`off`) остаётся в uci для того, кто дойдёт до консоли: выключенный
+        // переключатель означает «не ходи туда сразу», а не «не ходи туда никогда».
         vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'auto', out: 'vl' })
         const set = vi.spyOn(rpc, 'fetchModeSet').mockResolvedValue({ ok: true, mode: 'always' })
         render(<FetchCard />)
         await waitFor(() => expect(rpc.fetchMode).toHaveBeenCalled())
-        fireEvent.click(screen.getByRole('radio', { name: 'Через туннель' }))
+        expect(screen.getByRole('switch')).not.toBeChecked()
+        fireEvent.click(screen.getByRole('switch'))
         await waitFor(() => expect(set).toHaveBeenCalledWith('always'))
     })
 
-    it('отказ записи возвращает прежний выбор, а не оставляет ложный', async () => {
+    it('обратно выключается в auto', async () => {
+        vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'always', out: 'vl' })
+        const set = vi.spyOn(rpc, 'fetchModeSet').mockResolvedValue({ ok: true, mode: 'auto' })
+        render(<FetchCard />)
+        await waitFor(() => expect(screen.getByRole('switch')).toBeChecked())
+        fireEvent.click(screen.getByRole('switch'))
+        await waitFor(() => expect(set).toHaveBeenCalledWith('auto'))
+    })
+
+    it('отказ записи возвращает прежнее положение, а не оставляет ложное', async () => {
         vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'auto', out: 'vl' })
         vi.spyOn(rpc, 'fetchModeSet').mockResolvedValue({
             ok: false,
@@ -48,21 +55,18 @@ describe('откуда качать списки и обновления (splify
         })
         render(<FetchCard />)
         await waitFor(() => expect(rpc.fetchMode).toHaveBeenCalled())
-        fireEvent.click(screen.getByRole('radio', { name: 'Через туннель' }))
+        fireEvent.click(screen.getByRole('switch'))
         await waitFor(() => expect(screen.getByText(/режим бывает/)).toBeInTheDocument())
-        expect(screen.getByRole('radio', { name: 'Сам разберётся' })).toHaveAttribute(
-            'aria-checked',
-            'true',
-        )
+        expect(screen.getByRole('switch')).not.toBeChecked()
     })
 
-    it('«через туннель» без поднятого выхода предупреждает, а не молчит', async () => {
+    it('включено, а поднятого выхода нет — предупреждает, а не молчит', async () => {
         vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'always', out: '' })
         render(<FetchCard />)
         await waitFor(() => expect(screen.getByText(/Поднятого выхода/)).toBeInTheDocument())
     })
 
-    it('на «сам разберётся» про выход не говорит ничего: он и не понадобится', async () => {
+    it('выключено — про выход не говорит ничего: он и не понадобится', async () => {
         vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'auto', out: '' })
         render(<FetchCard />)
         await waitFor(() => expect(rpc.fetchMode).toHaveBeenCalled())

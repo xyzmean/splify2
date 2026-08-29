@@ -39,10 +39,12 @@ const SUB_FILE = '/etc/steer/sub.txt'
 // намеренно, проверка упирается в таймаут, а вызов ubus столько не живёт (A-050).
 const PROBE_LIMIT = 3
 
-// С какого числа узлов список свёрнут при открытии панели. Двенадцать строк — это
-// примерно экран: пока список короче, сворачивать нечего, а на подписке из трёх десятков
-// узлов панель занимала весь экран и прятала всё, что под ней (R-019).
-const FOLD_FROM = 12
+// Насколько высоко список узлов может подняться, прежде чем начнёт прокручиваться. Свёртки
+// у него больше нет — она оказалась незаметной, и выбор узла прятался за кнопкой, — но и
+// занимать весь экран список не должен: на подписке из трёх десятков узлов он прятал всё,
+// что под панелью (R-019). Высота, а не нажатие: прокрутка не скрывает саму возможность
+// выбрать.
+const LIST_MAX = 'max-h-[22rem]'
 
 /** Что происходит со строкой узла: 'queued' — стоит в очереди пачки, до неё ещё не
  *  дошли, 'running' — проверяется прямо сейчас. Различать обязательно: показать у
@@ -80,7 +82,6 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
     const [batchOn, setBatchOn] = useState(false)
     const [busy, setBusy] = useState('')
     /** null — «человек ещё не решал», тогда список сворачивается по длине. */
-    const [open, setOpen] = useState<boolean | null>(null)
     const [urlTried, setUrlTried] = useState(false)
     /** Что панель сказала про устройство при последнем скачивании. */
     const [devWarn, setDevWarn] = useState('')
@@ -190,7 +191,6 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
         if (batchOn) { stopAll(); return }
         const token = ++batch.current
         const queue = nodes.map((n) => n.index)
-        setOpen(true)                 // проверять список, которого не видно, незачем
         setFails({})
         setPhase(Object.fromEntries(queue.map((i) => [i, 'queued' as Phase])))
         setBatchOn(true)
@@ -219,7 +219,6 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
         ? 'Нужна ссылка вида https://… на подписку либо одна или несколько ссылок vless:// '
           + 'через пробел. Смешивать эти две формы нельзя: роутер возьмёт только одну.'
         : urlTried && !urlText ? 'Вставьте ссылку на подписку или ссылку vless://.' : ''
-    const listOpen = open ?? (nodes ? nodes.length <= FOLD_FROM : true)
     const chosenName = chosen < 0
         ? 'первый рабочий'
         : nodes?.find((n) => n.index === chosen)?.name || `узел ${chosen}`
@@ -330,24 +329,17 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
 
             {nodes && (
                 <div className="space-y-1">
-                    {/* Свёртка и «проверить все» — в одной строке над списком. Выбор «первый
-                      * рабочий» из свёртки вынесен намеренно: это единственная строка, которую
-                      * нужно видеть всегда, иначе свёрнутая панель прячет и сам выбор. */}
+                    {/* СПИСОК БЕЗ СВЁРТКИ. Раньше узлы прятались за кнопкой «Показать узлы
+                      * (29)», и владелец сказал прямо: она незаметна, а второй спойлер внутри
+                      * панели, которая сама раскрывается, не нужен. Теперь наверху выбор
+                      * «первый рабочий», а под ним все узлы одним списком — прокруткой, а не
+                      * нажатием: длинный список прячет только высоту, а спрятанный выбор
+                      * прячет саму возможность выбрать. */}
                     {nodes.length > 0 && (
                         <div className="flex flex-wrap items-center gap-2">
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                aria-expanded={listOpen}
-                                onClick={() => setOpen(!listOpen)}
-                            >
-                                {listOpen
-                                    ? `Свернуть список узлов (${nodes.length})`
-                                    : `Показать узлы (${nodes.length})`}
-                            </Button>
-                            {!listOpen && (
-                                <span className="text-xs text-muted-foreground">выбран: {chosenName}</span>
-                            )}
+                            <span className="text-xs text-muted-foreground">
+                                узлов {nodes.length} · выбран: {chosenName}
+                            </span>
                             <Button
                                 variant="secondary"
                                 size="sm"
@@ -360,7 +352,7 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
                         </div>
                     )}
 
-                    <label className="flex items-center gap-2 py-1 text-sm">
+                    <label className="flex items-center gap-2 rounded-lg border border-border bg-muted px-2 py-1.5 text-sm">
                         <input
                             type="radio"
                             name={`node-${name}`}
@@ -373,7 +365,8 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
                         </span>
                     </label>
 
-                    {listOpen && nodes.map((n) => {
+                    <div className={`${LIST_MAX} space-y-0.5 overflow-y-auto pr-1`}>
+                    {nodes.map((n) => {
                         const p = probes[n.index]
                         const ph = phase[n.index]
                         const err = fails[n.index]
@@ -426,7 +419,9 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
                         )
                     })}
 
-                    {listOpen && (
+                    </div>
+
+                    {nodes.length > 0 && (
                         <p className="pt-1 text-xs text-muted-foreground">
                             «Ответ» — время до первого байта от 1.1.1.1 через туннель, то же, что показывает
                             curl. Не пинг: ICMP через туннель не ходит, и пинг измерял бы не тот путь.

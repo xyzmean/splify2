@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Check, Info, TriangleAlert, XCircle } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { type Live } from '@/lib/live'
+import { parseLog } from '@/lib/log'
 
 /** Диагностика: то, за чем приходят, когда «применилось, но не работает».
  *
@@ -116,29 +117,37 @@ export default function Diagnostics({ live }: { live: Live }) {
                 <CardHeader>
                     <CardTitle>Логи steer</CardTitle>
                     <CardDescription>
-                        Последние строки, дословно. Уровень берётся из пометки движка{' '}
-                        <code className="font-mono">steer[warn]</code> — это формат, а не проза:
-                        меняться будет текст, а не префикс, поэтому разбирать его можно. Строки без
-                        пометки — от более старого движка, они показаны как есть.
+                        Последние строки движка. Оформление syslog снято: день недели, год и
+                        номер процесса ничего не добавляют, а средство (<code className="font-mono">daemon.err</code>)
+                        здесь врёт — движок пишет в stderr, и syslog метит так ВСЁ, включая
+                        обычные сообщения. Уровень берётся из собственной пометки движка{' '}
+                        <code className="font-mono">steer[warn]</code>: это формат, а не проза.
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
                     {live.engine?.log?.length ? (
                         <div className="max-h-72 overflow-auto rounded-xl border border-border bg-muted p-3 text-[11px] leading-relaxed">
                             {live.engine.log.map((line, i) => {
-                                const m = /steer\[(warn|info)\]/.exec(line)
+                                const l = parseLog(line)
                                 return (
                                     <div key={i} className="flex gap-2 whitespace-pre-wrap">
-                                        {m && (
-                                            <span
-                                                className={`shrink-0 font-mono ${
-                                                    m[1] === 'warn' ? 'text-warning-fg' : 'text-muted-foreground'
-                                                }`}
-                                            >
-                                                {m[1]}
+                                        {l.time && (
+                                            <span className="shrink-0 font-mono text-muted-foreground">
+                                                {l.time}
                                             </span>
                                         )}
-                                        <span className="min-w-0">{line}</span>
+                                        {/* Значок только у предупреждения: подпись «info» на
+                                            каждой строке — это шум, из-за которого перестают
+                                            замечать те самые строки, ради которых сюда и
+                                            пришли. */}
+                                        {l.level === 'warn' && (
+                                            <span className="shrink-0 font-mono text-warning-fg">!</span>
+                                        )}
+                                        <span
+                                            className={`min-w-0 ${l.level === 'warn' ? 'text-warning-fg' : ''}`}
+                                        >
+                                            {l.text}
+                                        </span>
                                     </div>
                                 )
                             })}

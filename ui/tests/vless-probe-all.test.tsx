@@ -22,7 +22,7 @@ import type { Output, VlessProbe } from '@/lib/model'
 //      выглядят непроверенными или уже проверяемыми;
 //   4. отмена (повторное нажатие) и размонтирование останавливают пачку и не дают
 //      поздним ответам трогать состояние снятого компонента;
-//   5. свёрнутый список не прячет сам выбор узла;
+//   5. список узлов виден весь и не прячет сам выбор узла;
 //   6. негодная ссылка объясняется рядом с полем и до вызова rpc.
 
 const h = vi.hoisted(() => ({
@@ -207,29 +207,36 @@ describe('проверка всей подписки', () => {
     })
 })
 
-describe('свёртка списка узлов', () => {
-    it('короткий список открыт: сворачивать нечего', async () => {
+describe('список узлов виден весь, без свёртки', () => {
+    // Свёртка была, и владелец её забраковал: кнопка «Показать узлы (29)» незаметна, а за
+    // ней прятался сам выбор узла. Теперь наверху «Первый рабочий», под ним все узлы одним
+    // списком, а от «списка на весь экран» (R-019) защищает высота с прокруткой, а не
+    // нажатие: прокрутка прячет высоту, а свёртка прятала возможность выбрать.
+    it('короткий список показан целиком', async () => {
         mount(4)
         expect(await screen.findByText('NL-0')).toBeInTheDocument()
-        expect(screen.getByRole('button', { name: /Свернуть список узлов \(4\)/ })).toBeInTheDocument()
+        expect(screen.getByText('NL-3')).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Показать узлы|Свернуть список/ })).toBeNull()
     })
 
-    it('длинный список свёрнут, но выбранный узел и кнопки остаются видны', async () => {
+    it('длинный список тоже показан целиком, и выбор остаётся сверху', async () => {
         mount(26)
-        const toggle = await screen.findByRole('button', { name: /Показать узлы \(26\)/ })
-        expect(screen.queryByText('NL-0')).toBeNull()
-        // Свёрнутая панель не прячет сам выбор: «первый рабочий» на месте, и видно, что
-        // выбрано именно оно.
+        expect(await screen.findByText('NL-0')).toBeInTheDocument()
+        expect(screen.getByText('NL-25')).toBeInTheDocument()
         expect(screen.getByText('Первый рабочий')).toBeInTheDocument()
         expect(screen.getByText(/выбран: первый рабочий/)).toBeInTheDocument()
         expect(probeAllButton()).toBeInTheDocument()
-
-        fireEvent.click(toggle)
-        expect(await screen.findByText('NL-0')).toBeInTheDocument()
-        expect(screen.getByText('NL-25')).toBeInTheDocument()
     })
 
-    it('«проверить все» разворачивает список: проверять невидимое незачем', async () => {
+    it('высота списка ограничена — панель не занимает весь экран (R-019)', async () => {
+        mount(26)
+        const row = await screen.findByText('NL-0')
+        const box = row.closest('div[class*="overflow-y-auto"]')
+        expect(box).not.toBeNull()
+        expect(box?.className).toMatch(/max-h-/)
+    })
+
+    it('«проверить все» доступно сразу: разворачивать нечего', async () => {
         gatedProbes()
         mount(26)
         fireEvent.click(await screen.findByRole('button', { name: /Проверить все/ }))
