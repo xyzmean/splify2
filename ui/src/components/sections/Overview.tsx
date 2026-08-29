@@ -141,12 +141,23 @@ export default function Overview({
         <div className="space-y-4">
             <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
-                    <div className="flex items-center gap-2.5">
+                    {/* `stale` — на экране снимок прошлого открытия: роутер ещё не ответил.
+                        Показываем его приглушённым и говорим об этом вслух. Молча выдать
+                        вчерашнее «Работает» за сегодняшнее нельзя — это уже не задержка, а
+                        неправда; но и держать «Загрузка…» три секунды, когда прошлое
+                        состояние известно, незачем: человек открывает страницу, чтобы
+                        увидеть состояние, а не крутилку. */}
+                    <div className={`flex items-center gap-2.5 ${live.stale ? 'opacity-60' : ''}`}>
                         <span
                             className={`h-2.5 w-2.5 shrink-0 rounded-full ${DOT[v.tone]}`}
                             aria-hidden="true"
                         />
                         <h1 className="sp-verdict">{v.text}</h1>
+                        {live.stale && (
+                            <span className="shrink-0 text-xs font-normal text-muted-foreground">
+                                по прошлому опросу, обновляется…
+                            </span>
+                        )}
                     </div>
                     {/* Счётчики написаны подписью, двоеточием и числом — тогда не нужны
                         склонения после числительного, а перевод сводится к переводу подписи. */}

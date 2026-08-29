@@ -564,6 +564,28 @@ fetch_missing_lists() {  # ПУТЬ_К_СПЕКЕ
     return 0
 }
 
+# Измерить, где выходит трафик выхода, и запомнить. Ничего не печатает: зовётся и из
+# фонового процесса, где печатать некуда, и из синхронной ветки метода, где ответ собирает
+# сам метод. Код возврата: 0 — измерили и записали.
+#
+# Запрос уходит ЧЕРЕЗ УСТРОЙСТВО ВЫХОДА (`curl --interface`), поэтому способ один на все виды
+# туннелей: у vless устройство создаёт сам движок, у остальных оно и так есть.
+geo_refresh() {  # ВЫХОД
+    _gr_dev="$("$STEER" status --spec "$SPEC" 2>/dev/null |
+        sed -n "s/.*\"$1\":{[^}]*\"device\":\"\([^\"]*\)\".*/\1/p" | head -1)"
+    [ -n "$_gr_dev" ] || return 1
+    command -v curl >/dev/null 2>&1 || return 1
+    _gr_url="$(uci -q get splify2.main.geo_url)"
+    [ -n "$_gr_url" ] || _gr_url="$GEO_URL_DEFAULT"
+    _gr_out="$(curl -4 -fsS --interface "$_gr_dev" --connect-timeout 4 --max-time 8 \
+        "$_gr_url" 2>/dev/null)"
+    _gr_ip="$(printf '%s\n' "$_gr_out" | sed -n 's/^ip=\(.*\)$/\1/p' | head -1)"
+    _gr_cc="$(printf '%s\n' "$_gr_out" | sed -n 's/^loc=\([A-Za-z][A-Za-z]\)$/\1/p' | head -1)"
+    [ -n "$_gr_ip" ] || return 1
+    mkdir -p "$GEO_DIR" 2>/dev/null
+    printf '%s %s %s\n' "$(date +%s)" "${_gr_cc:--}" "$_gr_ip" > "$GEO_DIR/geo-$1" 2>/dev/null
+}
+
 # Зона фаервола для устройств, которые движок создаёт сам (выходы kind=vless).
 #
 # Зачем это здесь. fw4 отвергает форвардинг на устройство, не входящее ни в одну зону:
@@ -2792,60 +2814,48 @@ splify2: набор обфускаторов изменился — экземп
         fi
         _geo_age=$(( _geo_now - _geo_at ))
 
-        # Запомненного хватает: свежее и его не просили обновить.
-        if [ "$_geo_at" -gt 0 ] && [ "$_geo_age" -lt "$GEO_TTL" ] && [ "$fresh" != "1" ] && [ "$fresh" != "true" ]; then
+        # БЕЗ `fresh` МЕТОД НЕ ХОДИТ В СЕТЬ ВООБЩЕ — и это главное в нём.
+        #
+        # LuCI складывает вызовы страницы в ОДИН запрос к ubus и выполняет их подряд, поэтому
+        # медленный вызов задерживает все остальные: пока этот метод ждал ответа из сети,
+        # обзор восемь секунд писал «Загрузка…», хотя состояние движка было готово через
+        # четверть секунды. Замерено на роутере: пакет вызовов занимал 5,6 с при 150-250 мс
+        # на каждый вызов по отдельности.
+        #
+        # Поэтому обычный вызов отвечает тем, что запомнено (пусть даже пустотой), а
+        # устаревшее измерение обновляется В ФОНЕ и приедет к следующему опросу. Поток
+        # фонового процесса уводится в /dev/null нарочно: иначе он держал бы открытой
+        # трубу, из которой rpcd читает ответ, и вызов не завершился бы до конца curl.
+        if [ "$fresh" != "1" ] && [ "$fresh" != "true" ]; then
+            if [ "$_geo_at" -le 0 ] || [ "$_geo_age" -ge "$GEO_TTL" ]; then
+                geo_refresh "$output" >/dev/null 2>&1 &
+            fi
             json_init
             json_add_string output "$output"
-            json_add_string ip "$_geo_ip"
-            json_add_string cc "$_geo_cc"
-            json_add_int at "$_geo_at"
+            [ -n "$_geo_ip" ] && json_add_string ip "$_geo_ip"
+            [ -n "$_geo_cc" ] && json_add_string cc "$_geo_cc"
+            [ "$_geo_at" -gt 0 ] && json_add_int at "$_geo_at"
             json_add_boolean cached 1
             json_dump
             exit 0
         fi
 
-        _geo_dev="$("$STEER" status --spec "$SPEC" 2>/dev/null |
-            sed -n "s/.*\"$output\":{[^}]*\"device\":\"\([^\"]*\)\".*/\1/p" | head -1)"
         json_init
         json_add_string output "$output"
-        if [ -z "$_geo_dev" ]; then
-            # Устройства нет — выход не поднят, и мерить нечего. Прежнее измерение всё равно
-            # отдаём: «где мы выходили в прошлый раз» полезнее пустоты, а его возраст виден.
-            [ -n "$_geo_ip" ] && json_add_string ip "$_geo_ip"
+        if geo_refresh "$output"; then
+            read -r _geo_at _geo_cc _geo_ip < "$GEO_DIR/geo-$output"
+            [ "${_geo_cc:-}" = "-" ] && _geo_cc=''
+            json_add_string ip "$_geo_ip"
             [ -n "$_geo_cc" ] && json_add_string cc "$_geo_cc"
-            [ "$_geo_at" -gt 0 ] && json_add_int at "$_geo_at"
-            json_add_string why "выход не поднят: устройства нет"
-            json_dump; exit 0
-        fi
-        if ! command -v curl >/dev/null 2>&1; then
-            [ -n "$_geo_ip" ] && json_add_string ip "$_geo_ip"
-            [ -n "$_geo_cc" ] && json_add_string cc "$_geo_cc"
-            [ "$_geo_at" -gt 0 ] && json_add_int at "$_geo_at"
-            # uclient-fetch привязать к устройству нечем: у него нет ни --interface, ни
-            # аналога. Городить ради этого правило маршрутизации на время запроса — цена
-            # выше пользы: строка на обзоре не стоит правки таблиц.
-            json_add_string why "нужен curl: привязать запрос к устройству выхода больше нечем"
-            json_dump; exit 0
-        fi
-
-        _geo_url="$(uci -q get splify2.main.geo_url)"
-        [ -n "$_geo_url" ] || _geo_url="$GEO_URL_DEFAULT"
-        _geo_out="$(curl -4 -fsS --interface "$_geo_dev" --connect-timeout 4 --max-time 8 \
-            "$_geo_url" 2>/dev/null)"
-        _geo_new_ip="$(printf '%s\n' "$_geo_out" | sed -n 's/^ip=\(.*\)$/\1/p' | head -1)"
-        _geo_new_cc="$(printf '%s\n' "$_geo_out" | sed -n 's/^loc=\([A-Za-z][A-Za-z]\)$/\1/p' | head -1)"
-        if [ -n "$_geo_new_ip" ]; then
-            mkdir -p "$GEO_DIR" 2>/dev/null
-            printf '%s %s %s\n' "$_geo_now" "${_geo_new_cc:--}" "$_geo_new_ip" > "$_geo_f" 2>/dev/null
-            json_add_string ip "$_geo_new_ip"
-            [ -n "$_geo_new_cc" ] && json_add_string cc "$_geo_new_cc"
-            json_add_int at "$_geo_now"
+            json_add_int at "$_geo_at"
             json_add_boolean cached 0
         else
+            # Измерить не вышло. Прежнее измерение всё равно отдаём: «где мы выходили в
+            # прошлый раз» полезнее пустоты, а его возраст виден по полю at.
             [ -n "$_geo_ip" ] && json_add_string ip "$_geo_ip"
             [ -n "$_geo_cc" ] && json_add_string cc "$_geo_cc"
             [ "$_geo_at" -gt 0 ] && json_add_int at "$_geo_at"
-            json_add_string why "через выход не ответили: $_geo_url"
+            json_add_string why "через выход не ответили — выход не поднят, нет curl или молчит адрес проверки"
         fi
         json_dump
         ;;

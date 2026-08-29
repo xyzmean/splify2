@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { cacheGet, cacheSet } from '@/lib/cache'
 import { rpc } from './rpc'
 import { type Releases, type SelfUpdateInfo } from './engine'
 import { type Status } from './model'
@@ -66,6 +67,10 @@ export interface Live {
     /** Ошибка движка. Отдельно от `status === null`, потому что «ещё не пришло» и «не
      *  отвечает» требуют разного: первое — подождать, второе — показать причину. */
     error: string | null
+    /** Показанное — ПРОШЛОЕ: снимок с прошлого открытия страницы, пока не пришёл первый
+     *  ответ роутера. Врать этим нельзя, поэтому признак вынесен наружу: интерфейс обязан
+     *  показать, что числа ещё не сегодняшние, а не выдавать их за живые. */
+    stale: boolean
     diag: Diag | null
     /** Движок старее проверок состояния. Не ошибка страницы, а отдельное сообщение: иначе
      *  выглядело бы как поломка интерфейса на исправном роутере. */
@@ -106,15 +111,27 @@ export function rate(bytes: number, ms: number) {
 
 const PERIOD_MS = 5000
 
+/** Снимок прошлого открытия. Держится в памяти браузера ради одного: страница открывается
+ *  внутри LuCI, и до первого ответа ubus проходят секунды — сначала грузится сама LuCI, потом
+ *  наш загрузчик, потом бандл, и только потом уходят вызовы. Замерено на роутере: вердикт
+ *  появлялся через 3,2 с даже после того, как из первого пакета убрали походы в интернет.
+ *
+ *  Врать снимком нельзя: «Работает», нарисованное по вчерашним данным, — это не задержка, а
+ *  неправда. Поэтому вместе со снимком отдаётся признак `stale`, и интерфейс показывает
+ *  прошлое как прошлое, пока не приедет настоящее. */
+type Snapshot = { status: Status | null; diag: Diag | null; build: Build | null }
+
 export function useLive(): Live {
-    const [status, setStatus] = useState<Status | null>(null)
+    const saved = useRef<Snapshot | null>(cacheGet<Snapshot>('live'))
+    const [stale, setStale] = useState(!!saved.current)
+    const [status, setStatus] = useState<Status | null>(saved.current?.status ?? null)
     const [error, setError] = useState<string | null>(null)
-    const [diag, setDiag] = useState<Diag | null>(null)
+    const [diag, setDiag] = useState<Diag | null>(saved.current?.diag ?? null)
     const [diagOld, setDiagOld] = useState(false)
     const [devs, setDevs] = useState<Record<string, { rx: string; tx: string }> | null>(null)
     const [engine, setEngine] = useState<EngineState | null>(null)
     const [speed, setSpeed] = useState<Live['speed']>({ ch: {}, dev: {} })
-    const [build, setBuild] = useState<Build | null>(null)
+    const [build, setBuild] = useState<Build | null>(saved.current?.build ?? null)
     const [releases, setReleases] = useState<Releases | null>(null)
     const [selfUpdate, setSelfUpdate] = useState<SelfUpdateInfo | null>(null)
     const [net, setNet] = useState<{ uptime: number; active_clients: number } | null>(null)
@@ -167,12 +184,26 @@ export function useLive(): Live {
 
             if (s.status === 'fulfilled' && !failure(s.value)) { setStatus(s.value); setError(null) }
             else setError(s.status === 'fulfilled' ? failure(s.value)! : rejected(s))
+            /* Первый ответ роутера — конец «прошлого»: дальше на экране живое. */
+            setStale(false)
             const devices = d.status === 'fulfilled' && !failure(d.value) ? d.value.devices || {} : null
             if (devices) setDevs(devices)
             if (e.status === 'fulfilled' && !failure(e.value)) setEngine(e.value)
             if (g.status === 'fulfilled' && !failure(g.value)) { setDiag(g.value); setDiagOld(false) }
             else setDiagOld(true)
             if (ni.status === 'fulfilled' && !failure(ni.value)) setNet(ni.value)
+
+            /* Снимок для следующего открытия. Только то, что не вредит, устарев и будучи
+             * помеченным: состояние выходов, счёт проверок и версия движка. Скорости сюда не
+             * едут — они считаются из разницы двух опросов, и «прошлая скорость» это число
+             * ни о чём. */
+            if (s.status === 'fulfilled' && !failure(s.value)) {
+                cacheSet('live', {
+                    status: s.value,
+                    diag: g.status === 'fulfilled' && !failure(g.value) ? g.value : null,
+                    build: null,
+                })
+            }
 
             const now = Date.now()
             const ch: Record<string, { up: number; down: number }> = {}
@@ -250,19 +281,32 @@ export function useLive(): Live {
      * Здесь, а не в карточке движка, потому что ответ нужен ДВУМ местам сразу: карточке —
      * чтобы заполнить список версий, левой колонке — чтобы подпись кнопки перестала обещать
      * обновление, которого нет (I-038). Пока запрос жил в карточке, колонка о нём не знала. */
+    /* И ОТДЕЛЬНЫМ ЗАХОДОМ В ОЧЕРЕДЬ, а не вместе с состоянием. LuCI складывает вызовы,
+     * выпущенные в одном такте, в ОДИН запрос к ubus и выполняет их подряд, поэтому самый
+     * медленный задерживает все. Эти два идут на api.github.com через интернет — замерено на
+     * роутере: пакет из одиннадцати вызовов занимал 5,7 с, из них состояние движка было
+     * готово за четверть секунды, а обзор всё это время писал «Загрузка…». `setTimeout`
+     * уводит поход на GitHub в следующий пакет: страница рисуется по состоянию, а версии
+     * дописываются, когда приедут.
+     *
+     * Задержка именно секундная, а не нулевая: одного такта не хватает — очередь LuCI
+     * складывает в пакет всё, что выпущено, пока предыдущий запрос ещё в пути, и вызов из
+     * setTimeout(0) успевал попасть в тот же пакет. Проверено на роутере пакет за пакетом. */
     useEffect(() => {
         let stop = false
-        rpc.steerVersions()
-            .then((r) => { if (!stop) setReleases(r) })
-            .catch(() => { if (!stop) setReleases(null) })
-        rpc.splify2Versions()
-            .then((r) => { if (!stop) setSelfUpdate(r) })
-            .catch(() => { if (!stop) setSelfUpdate(null) })
-        return () => { stop = true }
+        const t = setTimeout(() => {
+            rpc.steerVersions()
+                .then((r) => { if (!stop) setReleases(r) })
+                .catch(() => { if (!stop) setReleases(null) })
+            rpc.splify2Versions()
+                .then((r) => { if (!stop) setSelfUpdate(r) })
+                .catch(() => { if (!stop) setSelfUpdate(null) })
+        }, 1200)
+        return () => { stop = true; clearTimeout(t) }
     }, [nonce])
 
     return {
-        status, error, diag, diagOld, devs, engine, speed, build, net, releases, selfUpdate,
+        status, error, diag, diagOld, devs, engine, speed, build, net, releases, selfUpdate, stale,
         refresh: () => setNonce((n) => n + 1),
     }
 }
