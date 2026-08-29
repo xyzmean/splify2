@@ -226,11 +226,6 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
 
     return (
         <div className="space-y-2 rounded-md border border-border p-2">
-            <div className="text-xs text-muted-foreground">
-                Клиент VLESS/Reality внутри движка: он поднимает своё устройство, поэтому каналы,
-                метки и переключение при отказе работают с ним так же, как с wireguard.
-            </div>
-
             <div className="flex flex-wrap items-end gap-2">
                 <label className="flex flex-1 flex-col gap-1 text-xs">
                     Ссылка на подписку или vless://
@@ -420,15 +415,6 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
                     })}
 
                     </div>
-
-                    {nodes.length > 0 && (
-                        <p className="pt-1 text-xs text-muted-foreground">
-                            «Ответ» — время до первого байта от 1.1.1.1 через туннель, то же, что показывает
-                            curl. Не пинг: ICMP через туннель не ходит, и пинг измерял бы не тот путь.
-                            «Проверить все» идёт по узлам не больше {PROBE_LIMIT} одновременно: больше —
-                            и роутер начнёт мерить собственную очередь вместо задержки узла.
-                        </p>
-                    )}
                 </div>
             )}
         </div>

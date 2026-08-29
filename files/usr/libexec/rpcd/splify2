@@ -570,6 +570,16 @@ fetch_missing_lists() {  # ПУТЬ_К_СПЕКЕ
 #
 # Запрос уходит ЧЕРЕЗ УСТРОЙСТВО ВЫХОДА (`curl --interface`), поэтому способ один на все виды
 # туннелей: у vless устройство создаёт сам движок, у остальных оно и так есть.
+# Чем этот выход был, когда мы мерили. Номер устройства в системе: при смене узла или
+# перечитывании подписки движок пересоздаёт TUN, и номер меняется. Ровно это и означает «мы
+# теперь выходим в другом месте» — даже когда выбран «первый рабочий» и спека не менялась.
+geo_ident() {  # ВЫХОД
+    _gi_dev="$("$STEER" status --spec "$SPEC" 2>/dev/null |
+        sed -n "s/.*\"$1\":{[^}]*\"device\":\"\([^\"]*\)\".*/\1/p" | head -1)"
+    [ -n "$_gi_dev" ] || { printf 'none'; return; }
+    printf '%s:%s' "$_gi_dev" "$(cat "/sys/class/net/$_gi_dev/ifindex" 2>/dev/null || echo 0)"
+}
+
 geo_refresh() {  # ВЫХОД
     _gr_dev="$("$STEER" status --spec "$SPEC" 2>/dev/null |
         sed -n "s/.*\"$1\":{[^}]*\"device\":\"\([^\"]*\)\".*/\1/p" | head -1)"
@@ -583,7 +593,8 @@ geo_refresh() {  # ВЫХОД
     _gr_cc="$(printf '%s\n' "$_gr_out" | sed -n 's/^loc=\([A-Za-z][A-Za-z]\)$/\1/p' | head -1)"
     [ -n "$_gr_ip" ] || return 1
     mkdir -p "$GEO_DIR" 2>/dev/null
-    printf '%s %s %s\n' "$(date +%s)" "${_gr_cc:--}" "$_gr_ip" > "$GEO_DIR/geo-$1" 2>/dev/null
+    printf '%s %s %s %s\n' "$(date +%s)" "${_gr_cc:--}" "$_gr_ip" "$(geo_ident "$1")" \
+        > "$GEO_DIR/geo-$1" 2>/dev/null
 }
 
 # Зона фаервола для устройств, которые движок создаёт сам (выходы kind=vless).
@@ -2806,11 +2817,17 @@ splify2: набор обфускаторов изменился — экземп
         _geo_now="$(date +%s)"
         _geo_ip=''; _geo_cc=''; _geo_at=0
         if [ -s "$_geo_f" ]; then
-            read -r _geo_at _geo_cc _geo_ip < "$_geo_f"
+            read -r _geo_at _geo_cc _geo_ip _geo_id < "$_geo_f"
             case "${_geo_at:-}" in ''|*[!0-9]*) _geo_at=0 ;; esac
             # Прочерк в файле означает «страну не назвали»: поле в строке обязано быть,
             # иначе следующее (адрес) прочиталось бы на его место.
             [ "${_geo_cc:-}" = "-" ] && _geo_cc=''
+            # Выход с тех пор пересоздали — значит и выходим мы теперь в другом месте.
+            # Прежнее измерение не отдаём вовсе: «Эстония» рядом с только что выбранной
+            # Польшей хуже пустоты, потому что выглядит как ответ.
+            if [ -n "${_geo_id:-}" ] && [ "$_geo_id" != "$(geo_ident "$output")" ]; then
+                _geo_at=0; _geo_cc=''; _geo_ip=''
+            fi
         fi
         _geo_age=$(( _geo_now - _geo_at ))
 
@@ -2843,8 +2860,9 @@ splify2: набор обфускаторов изменился — экземп
         json_init
         json_add_string output "$output"
         if geo_refresh "$output"; then
-            read -r _geo_at _geo_cc _geo_ip < "$GEO_DIR/geo-$output"
+            read -r _geo_at _geo_cc _geo_ip _geo_id < "$GEO_DIR/geo-$output"
             [ "${_geo_cc:-}" = "-" ] && _geo_cc=''
+            unset _geo_id
             json_add_string ip "$_geo_ip"
             [ -n "$_geo_cc" ] && json_add_string cc "$_geo_cc"
             json_add_int at "$_geo_at"

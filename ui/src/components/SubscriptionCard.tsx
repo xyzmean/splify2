@@ -82,6 +82,11 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
     const probing = st?.probe?.state === 'probing'
     const [geo, setGeo] = useState<{ cc?: string; ip?: string } | null>(seen.current.geo ?? null)
     const [node, setNode] = useState<string | null>(seen.current.node ?? null)
+    /** Какой узел выбран сейчас. Меняется — значит выходим в другом месте. */
+    const [nodeIdx, setNodeIdx] = useState<number | null>(null)
+    /* Спрашиваем заново, когда выход перезапустился или сменился узел: при смене профиля
+     * подписки движок пересоздаёт туннель, и прежняя страна перестаёт быть правдой. Сам
+     * бэкенд к тому же не отдаёт измерение, снятое с другого устройства. */
     useEffect(() => {
         if (!tunnelOut) return
         let stop = false
@@ -94,19 +99,21 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
             })
             .catch(() => {})
         return () => { stop = true }
-    }, [tunnelOut, remember])
+    }, [tunnelOut, up, nodeIdx, remember])
+
     useEffect(() => {
         if (!vlessOut) return
         let stop = false
         rpc.vlessNodes(vlessOut)
             .then((r) => {
                 if (stop) return
+                setNodeIdx(r.node)
                 const n = (r.nodes || []).find((x) => x.index === r.node)
                 if (n?.name) { setNode(n.name); remember({ node: n.name }) }
             })
             .catch(() => {})
         return () => { stop = true }
-    }, [vlessOut, remember])
+    }, [vlessOut, up, remember])
 
     /* Панель спрашивается ПРИ КАЖДОМ открытии, а не только когда запомненное устарело.
      * Прежний порог в четверть часа экономил обращение наружу ценой того, ради чего страницу

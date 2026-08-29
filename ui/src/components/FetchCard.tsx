@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Switch } from '@/components/ui/switch'
 import { rpc } from '@/lib/rpc'
 import { notify } from '@/lib/notify'
 import { t } from '@/lib/i18n'
@@ -16,11 +17,14 @@ import { t } from '@/lib/i18n'
  *  Имя выхода показано рядом с выбором, а не спрятано в подсказке: без поднятого выхода
  *  «через туннель» не даст ничего, и знать это надо ДО того, как человек его выберет. */
 
-/** Три значения хранит бэкенд (`auto` — туннель последней ступенью, `always` — первой, `off` —
- *  не трогать вовсе), но человеку показывается ОДИН переключатель: «качать через туннель» или
- *  нет. Три варианта требовали прочитать и сравнить три подписи ради настройки, которую
- *  меняют раз в жизни. `off` остаётся для того, кто дойдёт до uci: запретить туннель совсем —
- *  это уже не выбор пути, а его запрет. */
+/** Переключатель принадлежит человеку и значит ровно то, что написано: включено — качать
+ *  через туннель (`always`), выключено — не трогать туннель (`off`). Никакого «а мы сами
+ *  решим, если не вышло» в подписи нет и быть не должно.
+ *
+ *  Третье значение, `auto`, остаётся значением ПО УМОЛЧАНИЮ — для роутера, где этот
+ *  переключатель никто не трогал: там туннель остаётся последней ступенью и спасает тех, у
+ *  кого издатель закрыт, а сами они об этом не знают. На экране такое состояние показано
+ *  выключенным: человек ничего не выбирал, и обещать ему нечего. */
 type Mode = 'auto' | 'always' | 'off'
 
 export default function FetchCard() {
@@ -61,39 +65,33 @@ export default function FetchCard() {
     return (
         <Card>
             <CardHeader>
-                <CardTitle className="text-base">{t('Качать списки через туннель')}</CardTitle>
-                <CardDescription>
-                    {t('Списки, каталог и пакеты роутер берёт с GitHub. У части провайдеров githubusercontent.com закрыт — тогда роутер сходит за ними через ваш туннель.')}
-                </CardDescription>
+                <CardTitle className="text-base">{t('Скачивание списков')}</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2">
-                <label className="flex cursor-pointer items-center gap-3">
-                    <input
-                        type="checkbox"
-                        role="switch"
-                        checked={on}
+            <CardContent>
+                <div className="flex items-start gap-2.5">
+                    <Switch
+                        on={on}
+                        label={t('Скачивать списки через туннель')}
                         disabled={busy || mode === null}
-                        onChange={() => void choose(on ? 'auto' : 'always')}
-                        className="h-4 w-4 accent-[var(--sp-primary)]"
+                        onClick={() => void choose(on ? 'off' : 'always')}
                     />
-                    <span className="text-[13px]">
-                        {on ? t('Да, сразу через туннель') : t('Нет, только если не вышло напрямую')}
-                    </span>
-                </label>
-
-                {/* Имя выхода — рядом с переключателем, а не в подсказке: без поднятого выхода
-                    «через туннель» не даст ничего, и знать это надо ДО того, как человек его
-                    включит. */}
-                {on &&
-                    (out ? (
-                        <p className="text-xs text-muted-foreground">
-                            {t('Пойдёт через выход')} <span className="font-medium text-foreground">{out}</span>.
-                        </p>
-                    ) : (
-                        <p className="text-xs text-warning-fg">
-                            {t('Поднятого выхода со своей таблицей маршрутизации сейчас нет — скачивание пойдёт обычным порядком, пока он не появится.')}
-                        </p>
-                    ))}
+                    <div className="min-w-0">
+                        <div className="text-[13px]">{t('Скачивать списки через туннель')}</div>
+                        {/* Вторая строка — состояние, а не пояснение: включённый выключатель без
+                            поднятого выхода ничего не даст, и знать это надо здесь, а не после. */}
+                        {/* Ровно состояние, и ничего про то, как мы решаем сами: включатель
+                            принадлежит человеку. Выключено — строки нет вовсе. */}
+                        {on && (
+                            <div className="text-xs text-muted-foreground">
+                                {out ? (
+                                    <>{t('пойдёт через выход')} <span className="font-medium text-foreground">{out}</span></>
+                                ) : (
+                                    <span className="text-warning-fg">{t('поднятого выхода сейчас нет')}</span>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                </div>
             </CardContent>
         </Card>
     )

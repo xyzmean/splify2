@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react'
 import { ArrowRight, LoaderCircle, Plus, Search, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import SubscriptionCard from '@/components/SubscriptionCard'
 import { rpc } from '@/lib/rpc'
 import { human, type DiagCheck, type Live } from '@/lib/live'
-import { Hint } from '@/components/ui/hint'
 import { type SectionId } from '@/lib/sections'
 
 /** Обзор: ответ на «работает ли» и «куда идёт трафик» — и больше ничего.
@@ -437,16 +436,6 @@ function ExplainCard() {
         <Card>
             <CardHeader>
                 <CardTitle>Куда пойдёт запрос</CardTitle>
-                {/* Одна фраза, остальное — в подсказку. Дизайн 26.9: объяснять только то, без
-                    чего можно сделать неверное действие. Абзац про fake-IP и проверку резолвера
-                    верен и полезен, но действия он не меняет, а на телефоне занимал экран. */}
-                <CardDescription>
-                    Отвечает{' '}
-                    <Hint tip="Имя движок сначала спрашивает у своего резолвера и показывает, во что оно превратилось: у доменного правила это fake-IP, и с настоящим адресом сайта он не совпадает вовсе — по системному ответу понять, попадёт ли имя в набор, нельзя. Заодно это проверка самого резолвера: не ответил — значит и клиентам не отвечает.">
-                        по живому ядру
-                    </Hint>
-                    , а не по настройке.
-                </CardDescription>
             </CardHeader>
             <CardContent>
                 <div className="flex flex-wrap gap-2">

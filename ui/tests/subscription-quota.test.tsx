@@ -378,3 +378,37 @@ describe('соединения нет — карточка про беду, а �
         expect(screen.getByText('1.2.3.4')).toBeInTheDocument()
     })
 })
+
+// «При смене профиля подписки локация должна быть обновлена» — с живого экрана: человек
+// выбрал польский узел, а в карточке осталась Эстония. Измерение снимается через устройство
+// выхода, а при смене узла движок пересоздаёт его — значит прежнее измерение относится уже к
+// другому месту. Бэкенд такое измерение не отдаёт вовсе (сверяет устройство), а интерфейс
+// обязан спросить заново.
+describe('смена узла обновляет локацию', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks()
+        window.localStorage.clear()
+        vi.spyOn(rpc, 'subInfo').mockResolvedValue(info({ quota: quota() }))
+        vi.spyOn(rpc, 'subQuota').mockResolvedValue({ quota: quota(), kind: 'url' } as never)
+    })
+
+    it('выбран другой узел — измерение спрашивается заново', async () => {
+        const geo = vi.spyOn(rpc, 'outboundGeo').mockResolvedValue({ output: 'vl', cc: 'EE' })
+        vi.spyOn(rpc, 'vlessNodes').mockResolvedValue(nodes('🇪🇪 Эстония №3'))
+        const { rerender } = render(<SubscriptionCard outputs={OUT_VLESS} />)
+        expect(await screen.findByText(/Эстония/)).toBeInTheDocument()
+        expect(geo).toHaveBeenCalledTimes(1)
+
+        // Движок пересоздал туннель под другой узел: сначала выход падает…
+        geo.mockResolvedValue({ output: 'vl', cc: 'PL' })
+        vi.spyOn(rpc, 'vlessNodes').mockResolvedValue({
+            output: 'vl', sub_file: '/etc/steer/sub.txt', node: 4, usable: 2, skipped: 0, foreign: 0,
+            nodes: [{ index: 4, name: '🇵🇱 Польша №2', host: 'p.example', port: 443 }],
+        } as never)
+        rerender(<SubscriptionCard outputs={{ vl: { ...OUT_VLESS.vl, up: false } }} />)
+        // …потом поднимается снова.
+        rerender(<SubscriptionCard outputs={OUT_VLESS} />)
+        expect(await screen.findByText(/Польша/)).toBeInTheDocument()
+        expect(screen.queryByText(/Эстония/)).toBeNull()
+    })
+})

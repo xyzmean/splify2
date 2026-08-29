@@ -26,9 +26,7 @@ describe('качать списки через туннель (splify2#15)', () 
         expect(screen.getByText(/vl/)).toBeInTheDocument()
     })
 
-    it('выключенное состояние — это «auto», а не запрет туннеля', async () => {
-        // Запрет (`off`) остаётся в uci для того, кто дойдёт до консоли: выключенный
-        // переключатель означает «не ходи туда сразу», а не «не ходи туда никогда».
+    it('включение просит именно «через туннель»', async () => {
         vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'auto', out: 'vl' })
         const set = vi.spyOn(rpc, 'fetchModeSet').mockResolvedValue({ ok: true, mode: 'always' })
         render(<FetchCard />)
@@ -38,13 +36,22 @@ describe('качать списки через туннель (splify2#15)', () 
         await waitFor(() => expect(set).toHaveBeenCalledWith('always'))
     })
 
-    it('обратно выключается в auto', async () => {
+    it('выключение запрещает туннель, а не переводит в «сами решим»', async () => {
+        // Переключатель принадлежит человеку: выключил — значит не ходи туда, а не «ходи,
+        // если не вышло напрямую».
         vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'always', out: 'vl' })
-        const set = vi.spyOn(rpc, 'fetchModeSet').mockResolvedValue({ ok: true, mode: 'auto' })
+        const set = vi.spyOn(rpc, 'fetchModeSet').mockResolvedValue({ ok: true, mode: 'off' })
         render(<FetchCard />)
         await waitFor(() => expect(screen.getByRole('switch')).toBeChecked())
         fireEvent.click(screen.getByRole('switch'))
-        await waitFor(() => expect(set).toHaveBeenCalledWith('auto'))
+        await waitFor(() => expect(set).toHaveBeenCalledWith('off'))
+    })
+
+    it('нетронутый роутер (auto) показан выключенным: человек ничего не выбирал', async () => {
+        vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'auto', out: 'vl' })
+        render(<FetchCard />)
+        await waitFor(() => expect(rpc.fetchMode).toHaveBeenCalled())
+        expect(screen.getByRole('switch')).not.toBeChecked()
     })
 
     it('отказ записи возвращает прежнее положение, а не оставляет ложное', async () => {
@@ -63,13 +70,20 @@ describe('качать списки через туннель (splify2#15)', () 
     it('включено, а поднятого выхода нет — предупреждает, а не молчит', async () => {
         vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'always', out: '' })
         render(<FetchCard />)
-        await waitFor(() => expect(screen.getByText(/Поднятого выхода/)).toBeInTheDocument())
+        await waitFor(() => expect(screen.getByText(/поднятого выхода сейчас нет/)).toBeInTheDocument())
+    })
+
+    it('включено и выход есть — сказано, через какой пойдёт', async () => {
+        vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'always', out: 'vless' })
+        render(<FetchCard />)
+        await waitFor(() => expect(screen.getByText(/пойдёт через выход/)).toBeInTheDocument())
+        expect(screen.getByText('vless')).toBeInTheDocument()
     })
 
     it('выключено — про выход не говорит ничего: он и не понадобится', async () => {
         vi.spyOn(rpc, 'fetchMode').mockResolvedValue({ mode: 'auto', out: '' })
         render(<FetchCard />)
         await waitFor(() => expect(rpc.fetchMode).toHaveBeenCalled())
-        expect(screen.queryByText(/Поднятого выхода/)).toBeNull()
+        expect(screen.queryByText(/пойдёт через выход|поднятого выхода/)).toBeNull()
     })
 })

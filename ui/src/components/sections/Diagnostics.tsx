@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { Check, Info, TriangleAlert, XCircle } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { type Live } from '@/lib/live'
@@ -16,7 +15,6 @@ import { parseLog } from '@/lib/log'
  *  не влезало в остальные вкладки, и по его названию нельзя было угадать содержимое. */
 
 export default function Diagnostics({ live }: { live: Live }) {
-    const [showOk, setShowOk] = useState(false)
 
     const bad = (live.diag?.checks || []).filter((c) => c.verdict === 'fail' || c.verdict === 'warn')
     /* Советы отдельно и НЕ в счётчиках: они верны всегда, а не описывают эту установку. Смешав
@@ -27,10 +25,6 @@ export default function Diagnostics({ live }: { live: Live }) {
 
     return (
         <div className="space-y-4">
-            <p className="text-[13px] text-muted-foreground">
-                Проверки идут по ядру и живым процессам, не по настройке.
-            </p>
-
             {/* Плохое наверху, исправное свёрнуто: двенадцать зелёных галочек прячут одну
                 красную. */}
             <Card>
@@ -44,11 +38,12 @@ export default function Diagnostics({ live }: { live: Live }) {
                                 ? `проверок с предупреждением: ${live.diag.warn}`
                                 : 'Всё в порядке'}
                     </CardTitle>
-                    <CardDescription>
-                        {live.diagOld
-                            ? 'Движок этой версии не умеет проверки состояния — обновите steer в разделе «Система».'
-                            : 'Движок спрашивает ядро и живые процессы, а не свою же настройку: совпадение с настройкой ничего не доказывает.'}
-                    </CardDescription>
+                    {/* Объяснять, ЧТО такое проверки, на экране незачем: об этом не
+                        спрашивают. Остаётся то, после чего человек делает следующий шаг —
+                        движок старый и проверок не умеет. */}
+                    {live.diagOld && (
+                        <CardDescription>Обновите steer в разделе «Система».</CardDescription>
+                    )}
                 </CardHeader>
                 {!live.diagOld && (
                     <CardContent className="space-y-2">
@@ -89,24 +84,13 @@ export default function Diagnostics({ live }: { live: Live }) {
                             </div>
                         )}
                         {good.length > 0 && (
-                            <div>
-                                <button
-                                    type="button"
-                                    onClick={() => setShowOk((s) => !s)}
-                                    className="text-xs text-muted-foreground underline"
-                                >
-                                    {showOk ? 'скрыть исправное' : `исправно: ${good.length} — показать`}
-                                </button>
-                                {showOk && (
-                                    <div className="mt-2 space-y-1">
-                                        {good.map((c, i) => (
-                                            <div key={`${c.id}-ok-${i}`} className="flex gap-2 text-[13px]">
-                                                <Check className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden="true" />
-                                                <span className="text-muted-foreground">{c.what}</span>
-                                            </div>
-                                        ))}
+                            <div className="space-y-1 border-t border-border pt-2">
+                                {good.map((c, i) => (
+                                    <div key={`${c.id}-ok-${i}`} className="flex gap-2 text-[13px]">
+                                        <Check className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+                                        <span className="text-muted-foreground">{c.what}</span>
                                     </div>
-                                )}
+                                ))}
                             </div>
                         )}
                     </CardContent>
@@ -116,13 +100,6 @@ export default function Diagnostics({ live }: { live: Live }) {
             <Card>
                 <CardHeader>
                     <CardTitle>Логи steer</CardTitle>
-                    <CardDescription>
-                        Последние строки движка. Оформление syslog снято: день недели, год и
-                        номер процесса ничего не добавляют, а средство (<code className="font-mono">daemon.err</code>)
-                        здесь врёт — движок пишет в stderr, и syslog метит так ВСЁ, включая
-                        обычные сообщения. Уровень берётся из собственной пометки движка{' '}
-                        <code className="font-mono">steer[warn]</code>: это формат, а не проза.
-                    </CardDescription>
                 </CardHeader>
                 <CardContent>
                     {live.engine?.log?.length ? (
