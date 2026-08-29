@@ -90,12 +90,30 @@ pm_installed() {
 # файла не проверяет вовсе и такого флага не знает. --force-overwrite нужен обоим:
 # интерфейс кладёт файлы в /www/luci-static, и при переустановке поверх прежней версии
 # менеджер видит там чужие с его точки зрения файлы.
+#
+# У opkg есть отдельная беда, которой нет у apk: зависимости локального файла он ищет в
+# СПИСКАХ ПАКЕТОВ, а на свежей прошивке их нет вовсе — списки не хранятся между
+# перезагрузками. Тогда установка падает на «cannot find dependency ip-full for steer», хотя
+# сам пакет скачан и лежит рядом. Поэтому при такой ошибке списки обновляются и установка
+# повторяется — один раз: если и после обновления зависимости нет, дело не в списках, и
+# крутить это по кругу незачем.
 pm_add() {
     if [ "$PM" = apk ]; then
         apk add --allow-untrusted --force-overwrite "$1" >/dev/null
-    else
-        opkg install --force-overwrite "$1" >/dev/null
+        return $?
     fi
+    out="$(opkg install --force-overwrite "$1" 2>&1)"
+    [ $? = 0 ] && return 0
+    case "$out" in
+        *"cannot find dependency"*|*"unresolved"*|*"incompatible with the architectures"*)
+            info "нет списков пакетов — обновляю (opkg update)"
+            opkg update >/dev/null 2>&1
+            opkg install --force-overwrite "$1" >/dev/null 2>&1
+            return $?
+            ;;
+    esac
+    printf '%s\n' "$out" >&2
+    return 1
 }
 
 # Расширение файла пакета и суффикс архитектуры у пакета без бинарного кода: apk называет

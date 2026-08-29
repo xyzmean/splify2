@@ -195,6 +195,26 @@ printf '#!/bin/sh\nexit 1\n' > "$T/bin/uci"
 # переживать), но вызовы теперь протоколируются — сигнал экземпляру виден только так.
 # nft: ничего не делает, но записывает всё, что ему дали — и аргументами, и потоком.
 # Проверять фикс Zapret Manager иначе нечем: таблица собирается heredoc-ом.
+# opkg: воспроизводит беду свежей прошивки — списков пакетов нет, и зависимость локального
+# файла не находится. После `opkg update` установка проходит.
+cat > "$T/bin/opkg" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$SANDBOX/opkg.log"
+case "$1" in
+    update) : > "$SANDBOX/opkg.lists"; exit 0 ;;
+    install)
+        if [ -f "$SANDBOX/opkg.lists" ]; then
+            echo "Installing steer"; exit 0
+        fi
+        echo "Collected errors:"
+        echo " * pkg_hash_check_unresolved: cannot find dependency ip-full for steer"
+        exit 1
+        ;;
+    list-installed) exit 0 ;;
+esac
+exit 0
+EOF
+
 cat > "$T/bin/nft" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$SANDBOX/nft.log"
@@ -361,6 +381,7 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         STEER_ERR="${STEER_ERR:-}" \
         APK_ADD_RC="${APK_ADD_RC:-0}" \
         APK_ADD_OUT="${APK_ADD_OUT:-}" \
+        PM_FIXTURE="${PM_FIXTURE:-}" \
         ENGINE_ENABLED="${ENGINE_ENABLED:-0}" \
         sh "$SCRIPT" call "$1" 2>"$T/stderr"
 }
@@ -1405,6 +1426,18 @@ check "канал от 1.2.3 убран из правил" "my" \
 try: d = json.load(open(sys.argv[1]))
 except Exception: print("НЕ JSON"); raise SystemExit
 print(" ".join(c["name"] for c in d.get("channels", [])))' "$T/etc/spec.json")"
+
+# ---- opkg: пустые списки пакетов не должны валить установку -------------------------
+# С живого роутера: «cannot find dependency ip-full for steer», хотя пакет скачан и лежит
+# рядом. У opkg зависимости локального файла ищутся в СПИСКАХ ПАКЕТОВ, а на свежей прошивке
+# их нет — списки не переживают перезагрузку. На apk этого нет вовсе.
+rm -f "$T/opkg.lists" "$T/opkg.log"
+out="$(PM_FIXTURE=opkg rpcd steer_install '{"version":"1.2.4","extended":false}')"
+check "после отказа по зависимости списки обновляются" "1" \
+      "$(grep -c '^update' "$T/opkg.log")"
+check "и установка повторяется" "2" "$(grep -c '^install' "$T/opkg.log")"
+check "человеку сказано, что списки были пусты" "yes" \
+      "$(printf '%s' "$out" | jget output | grep -q 'списки пакетов были пусты' && echo yes || echo no)"
 
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo "ЕСТЬ ПРОВАЛЫ: $fails")"
 [ "$fails" -eq 0 ]
