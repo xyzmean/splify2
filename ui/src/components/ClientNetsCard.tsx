@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { type ClientNet, type Spec } from '@/lib/model'
+import { type ClientNet, type Spec, type Status } from '@/lib/model'
 import { rpc } from '@/lib/rpc'
 
 /** Кого маршрутизируем: устройства, с которых движок забирает трафик клиентов (splify2#16).
@@ -29,6 +29,10 @@ import { rpc } from '@/lib/rpc'
 interface Props {
     /** null — спека ещё не пришла. */
     spec: Spec | null
+    /** Живое состояние движка. Нужно ровно для одного: узнать, понимает ли он перечень
+     *  устройств вообще. Ответ `status` отдаёт `lan_devices` всегда, какой бы формой они ни
+     *  были записаны в спеке; поля нет — движок старее перечня. */
+    status: Status | null
     onChange: (next: Spec) => void
 }
 
@@ -36,7 +40,7 @@ interface Props {
  *  бы человеку не то, что применено. */
 const DEFAULT_DEV = 'br-lan'
 
-export default function ClientNetsCard({ spec, onChange }: Props) {
+export default function ClientNetsCard({ spec, status, onChange }: Props) {
     const [nets, setNets] = useState<ClientNet[] | null>(null)
     /** Почему щелчок ничего не сделал. На экране, а не всплывашкой: отказ здесь — это
      *  правило движка, и человек должен видеть его, пока смотрит на флажки. */
@@ -87,6 +91,15 @@ export default function ClientNetsCard({ spec, onChange }: Props) {
         setWhy('')
         onChange({ ...rest, lan_devices: chosen } as Spec)
     }
+
+    /** Движок старее перечня устройств. Незнакомый ключ спеки его разбор пропускает МОЛЧА:
+     *  отказа нет, правила есть, трафик идёт мимо — ровно тот вид поломки, из-за которого
+     *  обращение и написано. Жалуемся только когда выбор ОТЛИЧАЕТСЯ от умолчания движка: на
+     *  одном br-lan старая версия делает ровно то же самое, и пугать нечем. */
+    const engineOld =
+        !!status &&
+        !('lan_devices' in status) &&
+        !(chosen.length === 1 && chosen[0] === DEFAULT_DEV)
 
     const chosenWan = rows.some((n) => n.wan && chosen.includes(n.name))
     const anyAbsent = rows.some((n) => n.absent && chosen.includes(n.name))
@@ -153,6 +166,14 @@ export default function ClientNetsCard({ spec, onChange }: Props) {
                 </div>
 
                 {why && <p className="text-xs text-destructive">{why}</p>}
+
+                {engineOld && (
+                    <p className="text-xs text-warning-fg">
+                        Движок этой версии перечня устройств не понимает и заберёт трафик только с
+                        br-lan: незнакомое поле настройки он пропускает молча. Обновите движок в
+                        разделе «Система» — иначе выбор здесь ничего не изменит.
+                    </p>
+                )}
 
                 {anyAbsent && (
                     <p className="text-xs text-muted-foreground">

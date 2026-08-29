@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ClientNetsCard from '@/components/ClientNetsCard'
 import { rpc } from '@/lib/rpc'
 import { normalizeSpec } from '@/lib/model'
-import { type Spec } from '@/lib/model'
+import { type Spec, type Status } from '@/lib/model'
 
 // splify2#16: «Не только устройства из br-lan».
 //
@@ -30,11 +30,14 @@ const NETS = {
 
 const BASE: Spec = { schema: 1, outputs: {}, channels: [] }
 
-function mount(spec: Spec) {
+function mount(spec: Spec, status: Status | null = null) {
     const onChange = vi.fn()
-    render(<ClientNetsCard spec={spec} onChange={onChange} />)
+    render(<ClientNetsCard spec={spec} status={status} onChange={onChange} />)
     return onChange
 }
+
+const OLD_ENGINE: Status = { schema: 1, outputs: {}, channels: [] }
+const NEW_ENGINE: Status = { schema: 1, outputs: {}, channels: [], lan_devices: ['br-lan'] }
 
 function lastSpec(onChange: ReturnType<typeof vi.fn>): Spec {
     return onChange.mock.calls[onChange.mock.calls.length - 1][0] as Spec
@@ -117,6 +120,26 @@ describe('кого маршрутизируем (splify2#16)', () => {
         await waitFor(() => expect(rpc.clientNets).toHaveBeenCalled())
         expect(screen.getByRole('checkbox', { name: /tailscale0/ })).toBeDisabled()
         expect(onChange).not.toHaveBeenCalled()
+    })
+
+    it('движок старее перечня — выбор до него не доедет, и это сказано', async () => {
+        // Незнакомый ключ спеки старый разбор пропускает МОЛЧА: отказа нет, правила есть,
+        // трафик идёт мимо. Ровно тот вид поломки, из-за которого обращение и написано.
+        mount({ ...BASE, lan_devices: ['br-lan', 'tailscale0'] }, OLD_ENGINE)
+        await waitFor(() => expect(rpc.clientNets).toHaveBeenCalled())
+        expect(screen.getByText(/движок этой версии/i)).toBeInTheDocument()
+    })
+
+    it('на движке, который перечень понимает, лишнего не говорит', async () => {
+        mount({ ...BASE, lan_devices: ['br-lan', 'tailscale0'] }, NEW_ENGINE)
+        await waitFor(() => expect(rpc.clientNets).toHaveBeenCalled())
+        expect(screen.queryByText(/движок этой версии/i)).toBeNull()
+    })
+
+    it('на старом движке с умолчанием молчит: жаловаться не на что', async () => {
+        mount(BASE, OLD_ENGINE)
+        await waitFor(() => expect(rpc.clientNets).toHaveBeenCalled())
+        expect(screen.queryByText(/движок этой версии/i)).toBeNull()
     })
 
     it('устройство без адреса отмечается, о пустоте сказано', async () => {

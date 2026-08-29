@@ -222,6 +222,12 @@ export interface ChannelStatus {
 
 export interface Status {
     schema: 1
+    /** Устройства, с которых движок ЗАБИРАЕТ трафик сейчас — списком и всегда, какой бы
+     *  формой они ни были записаны в спеке. Поля нет вовсе — движок старее перечня
+     *  устройств (splify2#16), и выбор человека до него не доедет: незнакомый ключ спеки
+     *  разбор пропускает молча. Сказать об этом важнее, чем показать: молчание здесь
+     *  выглядит как «отметил интерфейс и ничего не изменилось». */
+    lan_devices?: string[]
     outputs: Record<string, OutputStatus>
     channels: ChannelStatus[]
     warnings?: { code: string; text: string; channel?: string }[]

@@ -337,7 +337,7 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
             {/* Кого касаются правила — ПЕРЕД самими правилами, а не после: правило, заведённое
                 на сеть, из которой никто не приходит, выглядит настроенным и не работает
                 (splify2#16). Здесь, а не в «Системе»: это про маршрутизацию, а не про коробку. */}
-            <ClientNetsCard spec={spec} onChange={edit} />
+            <ClientNetsCard spec={spec} status={live.status} onChange={edit} />
 
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-muted-foreground">
