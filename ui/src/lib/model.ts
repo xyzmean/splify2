@@ -279,6 +279,11 @@ export interface RawManifest {
          *  сторон — интерфейс её только читает, а не выводит по именам файлов. */
         complements?: string[]
         complemented_by?: string[]
+        /** Место в каталоге: id записи, СРАЗУ ЗА которой встаёт этот список. Издатель
+         *  ставит его тем спискам, которые ищут наравне с сервисами: доменный GitHub
+         *  человеку нужен рядом с Telegram, а не в хвосте за двумя десятками CDN, куда
+         *  его отправляет порядок манифеста (сначала адресные категории, потом доменные). */
+        after?: string
     }[]
 }
 
@@ -460,34 +465,59 @@ export function toCatalog(m: RawManifest): Catalog {
         return undefined
     }
 
-    const services = [...groups.values()].map((g) => {
-        /* Имя обычно берём у АДРЕСНЫХ частей: у издателя они названы полнее — «Google
-         * (Meet/Play/AI)» против «Google Play».
-         *
-         * Но когда адресных категорий несколько, а доменный список один, имя берём у него:
-         * именно он их и связал. Иначе выходило «WhatsApp · Meta (Facebook/Instagram)» —
-         * перечисление вместо названия сервиса, причём в порядке, который человеку ни о чём не
-         * говорит. */
-        const ipNames = [...new Set(g.parts.filter((p) => p.kind === 'prefixes').map((p) => p.name))]
-        const domNames = [...new Set(g.parts.filter((p) => p.kind === 'domains').map((p) => p.name))]
-        const names = !ipNames.length
-            ? domNames
-            : ipNames.length > 1 && domNames.length === 1
-              ? domNames
-              : ipNames
-        return {
-            ...g,
-            id: g.parts.map((p) => p.id).sort().join('+'),
-            name: [...new Set(names)].join(' · '),
-            description: cats.find((c) => c.id === g.parts[0].id)?.description_ru,
-            same_prefixes: twinsOf(g),
-            upstream: originOf(g, false),
-            maintained: originOf(g, true),
-            complement: complementOf(g),
-        }
-    })
-    /* Порядок как у издателя: сначала адресные категории, потом чисто доменные. Алфавит здесь
-     * хуже — издатель ставит вперёд то, что включают чаще. */
+    /* Место записи в каталоге. По умолчанию — порядок издателя: сначала адресные
+     * категории в порядке манифеста, потом доменные списки. Издатель может назвать соседа
+     * (`after`), и тогда список встаёт сразу за ним — половинкой шага, чтобы не спорить с
+     * тем, кто уже занимает следующее место. */
+    const posOf = new Map<string, number>()
+    cats.forEach((c, i) => posOf.set('c:' + c.id, i))
+    doms.forEach((d, i) => posOf.set('d:' + d.id, cats.length + i))
+    for (const d of doms) {
+        if (!d.after) continue
+        const anchor = posOf.get('c:' + d.after) ?? posOf.get('d:' + d.after)
+        if (anchor !== undefined) posOf.set('d:' + d.id, anchor + 0.5)
+    }
+    /* Группа встаёт по САМОЙ ранней своей части: сервис, у которого адреса стоят вторыми,
+     * а домены в хвосте, человек ищет там, где стоят адреса. */
+    const posOfGroup = (g: ServiceEntry) =>
+        Math.min(
+            ...g.parts.map(
+                (p) =>
+                    posOf.get((p.kind === 'domains' ? 'd:' : 'c:') + p.id) ??
+                    Number.MAX_SAFE_INTEGER,
+            ),
+        )
+
+    const services = [...groups.values()]
+        .sort((a, b) => posOfGroup(a) - posOfGroup(b))
+        .map((g) => {
+            /* Имя обычно берём у АДРЕСНЫХ частей: у издателя они названы полнее — «Google
+             * (Meet/Play/AI)» против «Google Play».
+             *
+             * Но когда адресных категорий несколько, а доменный список один, имя берём у него:
+             * именно он их и связал. Иначе выходило «WhatsApp · Meta (Facebook/Instagram)» —
+             * перечисление вместо названия сервиса, причём в порядке, который человеку ни о чём не
+             * говорит. */
+            const ipNames = [...new Set(g.parts.filter((p) => p.kind === 'prefixes').map((p) => p.name))]
+            const domNames = [...new Set(g.parts.filter((p) => p.kind === 'domains').map((p) => p.name))]
+            const names = !ipNames.length
+                ? domNames
+                : ipNames.length > 1 && domNames.length === 1
+                  ? domNames
+                  : ipNames
+            return {
+                ...g,
+                id: g.parts.map((p) => p.id).sort().join('+'),
+                name: [...new Set(names)].join(' · '),
+                description: cats.find((c) => c.id === g.parts[0].id)?.description_ru,
+                same_prefixes: twinsOf(g),
+                upstream: originOf(g, false),
+                maintained: originOf(g, true),
+                complement: complementOf(g),
+            }
+        })
+    /* Порядок как у издателя: он ставит вперёд то, что включают чаще, а алфавит перемешал бы
+     * это с инфраструктурой. Своё место записи получают выше, в posOf. */
     return { version: m.version, base_url: m.base_url, services }
 }
 
