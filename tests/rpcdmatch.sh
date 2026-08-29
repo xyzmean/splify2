@@ -1398,6 +1398,18 @@ out="$(printf '%s\n' 'splify2-backup 1' '[spec]' \
 check "lan_device с метасимволами отвергается (I-003)" "yes" \
       "$(printf '%s' "$out" | jget error | grep -q 'lan_device' && echo yes || echo no)"
 
+# Та же слабость через МНОЖЕСТВЕННУЮ форму (splify2#16). Проверка по одному ключу
+# `lan_device` мимо `lan_devices` — это дыра ровно того вида, ради которой её и писали:
+# поле в спеке новое, проверка старая, и недоверенный архив снова проезжает.
+out="$(printf '%s\n' 'splify2-backup 1' '[spec]' \
+  '{"schema":1,"lan_devices":["br-lan","tailscale0; reboot"],"outputs":{},"channels":[]}' | backup_put)"
+check "lan_devices с метасимволами отвергается (splify2#16)" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'lan_device' && echo yes || echo no)"
+
+out="$(printf '%s\n' 'splify2-backup 1' '[spec]' \
+  '{"schema":1,"lan_devices":["br-lan","tailscale0"],"outputs":{"direct":{"kind":"direct"}},"channels":[]}' | backup_put)"
+check "годный перечень устройств принимается" "true" "$(printf '%s' "$out" | jget ok)"
+
 # Имя выхода уезжает в командную строку этого же скрипта: `ubus call service signal
 # {"instance":"vless_$o"}` и ensure_vless_zone.
 out="$(printf '%s\n' 'splify2-backup 1' '[spec]' \

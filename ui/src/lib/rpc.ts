@@ -8,6 +8,7 @@
 import {
     normalizeSpec,
     toCatalog,
+    type ClientNet,
     type RawManifest,
     type Spec,
     type Status,
@@ -202,6 +203,11 @@ export const rpc = {
 
     /** Devices that could serve as an interface output — tunnels first. */
     devices: declare<{ devices: { name: string; up: boolean; kind: string }[] }>('devices'),
+
+    /** Обратный вопрос к `devices`: не куда выпустить трафик, а откуда приходят клиенты
+     *  (splify2#16). Подсети выведены из адресов устройств тем же правилом, каким их
+     *  выводит движок, — иначе экран показывал бы одну сеть, а маршрутизировалась другая. */
+    clientNets: declare<{ nets: ClientNet[] }>('client_nets'),
 
     /** Умеет ли установленный движок VLESS. Спрашивается у движка, а не выводится из
      *  имени пакета: пакет мог быть собран из исходников или переименован. Без этого

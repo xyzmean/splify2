@@ -8,6 +8,7 @@ import { pending } from '@/lib/pending'
 import { toCatalog, customServices, EMPTY_SPEC, type Channel, type OutputStatus, type ServiceEntry, type Spec } from '@/lib/model'
 import { type Live } from '@/lib/live'
 import { Hint } from '@/components/ui/hint'
+import ClientNetsCard from '@/components/ClientNetsCard'
 import RuleEditor, { pathFor, selectedIds } from '@/components/tabs/RuleEditor'
 
 /** Правила: единственное место, где что-то назначается.
@@ -333,6 +334,11 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
 
     return (
         <div className="space-y-3">
+            {/* Кого касаются правила — ПЕРЕД самими правилами, а не после: правило, заведённое
+                на сеть, из которой никто не приходит, выглядит настроенным и не работает
+                (splify2#16). Здесь, а не в «Системе»: это про маршрутизацию, а не про коробку. */}
+            <ClientNetsCard spec={spec} onChange={edit} />
+
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-muted-foreground">
                     Сверху вниз — побеждает{' '}
