@@ -138,9 +138,14 @@ class PendingStore {
         const names = new Set([...Object.keys(a.outputs || {}), ...Object.keys(s.outputs || {})])
         for (const name of names)
             if (JSON.stringify(a.outputs?.[name]) !== JSON.stringify(s.outputs?.[name])) n++
-        const len = Math.max(a.channels.length, s.channels.length)
+        /* Каналов может не быть вовсе: спека приезжает от бэкенда и из архива, а поле
+         * необязательное. Считать длину у отсутствующего массива значило бы уронить весь
+         * экран на разборе чужого файла. */
+        const ac = a.channels || []
+        const sc = s.channels || []
+        const len = Math.max(ac.length, sc.length)
         for (let i = 0; i < len; i++)
-            if (JSON.stringify(a.channels[i]) !== JSON.stringify(s.channels[i])) n++
+            if (JSON.stringify(ac[i]) !== JSON.stringify(sc[i])) n++
         return n
     }
 
