@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/preact'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import Overview from '@/components/sections/Overview'
+import Home from '@/components/sections/Home'
 import { rpc } from '@/lib/rpc'
 import { live } from './fixtures'
 
@@ -31,7 +31,7 @@ describe('первая отрисовка: прошлое как прошлое 
     })
 
     it('пока роутер не ответил — «Обновление…», а не «Загрузка…» и не прежний вердикт', () => {
-        render(<Overview live={live({ ...OK, stale: true })} onSection={() => {}} onRule={() => {}} />)
+        render(<Home live={live({ ...OK, stale: true })} onSection={() => {}} onAddRule={() => {}} />)
         expect(screen.getByRole('heading', { name: /Обновление/ })).toBeInTheDocument()
         expect(screen.queryByText(/Загрузка/)).toBeNull()
         // Прежний вердикт не выдаётся за сегодняшний: «работает» скажем, когда ответят.
@@ -39,31 +39,31 @@ describe('первая отрисовка: прошлое как прошлое 
     })
 
     it('числа из снимка при этом видны сразу — ради них страницу и открывают', () => {
-        render(<Overview live={live({ ...OK, stale: true })} onSection={() => {}} onRule={() => {}} />)
+        render(<Home live={live({ ...OK, stale: true })} onSection={() => {}} onAddRule={() => {}} />)
         expect(screen.getByText(/устройств в сети: 3/)).toBeInTheDocument()
     })
 
     it('пришёл ответ роутера — обычный вердикт', () => {
-        render(<Overview live={live({ ...OK, stale: false })} onSection={() => {}} onRule={() => {}} />)
+        render(<Home live={live({ ...OK, stale: false })} onSection={() => {}} onAddRule={() => {}} />)
         expect(screen.getByRole('heading', { name: /Маршрутизация работает/ })).toBeInTheDocument()
         expect(screen.queryByRole('heading', { name: /Обновление/ })).toBeNull()
     })
 
     it('снимка нет вовсе — «Загрузка…» остаётся: выдумывать состояние нечем', () => {
-        render(<Overview live={live({ stale: false })} onSection={() => {}} onRule={() => {}} />)
+        render(<Home live={live({ stale: false })} onSection={() => {}} onAddRule={() => {}} />)
         expect(screen.getByRole('heading', { name: /Загрузка/ })).toBeInTheDocument()
     })
 
     it('поломка из снимка видна сразу, а не через три секунды', async () => {
         render(
-            <Overview
+            <Home
                 live={live({
                     ...OK,
                     diag: { fail: 1, warn: 0, checks: [] },
                     stale: true,
                 })}
                 onSection={() => {}}
-                onRule={() => {}}
+                onAddRule={() => {}}
             />,
         )
         // Вердикт пока «Обновление…» — роутер не ответил, — но найденное в прошлый раз уже

@@ -114,6 +114,16 @@ const EXACT = new Map([
   ['visible', 'visibility'], ['invisible', 'visibility'], ['collapse', 'visibility'],
   ['isolate', 'isolation'], ['isolation-auto', 'isolation'],
   ['overflow-auto', 'overflow'], ['sr-only', 'sr'], ['not-sr-only', 'sr'],
+  // font-variant-numeric. У tailwind-merge это ШЕСТЬ разных групп, а не одна: цифры бывают
+  // одновременно табличными и перечёркнутыми, и `tabular-nums slashed-zero` — не спор, а два
+  // независимых свойства одного объявления. Свалив их в одну группу, мы бы дали последнему
+  // молча съесть первое.
+  ['normal-nums', 'fvn-normal'],
+  ['ordinal', 'fvn-ordinal'],
+  ['slashed-zero', 'fvn-slashed-zero'],
+  ['lining-nums', 'fvn-figure'], ['oldstyle-nums', 'fvn-figure'],
+  ['proportional-nums', 'fvn-spacing'], ['tabular-nums', 'fvn-spacing'],
+  ['diagonal-fractions', 'fvn-fraction'], ['stacked-fractions', 'fvn-fraction'],
 ])
 
 // Groups a later class also overrides. Mirrors tailwind-merge's
@@ -128,6 +138,9 @@ const ALSO_OVERRIDES = {
   inset: ['inset-x', 'inset-y', 'top', 'right', 'bottom', 'left'],
   'inset-x': ['right', 'left'], 'inset-y': ['top', 'bottom'],
   size: ['w', 'h'],
+  /* `normal-nums` — это `font-variant-numeric: normal`, то есть снятие ВСЕХ остальных
+   * начертаний цифр разом. Обратного нет: табличные цифры не отменяют «обычные». */
+  'fvn-normal': ['fvn-ordinal', 'fvn-slashed-zero', 'fvn-figure', 'fvn-spacing', 'fvn-fraction'],
   // Tailwind's font-size utilities also set a default line-height, so a later
   // `text-sm` genuinely replaces an earlier `leading-tight`.
   'font-size': ['leading'],

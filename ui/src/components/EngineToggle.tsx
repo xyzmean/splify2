@@ -91,7 +91,7 @@ export default function EngineToggle({
                     {onSection && (
                         <button
                             type="button"
-                            onClick={() => onSection('system')}
+                            onClick={() => onSection('settings')}
                             className="mt-1 text-[12px] text-primary underline decoration-dotted"
                         >
                             {/* Подпись считает engineAction, а не эта строка: то же действие

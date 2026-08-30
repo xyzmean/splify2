@@ -1,11 +1,9 @@
-import {
-    Gauge, Library, Route, Settings, Stethoscope, Waypoints,
-} from 'lucide-react'
+import { House, Route, Settings, ShieldCheck } from 'lucide-react'
 import EngineToggle from '@/components/EngineToggle'
 import { type Live } from '@/lib/live'
 import { type SectionId } from '@/lib/sections'
 
-/** Рельс разделов: шесть пунктов, у каждого своя роль, вложенных вкладок нет.
+/** Рельс разделов: четыре пункта, у каждого своя роль.
  *
  *  Заменил строку вкладок. Вкладок было четыре, и в одну из них («Логи steer») въехало всё,
  *  что не влезло в остальные: диагностика, счётчики, движок, самообновление и архив настроек.
@@ -25,13 +23,11 @@ import { type SectionId } from '@/lib/sections'
  *  В нижней панели их нет: там на пункт приходится 60 пикселей, и число в них читается как
  *  часть подписи. */
 
-const ITEMS: { id: SectionId; label: string; icon: typeof Gauge }[] = [
-    { id: 'overview', label: 'Обзор', icon: Gauge },
+const ITEMS: { id: SectionId; label: string; icon: typeof House }[] = [
+    { id: 'home', label: 'Главная', icon: House },
     { id: 'rules', label: 'Правила', icon: Route },
-    { id: 'outputs', label: 'Выходы', icon: Waypoints },
-    { id: 'catalog', label: 'Каталог', icon: Library },
-    { id: 'diag', label: 'Диагностика', icon: Stethoscope },
-    { id: 'system', label: 'Система', icon: Settings },
+    { id: 'vpn', label: 'VPN', icon: ShieldCheck },
+    { id: 'settings', label: 'Настройки', icon: Settings },
 ]
 
 export interface RailProps {
@@ -128,13 +124,9 @@ export default function Rail({ live, section, onSection, counts }: RailProps) {
                             ].join(' ')}
                         >
                             <Icon className="h-[19px] w-[19px] shrink-0" aria-hidden="true" />
-                            {/* Подпись не сокращается до иконки: шесть значков без слов — это
-                                шесть загадок, и «Каталог» от «Системы» по картинке не отличить.
-                                «Диагностика» в 60 пикселей не влезает целиком, поэтому у неё
-                                короткая форма — она же стоит и в заголовке раздела ниже. */}
-                            <span className="w-full truncate text-center">
-                                {id === 'diag' ? 'Диагн.' : label}
-                            </span>
+                            {/* Подпись не сокращается до иконки: значки без слов — это
+                                загадки, и «VPN» от «Настроек» по картинке не отличить. */}
+                            <span className="w-full truncate text-center">{label}</span>
                             {/* Находка помечается точкой, а не числом: числу здесь негде встать,
                                 а вопрос, на который отвечает пункт, — «есть ли о чём знать». */}
                             {c?.alarm && (

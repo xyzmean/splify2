@@ -165,13 +165,16 @@ describe('карточка бекапа', () => {
 // когда настройка ещё не работает и переносить её надо на новый роутер.
 //
 // До Andromeda 26.9 разделом была вкладка «Логи steer»: в неё въехало всё, что не влезло в
-// остальные три, — диагностика, счётчики, движок, самообновление и архив. Раздел «Система»
-// это разделение и закрепляет.
+// остальные три, — диагностика, счётчики, движок, самообновление и архив. Новое меню это
+// разделение закрепляет: архив лежит в «Настройках», в подпункте «Дополнительно».
 describe('где живёт карточка архива', () => {
-    it('в разделе «Система», рядом с движком и самообновлением', async () => {
-        const { default: System } = await import('@/components/sections/System')
+    it('в «Настройках», в подпункте «Дополнительно»', async () => {
+        const { default: Settings } = await import('@/components/sections/Settings')
         const { live } = await import('./fixtures')
-        render(<System live={live()} />)
+        const { rpc } = await import('@/lib/rpc')
+        vi.spyOn(rpc, 'localLists').mockResolvedValue({ files: {} })
+        render(<Settings live={live()} onUseInRule={() => {}} />)
+        screen.getByRole('button', { name: /Дополнительно/ }).click()
         expect(await screen.findByText('Бекап настроек')).toBeInTheDocument()
     })
 

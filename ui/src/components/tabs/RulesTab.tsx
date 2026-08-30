@@ -75,12 +75,19 @@ interface Props {
     /** Запись каталога, которую попросили «в правило» с другой вкладки. */
     wanted?: ServiceEntry | null
     onWantedUsed?: () => void
-    /** Уйти туда, где заводят outbound. Правилу некуда вести, пока его нет, и оставлять
-     *  человека с советом «заведите» без дороги туда — это тупик в один щелчок. */
+    /** «Добавить правило» нажали на главной. Кнопка обязана ЗАВЕСТИ правило, а не просто
+     *  открыть раздел: подпись обещает действие, и перевод в список без нового правила
+     *  читается как несработавшая кнопка. */
+    addNow?: boolean
+    onAddUsed?: () => void
+    /** Уйти туда, где собирают пул. Правилу некуда вести, пока пула нет, и оставлять
+     *  человека с советом «соберите» без дороги туда — это тупик в один щелчок. */
     onGoOutbounds?: () => void
 }
 
-export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: Props) {
+export default function RulesTab({
+    live, wanted, onWantedUsed, addNow, onAddUsed, onGoOutbounds,
+}: Props) {
     const [spec, setSpec] = useState<Spec | null>(null)
     const [catalogServices, setServices] = useState<ServiceEntry[]>([])
     const [local, setLocal] = useState<Record<string, { count: number; mtime: number }>>({})
@@ -111,7 +118,7 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
         onWantedUsed?.()
         const out = Object.keys(spec.outputs)[0]
         if (!out) {
-            notify('Сначала заведите outbound — правилу некуда вести', 'warning')
+            notify('Сначала соберите пул VPN — правилу некуда вести', 'warning')
             return
         }
         const used = new Set(spec.channels.map((c) => c.name))
@@ -135,6 +142,19 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [wanted, spec])
 
+    /** Просьба с главной: «Добавить правило» обязано ЗАВЕСТИ правило и открыть его.
+     *
+     *  Отдельным эффектом, а не вызовом из оболочки: заводить умеет только этот раздел — он
+     *  один знает, какие имена уже заняты и какой выход подставить, — а оболочка лишь
+     *  передаёт просьбу. Признак гасится сразу, иначе следующий заход в раздел заводил бы
+     *  ещё одно пустое правило. */
+    useEffect(() => {
+        if (!addNow || !spec) return
+        onAddUsed?.()
+        add()
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [addNow, spec])
+
     function move(i: number, delta: number) {
         if (!spec) return
         const j = i + delta
@@ -149,7 +169,7 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
         if (!spec) return
         const out = Object.keys(spec.outputs)[0]
         if (!out) {
-            notify('Сначала заведите outbound — правилу некуда вести', 'warning')
+            notify('Сначала соберите пул VPN — правилу некуда вести', 'warning')
             return
         }
         const used = new Set(spec.channels.map((c) => c.name))
@@ -372,19 +392,14 @@ export default function RulesTab({ live, wanted, onWantedUsed, onGoOutbounds }: 
             {spec.channels.length === 0 ? (
                 <div className="rounded-xl border border-border bg-card p-6 text-center text-sm text-muted-foreground shadow-card lg:rounded-2xl">
                     Правил нет — весь трафик идёт напрямую.
-                    <div className="mt-1 text-xs">
-                        Правило говорит движку: этот сервис или категорию — вот этим устройствам —
-                        через такой outbound.
-                    </div>
                     {Object.keys(outputs).length === 0 && (
                         <div className="mt-2 text-xs">
-                            Сначала нужен outbound — вести пока некуда.{' '}
                             <button
                                 type="button"
                                 onClick={onGoOutbounds}
                                 className="text-primary underline decoration-dotted"
                             >
-                                Завести outbound
+                                Собрать пул VPN
                             </button>
                         </div>
                     )}

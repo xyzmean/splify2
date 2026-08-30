@@ -175,8 +175,15 @@ export default function OutboundsTab({ live }: { live: Live }) {
                  * нет, мерить нечего, а шесть секунд таймаута он отнимет у остальных. */
                 if (live.status?.outputs?.[n]?.probe?.state === 'probing') continue
                 try {
-                    const r = await rpc.outboundProbe(n)
-                    setPings((p) => ({ ...p, [n]: { ms: r.ms, state: r.state } }))
+                    /* Тот же вызов, что и на главной: запрос через устройство выхода приносит
+                     * и адрес, и страну, и своё время ответа. Прежняя проверка отклика
+                     * поднимала соединение второй раз через движок и стоила на роутере
+                     * девятнадцати секунд на выход. */
+                    const r = await rpc.outboundGeo(n, true)
+                    setPings((p) => ({
+                        ...p,
+                        [n]: { ms: r.ms ?? -1, state: r.ms ? 'ok' : r.why || 'нет ответа' },
+                    }))
                 } catch (e) {
                     /* Отказ метода — не то же, что «узел не ответил», и путать их нельзя:
                      * первое чинится обновлением splify2, второе — сменой узла. */
@@ -212,14 +219,7 @@ export default function OutboundsTab({ live }: { live: Live }) {
                     пока строка не переносилась, кнопка справа сжимала текст до колонки в одно
                     слово шириной — на снимке телефона это была стена из переносов. */}
                 <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
-                    <p className="min-w-[14rem] flex-1 text-xs leading-relaxed text-muted-foreground">
-                        Куда правила могут вести. Несколько выходов работают одновременно — у
-                        каждого своя{' '}
-                        <Hint tip="Каждый выход получает метку и таблицу маршрутизации в ядре. Правило указывает на имя выхода, а не на устройство — смена туннеля правил не трогает.">
-                            метка
-                        </Hint>
-                        . Изменения сохраняются сами.
-                    </p>
+                    <div className="min-w-[14rem] flex-1" />
                     {names.length > 0 && (
                         <Button
                             variant="secondary"

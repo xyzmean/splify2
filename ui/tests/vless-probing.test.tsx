@@ -35,7 +35,8 @@ describe('подъём выхода vless виден словами (I-100)', ()
         vi.spyOn(rpc, 'devices').mockResolvedValue({ devices: [] })
         vi.spyOn(rpc, 'engine').mockResolvedValue({ present: true, vless: true })
         vi.spyOn(rpc, 'vlessNodes').mockRejectedValue(new Error('не спрашиваем'))
-        vi.spyOn(rpc, 'outboundProbe').mockResolvedValue({ output: 'vl', state: 'ok', ms: 42, how: '' } as never)
+        // Отклик приходит тем же вызовом, что и страна: запрос идёт через устройство выхода.
+        vi.spyOn(rpc, 'outboundGeo').mockResolvedValue({ output: 'vl', cc: 'NL', ip: '1.2.3.4', ms: 42 } as never)
     })
 
     it('идёт перебор — назван номер узла и сколько их всего', async () => {
@@ -48,7 +49,7 @@ describe('подъём выхода vless виден словами (I-100)', ()
         render(<OutboundsTab live={live({ status: status({ state: 'probing', node: 1, total: 26 }) })} />)
         await screen.findByText('проверяю узлы: 1 из 26')
         await waitFor(() => expect(rpc.engine).toHaveBeenCalled())
-        expect(rpc.outboundProbe).not.toHaveBeenCalled()
+        expect(rpc.outboundGeo).not.toHaveBeenCalled()
     })
 
     it('ни один узел не ответил — это отказ, а не «нет устройства»', async () => {
@@ -65,7 +66,7 @@ describe('подъём выхода vless виден словами (I-100)', ()
         // Движок старее интерфейса, состояние устарело, писавший процесс мёртв — всё это
         // «не знаем», и менять из-за этого приговор нельзя.
         render(<OutboundsTab live={live({ status: status(undefined) })} />)
-        await waitFor(() => expect(rpc.outboundProbe).toHaveBeenCalled())
+        await waitFor(() => expect(rpc.outboundGeo).toHaveBeenCalled())
         expect(await screen.findByText('42 мс')).toBeInTheDocument()
     })
 
@@ -76,7 +77,7 @@ describe('подъём выхода vless виден словами (I-100)', ()
             channels: [],
         }
         render(<OutboundsTab live={live({ status: up })} />)
-        await waitFor(() => expect(rpc.outboundProbe).toHaveBeenCalled())
+        await waitFor(() => expect(rpc.outboundGeo).toHaveBeenCalled())
         expect(screen.queryByText(/проверяю узлы/)).toBeNull()
     })
 })

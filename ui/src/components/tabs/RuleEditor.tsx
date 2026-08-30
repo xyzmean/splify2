@@ -387,19 +387,17 @@ export default function RuleEditor({
 
                     <section className="rounded-md border border-border p-3">
                         <h3 className="sp-label uppercase tracking-wide text-muted-foreground">
-                            Куда направить
+                            Куда — пул VPN
                         </h3>
                         <div className="mt-2 space-y-2">
                             {outNames.length === 0 && (
                                 <p className="text-xs text-warning-fg">
-                                    Outbound-ов нет — правилу некуда вести. Заведите его на вкладке
-                                    «Outbounds».
+                                    Пулов нет — правилу некуда вести. Пул собирается во вкладке «VPN».
                                 </p>
                             )}
                             {orphans.map((d) => (
                                 <p key={d.name} className="text-xs text-warning-fg">
-                                    Туннель {d.name} поднят, но выхода на него нет — завести на вкладке
-                                    «Outbounds». Правило ведёт в выход, а не в устройство напрямую.
+                                    Туннель {d.name} поднят, но ни в одном пуле не назван — во вкладке «VPN».
                                 </p>
                             ))}
                             {outNames.map((n) => {

@@ -46,7 +46,7 @@ function mount(s: ReturnType<typeof spec>) {
 async function openRule(n: number) {
     const edit = await screen.findAllByLabelText('Изменить правило')
     fireEvent.click(edit[n])
-    await screen.findByText('Куда направить')
+    await screen.findByText('Куда — пул VPN')
 }
 
 beforeEach(() => {
@@ -118,7 +118,7 @@ describe('шаблон «Исключение» (R-020)', () => {
 })
 
 describe('поднятый туннель без выхода (R-055)', () => {
-    it('называется в блоке «Куда направить», пока туннельный выход один', async () => {
+    it('называется в блоке «Куда — пул VPN», пока туннельный выход один', async () => {
         mount(spec({ awg: AWG }, [{ name: 'правило1', out: 'awg', match: {} }]))
         await openRule(0)
         expect(await screen.findByText(/Туннель warp0 поднят/)).toBeInTheDocument()

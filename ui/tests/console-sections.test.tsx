@@ -4,10 +4,13 @@ import Console from '@/components/Console'
 import { rpc } from '@/lib/rpc'
 import type { Status } from '@/lib/model'
 
-// Andromeda 26.9: вкладки заменены рельсом из шести разделов, у каждого своя роль, вложенных
-// вкладок нет. Проверяется не оформление, а разделение: раздел «Логи steer» был складом — в
-// него въехали диагностика, счётчики трафика, движок, самообновление и архив настроек, — и по
-// его названию нельзя было угадать содержимое. Здесь и стоит барьер на возврат к складу.
+// Andromeda: вкладки заменены рельсом из ЧЕТЫРЁХ разделов — главная, правила, VPN, настройки.
+// Проверяется не оформление, а разделение: раздел «Логи steer» был складом — в него въехали
+// диагностика, счётчики трафика, движок, самообновление и архив настроек, — и по его названию
+// нельзя было угадать содержимое. Здесь и стоит барьер на возврат к складу.
+//
+// Глубина внутри раздела — подпункты, а не пункты рельса: у VPN и настроек свои списки входов,
+// которые открываются на месте раздела.
 //
 // Второе требование дизайна — «один факт, одно место». Счётчики трафика есть на обзоре и
 // больше нигде; проверка на это тоже здесь, потому что доказать её можно только сравнением
@@ -49,11 +52,14 @@ describe('рельс разделов вместо вкладок (Andromeda 26.
         vi.spyOn(rpc, 'subInfo').mockResolvedValue({ kind: 'none', path: '', present: false } as never)
     })
 
-    it('в рельсе шесть разделов, и это они', async () => {
+    it('в рельсе четыре раздела, и это они', async () => {
         render(<Console />)
         await screen.findByRole('heading', { name: 'Маршрутизация работает' })
-        for (const name of ['Обзор', 'Правила', 'Выходы', 'Каталог', 'Диагностика', 'Система'])
+        for (const name of ['Главная', 'Правила', 'VPN', 'Настройки'])
             expect(nav(new RegExp(name))).toBeInTheDocument()
+        // Прежние пункты стали подпунктами и в рельсе их нет.
+        for (const gone of ['Каталог', 'Диагностика', 'Система'])
+            expect(screen.queryAllByRole('button', { name: new RegExp(`^\\s*${gone}`) })).toHaveLength(0)
     })
 
     it('находок нет — под вердиктом НЕ печатается одинокий нуль', async () => {
@@ -68,7 +74,7 @@ describe('рельс разделов вместо вкладок (Andromeda 26.
         expect(screen.queryByRole('button', { name: /проверок с/ })).toBeNull()
     })
 
-    it('открывается обзор: вердикт и счётчики устройств', async () => {
+    it('открывается главная: вердикт и счётчики устройств', async () => {
         render(<Console />)
         expect(await screen.findByRole('heading', { name: 'Маршрутизация работает' })).toBeInTheDocument()
         expect(screen.getByText(/устройств в сети: 9/)).toBeInTheDocument()
@@ -78,37 +84,44 @@ describe('рельс разделов вместо вкладок (Andromeda 26.
     it('находка названа счётчиком и ведёт в диагностику, а её текст — только там', async () => {
         render(<Console />)
         const strip = await screen.findByRole('button', { name: /проверок с предупреждением: 1/ })
-        // Текст находки на обзоре НЕ печатается: он принадлежит движку и живёт в диагностике.
+        // Текст находки на главной НЕ печатается: он принадлежит движку и живёт в диагностике.
         expect(screen.queryByText(/telegram\.lst старше суток/)).toBeNull()
         strip.click()
         expect(await screen.findByText(/список domains\/telegram\.lst старше суток/)).toBeInTheDocument()
     })
 
-    it('счётчики трафика есть на обзоре и НЕ повторяются в диагностике', async () => {
+    it('счётчики трафика есть на главной и НЕ повторяются в диагностике', async () => {
+        // Трафик теперь стоит СТРОКОЙ ПРАВИЛА, а не отдельной таблицей наборов: набор — это
+        // не правило, и таблица наборов рядом со списком правил была вторым списком того же.
         render(<Console />)
-        expect(await screen.findByText('Куда идёт трафик')).toBeInTheDocument()
-        nav(/Диагностика/).click()
+        expect(await screen.findByText(/1,0 КБ/)).toBeInTheDocument()
+        nav(/Настройки/).click()
+        // Раздел приезжает отдельным куском — ждём, пока появится список входов.
+        ;(await screen.findByRole('button', { name: /Диагностика/ })).click()
         await waitFor(() => expect(screen.queryByText('Логи steer')).toBeInTheDocument())
-        expect(screen.queryByText('Куда идёт трафик')).toBeNull()
+        expect(screen.queryByText(/1,0 КБ/)).toBeNull()
     })
 
-    it('движок, самообновление и архив — в «Системе», а не в диагностике', async () => {
+    it('архив — в «Дополнительно», а не в диагностике', async () => {
         render(<Console />)
         await screen.findByRole('heading', { name: 'Маршрутизация работает' })
-        nav(/Диагностика/).click()
+        nav(/Настройки/).click()
+        ;(await screen.findByRole('button', { name: /Диагностика/ })).click()
         await waitFor(() => expect(screen.queryByText('Логи steer')).toBeInTheDocument())
         expect(screen.queryByText('Бекап настроек')).toBeNull()
 
-        nav(/Система/).click()
+        // Кнопка «назад» внутри раздела — последняя: до неё в дереве стоят два пункта рельса.
+        screen.getAllByRole('button', { name: /Настройки/ }).at(-1)!.click()
+        ;(await screen.findByRole('button', { name: /Дополнительно/ })).click()
         expect(await screen.findByText('Бекап настроек')).toBeInTheDocument()
     })
 
     it('у каждого раздела заголовок ровно как пункт рельса', async () => {
         // Имя печатает оболочка, а не раздел: два места с одной строкой расходятся, и человек
-        // читает в рельсе одно, а над содержимым другое. У обзора заголовок — вердикт.
+        // читает в рельсе одно, а над содержимым другое. У главной заголовок — вердикт.
         render(<Console />)
         await screen.findByRole('heading', { name: 'Маршрутизация работает' })
-        for (const name of ['Правила', 'Выходы', 'Каталог', 'Диагностика', 'Система']) {
+        for (const name of ['Правила', 'VPN', 'Настройки']) {
             /* Без якоря `^`: у пункта рельса в доступном имени есть ещё счётчик, а у части
                сборок — ведущий пробел от декоративной иконки. Проверяется заголовок, не имя. */
             nav(new RegExp(name)).click()
@@ -121,7 +134,7 @@ describe('рельс разделов вместо вкладок (Andromeda 26.
         // Кнопка тоже в двух местах: подвал колонки и блок под содержимым для узкого экрана.
         await screen.findByRole('heading', { name: 'Маршрутизация работает' })
         expect(screen.getAllByRole('button', { name: /Остановить всё/ }).length).toBeGreaterThan(0)
-        nav(/Каталог/).click()
+        nav(/Настройки/).click()
         await waitFor(() =>
             expect(screen.getAllByRole('button', { name: /Остановить всё/ }).length).toBeGreaterThan(0),
         )

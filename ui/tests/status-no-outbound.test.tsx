@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/preact'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import Overview from '@/components/sections/Overview'
+import Home from '@/components/sections/Home'
 import { rpc } from '@/lib/rpc'
 import { live } from './fixtures'
 import type { Status } from '@/lib/model'
@@ -16,7 +16,7 @@ import type { Status } from '@/lib/model'
 // первого ответа движка обзор молчит.
 //
 // Место переехало вместе с дизайном Andromeda 26.9: обе строки жили в закреплённой колонке
-// состояния (StatusRail), которой больше нет, — теперь они на обзоре. Проверки те же, потому
+// состояния (StatusRail), которой больше нет, — теперь они на главной. Проверки те же, потому
 // что находка та же: состояние, у которого не было названия.
 //
 // R-030 (I-039, splify2#4 п.2): «Что за совет?» — счётчик «советов: N» был вопросом, а не
@@ -41,7 +41,7 @@ describe('«трафику некуда идти»: выходов нет или
 
     it('выходов нет вовсе — говорит, что трафику некуда идти', async () => {
         render(
-            <Overview
+            <Home
                 live={live({ build: BUILD, status: status({}), devs: devs('br-lan', 'wan') })}
                 onSection={() => {}}
             />,
@@ -52,7 +52,7 @@ describe('«трафику некуда идти»: выходов нет или
 
     it('единственный выход — direct: он трафик не уводит, значит выходов по-прежнему нет', async () => {
         render(
-            <Overview
+            <Home
                 live={live({
                     build: BUILD,
                     status: status({ home: { name: 'home', kind: 'direct' } }),
@@ -66,7 +66,7 @@ describe('«трафику некуда идти»: выходов нет или
 
     it('устройства выхода нет в системе — называет и выход, и устройство', async () => {
         render(
-            <Overview
+            <Home
                 live={live({
                     build: BUILD,
                     status: status({ vpn: { name: 'vpn', kind: 'interface', devices: ['awg0'] } }),
@@ -85,7 +85,7 @@ describe('«трафику некуда идти»: выходов нет или
 
     it('выходу не назначено устройство — тоже названо словами', async () => {
         render(
-            <Overview
+            <Home
                 live={live({
                     build: BUILD,
                     status: status({ vpn: { name: 'vpn', kind: 'interface' } }),
@@ -102,7 +102,7 @@ describe('«трафику некуда идти»: выходов нет или
             devices: [{ name: 'awg0', up: true, kind: 'wireguard' }],
         })
         render(
-            <Overview
+            <Home
                 live={live({
                     build: BUILD,
                     status: status({
@@ -122,7 +122,7 @@ describe('«трафику некуда идти»: выходов нет или
         // Полный список интерфейсов (live.devs) о нём знает — и это тот случай, когда
         // предупреждение соврало бы.
         render(
-            <Overview
+            <Home
                 live={live({
                     build: BUILD,
                     status: status({ vpn: { name: 'vpn', kind: 'interface', devices: ['br-vpn'] } }),
@@ -138,7 +138,7 @@ describe('«трафику некуда идти»: выходов нет или
     it('список устройств не получен — молчим, а не тревожим на исправном роутере', async () => {
         vi.spyOn(rpc, 'devices').mockRejectedValue(new Error('ubus is unavailable'))
         render(
-            <Overview
+            <Home
                 live={live({
                     build: BUILD,
                     status: status({ vpn: { name: 'vpn', kind: 'interface', devices: ['awg0'] } }),
@@ -152,13 +152,13 @@ describe('«трафику некуда идти»: выходов нет или
     })
 
     it('состояние ещё не пришло — пустой список выходов это «не знаем», а не «выходов нет»', () => {
-        render(<Overview live={live({ build: BUILD })} onSection={() => {}} />)
+        render(<Home live={live({ build: BUILD })} onSection={() => {}} />)
         expect(screen.queryByText(/Трафику некуда идти/)).toBeNull()
     })
 
     it('движок не отвечает — причина уже названа сверху, второй раз не пишем', () => {
         render(
-            <Overview
+            <Home
                 live={live({ build: BUILD, status: status({}), devs: devs('br-lan'), error: 'движок не ответил' })}
                 onSection={() => {}}
             />,
@@ -193,30 +193,30 @@ describe('совет виден содержанием и ведёт на диа
     }
 
     it('единственный совет показан текстом, а не числом', () => {
-        render(<Overview live={live({ ...OK, diag: DIAG(1) })} onSection={() => {}} />)
+        render(<Home live={live({ ...OK, diag: DIAG(1) })} onSection={() => {}} />)
         expect(screen.getByText(/клиент может обходить DNS роутера/)).toBeInTheDocument()
     })
 
     it('нажатие на строку совета уводит на диагностику', () => {
         const go = vi.fn()
-        render(<Overview live={live({ ...OK, diag: DIAG(1) })} onSection={go} />)
+        render(<Home live={live({ ...OK, diag: DIAG(1) })} onSection={go} />)
         screen.getByRole('button', { name: /клиент может обходить DNS роутера/ }).click()
         expect(go).toHaveBeenCalledTimes(1)
     })
 
     it('советов несколько — счётчик остаётся, но с первым советом рядом', () => {
-        render(<Overview live={live({ ...OK, diag: DIAG(3) })} onSection={() => {}} />)
+        render(<Home live={live({ ...OK, diag: DIAG(3) })} onSection={() => {}} />)
         const line = screen.getByRole('button', { name: /советов: 3/ })
         expect(line).toHaveTextContent(/клиент может обходить DNS роутера/)
     })
 
     it('вердикт и цвет от совета не меняются', () => {
-        render(<Overview live={live({ ...OK, diag: DIAG(2) })} onSection={() => {}} />)
+        render(<Home live={live({ ...OK, diag: DIAG(2) })} onSection={() => {}} />)
         expect(screen.getByRole('heading', { name: 'Маршрутизация работает' })).toBeInTheDocument()
     })
 
     it('советов нет — строки нет вовсе', () => {
-        render(<Overview live={live({ ...OK, diag: { warn: 0, fail: 0, checks: [] } })} onSection={() => {}} />)
+        render(<Home live={live({ ...OK, diag: { warn: 0, fail: 0, checks: [] } })} onSection={() => {}} />)
         expect(screen.queryByText(/совет/)).toBeNull()
     })
 })

@@ -42,7 +42,7 @@ describe('выходы свёрнуты в спойлеры (Andromeda 26.9)', (
         pending.applied = SPEC
         vi.spyOn(rpc, 'devices').mockResolvedValue({ devices: [{ name: 'wg0', up: true, kind: 'wireguard' }] })
         vi.spyOn(rpc, 'engine').mockResolvedValue({ present: true, vless: true })
-        vi.spyOn(rpc, 'outboundProbe').mockImplementation(
+        vi.spyOn(rpc, 'outboundGeo').mockImplementation(
             (async (n: string) => ({ output: n, state: 'ok', ms: n === 'vl' ? 71 : 12, how: '' })) as never,
         )
         vi.spyOn(rpc, 'vlessNodes').mockRejectedValue(new Error('не спрашиваем'))
@@ -58,7 +58,7 @@ describe('выходы свёрнуты в спойлеры (Andromeda 26.9)', (
         render(<OutboundsTab live={live({ status: STATUS })} />)
         await waitFor(() => expect(screen.getByText('71 мс')).toBeInTheDocument())
         expect(screen.getByText('12 мс')).toBeInTheDocument()
-        expect(rpc.outboundProbe).toHaveBeenCalledTimes(2)
+        expect(rpc.outboundGeo).toHaveBeenCalledTimes(2)
     })
 
     it('свёрнутый выход не разворачивает свою настройку', async () => {

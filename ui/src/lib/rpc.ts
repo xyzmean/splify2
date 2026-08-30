@@ -99,6 +99,25 @@ const listRemoveByName = declare<unknown>('list_remove', ['name', 'kind'])
 const backupGetRaw = declare<unknown>('backup_get', ['offset'])
 const backupPutRaw = declare<unknown>('backup_put', ['text', 'append', 'final'])
 
+/** Ответ или отказ по сроку — но не бесконечное ожидание.
+ *
+ *  У вызова ubus есть свой предел (L.env.rpctimeout, у нас 120 с), и это верный предел для
+ *  установки пакета. Но экран, который на время такого вызова написал «меряем…», обязан
+ *  когда-нибудь это слово убрать: замер отклика и вопрос к панели — не установка, и две
+ *  минуты вращающегося значка человек читает как «зависло навсегда» (поймано на роутере).
+ *
+ *  Отказ по сроку — это ответ «не дождались», а не ошибка вызова: сам вызов на роутере может
+ *  доработать, и его результат приедет в следующий раз. */
+export function deadline<T>(p: Promise<T>, ms: number, why = 'нет ответа'): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error(why)), ms)
+        p.then(
+            (v) => { clearTimeout(t); resolve(v) },
+            (e) => { clearTimeout(t); reject(e) },
+        )
+    })
+}
+
 export const rpc = {
     /** Live engine state: outputs with up/nat, per-channel counters, warnings. */
     status: declare<Status>('status'),
@@ -329,6 +348,35 @@ export const rpc = {
         quota?: SubQuota
     }>('sub_info'),
 
+    /** Все подписки роутера одним ответом.
+     *
+     *  Подписок бывает несколько: у человека две панели, и локации из обеих он складывает в
+     *  пулы. Списком, а не по одной: экран показывает их вместе, и десять вызовов ради десяти
+     *  строк — это десять запусков shell на роутере.
+     *
+     *  `used` — сколько выходов ссылается на файл этой подписки. По нему видно, чем она
+     *  занята, и почему удаление отказано. */
+    subList: declare<{
+        subs: {
+            name: string
+            title?: string
+            url?: string
+            kind?: 'url' | 'links' | 'none'
+            path: string
+            present: boolean
+            bytes?: number
+            mtime?: number
+            used?: number
+            quota?: SubQuota
+        }[]
+        hwid?: string
+    }>('sub_list'),
+
+    /** Удалить подписку: файл узлов, запомненный остаток и ключи. Отказ, пока на неё
+     *  ссылается выход: движок читает файл при подъёме, и снос под живым выходом оставил бы
+     *  правило вести в туннель без единого узла. */
+    subDel: declare<{ ok: boolean; error?: string; name?: string }>('sub_del', ['name']),
+
     /** Спросить у панели остаток трафика заново.
      *
      *  Отдельный метод, а не поле sub_info, по цене: sub_info спрашивают в общем опросе
@@ -353,8 +401,8 @@ export const rpc = {
         /** `warn` — сказанное панелью про устройство: она отвечает на запрос без HWID не
          *  отказом, а заглушкой из ссылок в никуда, и без этой строки отказ выглядел бы как
          *  «подписка скачалась, узлы не работают». */
-        { ok: boolean; error?: string; kind?: string; bytes?: number; warn?: string; hwid?: string }
-    >('sub_set', ['url']),
+        { ok: boolean; error?: string; kind?: string; name?: string; bytes?: number; warn?: string; hwid?: string }
+    >('sub_set', ['url', 'name', 'title']),
 
     /** Архив настроек: отдать его строкой, кусками по 16 КБ (R-005).
      *
@@ -472,6 +520,11 @@ export const rpc = {
         output: string
         ip?: string
         cc?: string
+        /** Время ответа ТОГО ЖЕ запроса, в миллисекундах. Отдельной проверки отклика для
+         *  этого не нужно: соединение через устройство выхода уже установлено, а вторая
+         *  проверка поднимает его заново через движок и стоит на роутере девятнадцать секунд
+         *  против полутора у этого вызова. Поля нет — не мерили. */
+        ms?: number
         at?: number
         cached?: boolean
         why?: string

@@ -1,4 +1,5 @@
 import type { Build } from '@/lib/live'
+import { type Status } from '@/lib/model'
 
 /** Что можно предложить сделать с движком — в одном месте на весь интерфейс.
  *
@@ -102,4 +103,19 @@ export function engineAction(build: Build | null, releases: Releases | null): En
         latest,
         outdated,
     }
+}
+
+/** Умеет ли установленный движок список локаций и смешанный пул (контракт steer T-015).
+ *
+ *  Спрашивается у СОСТОЯНИЯ, а не у версии: `steer status` печатает у выхода kind=vless поле
+ *  `nodes` всегда, в том числе пустым, а движок постарше не печатает его вовсе. Тот же приём,
+ *  которым интерфейс отличает движок с `lan_devices`.
+ *
+ *  Ни одного выхода kind=vless нет — ответить нечем, и тогда ответ «не умеет»: цена ошибки
+ *  несимметрична. Сказав «умеет» зря, мы дадим человеку собрать пул, который молча повезёт
+ *  трафик не туда; сказав «не умеет» зря, мы всего лишь не покажем выбор до первого
+ *  применённого выхода. */
+export function poolsSupported(status: Status | null): boolean {
+    const outs = Object.values(status?.outputs || {})
+    return outs.some((o) => o.kind === 'vless' && Array.isArray(o.nodes))
 }

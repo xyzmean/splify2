@@ -7,13 +7,13 @@ import { SECTION_TITLE, type SectionId } from '@/lib/sections'
 import Rail from '@/components/Rail'
 import FirstRun from '@/components/FirstRun'
 import ApplyPill from '@/components/ApplyPill'
-import Overview from '@/components/sections/Overview'
+import Home from '@/components/sections/Home'
 import EngineToggle from '@/components/EngineToggle'
 
 /** Пульт: рельс разделов слева, работа справа.
  *
  *  Прежде здесь была строка вкладок, и одна из четырёх («Логи steer») собрала всё, что не
- *  влезло в остальные. Дизайн Andromeda 26.9 заменил вкладки шестью разделами: обзор, правила,
+ *  влезло в остальные. Дизайн Andromeda 26.9 заменил вкладки разделами: главная, правила,
  *  выходы, каталог, диагностика, система. Вложенных вкладок нет — у каждого раздела одна роль.
  *
  *  Что ещё изменилось вместе с этим. Закреплённая колонка состояния (StatusRail) разобрана:
@@ -28,15 +28,13 @@ import EngineToggle from '@/components/EngineToggle'
  *  одна плавающая пилюля (ApplyPill) на весь экран. */
 
 const RulesTab = lazy(() => import('@/components/tabs/RulesTab'))
-const OutboundsTab = lazy(() => import('@/components/tabs/OutboundsTab'))
-const CatalogTab = lazy(() => import('@/components/tabs/CatalogTab'))
-const Diagnostics = lazy(() => import('@/components/sections/Diagnostics'))
-const System = lazy(() => import('@/components/sections/System'))
+const Vpn = lazy(() => import('@/components/sections/Vpn'))
+const Settings = lazy(() => import('@/components/sections/Settings'))
 
 const FALLBACK = <div className="p-5 text-sm text-muted-foreground">Загрузка…</div>
 
 export default function Console() {
-    const [section, setSection] = useState<SectionId>('overview')
+    const [section, setSection] = useState<SectionId>('home')
     const live = useLive()
     const { spec, savedFlash } = usePending()
     /** Сервис, который попросили «в правило». Живёт здесь, а не в каталоге, потому что переход
@@ -44,6 +42,17 @@ export default function Console() {
      *  раз и сбрасывается: иначе повторный заход снова открывал бы редактор, которого человек
      *  уже не просил. */
     const [wanted, setWanted] = useState<ServiceEntry | null>(null)
+    /** Просьба «Добавить правило» с главной. Живёт здесь по той же причине, что и `wanted`:
+     *  кнопка стоит в одном разделе, а заводит правило другой. Считывается разделом правил
+     *  один раз и сбрасывается — иначе следующий заход в правила снова заводил бы пустое. */
+    const [addRule, setAddRule] = useState(false)
+    /** Подпункт, с которого открыть раздел. Строка находки на главной ведёт в диагностику
+     *  внутри настроек, а не в перечень входов. */
+    const [sub, setSub] = useState<string | null>(null)
+    const go = (s: SectionId, at?: string) => {
+        setSection(s)
+        setSub(at ?? null)
+    }
 
     /* Спека нужна рельсу для счётчика правил, а он виден на всех разделах — значит загрузить её
      * обязана оболочка, а не раздел правил. Вызов идемпотентен: кто пришёл раньше, тот и
@@ -61,10 +70,10 @@ export default function Console() {
     const warnings = (live.diag?.fail ?? 0) + (live.diag?.warn ?? 0)
     const counts = {
         rules: spec ? { text: String(spec.channels.length) } : undefined,
-        outputs: live.status
+        vpn: live.status
             ? { text: String(Object.keys(live.status.outputs || {}).length) }
             : undefined,
-        diag: warnings > 0 ? { text: String(warnings), alarm: true } : undefined,
+        settings: warnings > 0 ? { text: String(warnings), alarm: true } : undefined,
     }
 
     return (
@@ -74,7 +83,7 @@ export default function Console() {
                 фона. `min-h-full` работает от родителя с известной высотой — им и является
                 .sp-root. */}
             <div className="flex min-h-full flex-col lg:flex-row">
-                <Rail live={live} section={section} onSection={setSection} counts={counts} />
+                <Rail live={live} section={section} onSection={(s) => go(s)} counts={counts} />
 
                 {/* Отступ снизу на узком экране — под нижнюю панель разделов: без него последняя
                     карточка уезжает под неё, и человек не видит, что страница кончилась. */}
@@ -102,31 +111,42 @@ export default function Console() {
                     {/* Имя раздела печатает ОБОЛОЧКА, а не сам раздел: оно обязано совпадать
                         с пунктом рельса дословно, а два места с одной строкой расходятся. У
                         обзора заголовок другой — им служит вердикт, и второго над ним не надо. */}
-                    {section !== 'overview' && (
+                    {section !== 'home' && (
                         <h1 className="sp-title mb-3">{SECTION_TITLE[section]}</h1>
                     )}
 
                     <Suspense fallback={FALLBACK}>
-                        {section === 'overview' && <Overview live={live} onSection={setSection} />}
+                        {section === 'home' && (
+                            <Home
+                                live={live}
+                                onSection={go}
+                                onAddRule={() => {
+                                    setAddRule(true)
+                                    setSection('rules')
+                                }}
+                            />
+                        )}
                         {section === 'rules' && (
                             <RulesTab
                                 live={live}
                                 wanted={wanted}
                                 onWantedUsed={() => setWanted(null)}
-                                onGoOutbounds={() => setSection('outputs')}
+                                addNow={addRule}
+                                onAddUsed={() => setAddRule(false)}
+                                onGoOutbounds={() => go('vpn')}
                             />
                         )}
-                        {section === 'outputs' && <OutboundsTab live={live} />}
-                        {section === 'catalog' && (
-                            <CatalogTab
+                        {section === 'vpn' && <Vpn live={live} />}
+                        {section === 'settings' && (
+                            <Settings
+                                live={live}
+                                initial={sub === 'diag' ? 'diag' : undefined}
                                 onUseInRule={(l) => {
                                     setWanted(l)
-                                    setSection('rules')
+                                    go('rules')
                                 }}
                             />
                         )}
-                        {section === 'diag' && <Diagnostics live={live} />}
-                        {section === 'system' && <System live={live} />}
                     </Suspense>
 
                     {/* «Остановить всё» на узком экране — здесь, а не в нижней панели: красной
