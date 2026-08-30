@@ -34,6 +34,91 @@ SUB="${SUB:-/etc/steer/sub.txt}"
 # обновление прошивки «с сохранением настроек» уносило бы остаток, и обзор показывал бы
 # «панель не сообщает остаток» на подписке, которая его сообщает.
 SUB_INFO="${SUB_INFO:-${SUB%.txt}.userinfo}"
+# Остальные подписки. Их может быть несколько: у человека бывает две панели, и локации из
+# обеих он складывает в один пул. Первая (та, что уже стоит на роутерах) осталась на прежнем
+# месте — /etc/steer/sub.txt, — потому что на этот путь ссылаются выходы в спеках, а сдвинуть
+# их значило бы сломать маршрутизацию ради переезда файла.
+SUBS_DIR="${SUBS_DIR:-/etc/steer/subs}"
+
+# Имя подписки в виде, годном и для имени файла, и для имени секции uci: латиница, цифры и
+# подчёркивание. Дефис уходит тоже — uci имён с ним не принимает.
+sub_slug() {
+    printf '%s' "${1:-}" | tr -c 'A-Za-z0-9_' '_' | cut -c1-24 | sed 's/_*$//'
+}
+
+# Переставить SUB и SUB_INFO на нужную подписку. После вызова ВСЕ существующие помощники
+# (download_sub, sub_userinfo_*, sub_usable) работают с ней и ни о чём не знают — в этом и
+# смысл: второй реализации скачивания и разбора заголовков не появляется.
+sub_use() {
+    SUB_NAME="$(sub_slug "${1:-main}")"
+    [ -n "$SUB_NAME" ] || SUB_NAME=main
+    if [ "$SUB_NAME" = main ]; then
+        SUB="${SUB_MAIN:-/etc/steer/sub.txt}"
+    else
+        SUB="$SUBS_DIR/$SUB_NAME.txt"
+    fi
+    SUB_INFO="${SUB%.txt}.userinfo"
+}
+SUB_MAIN="$SUB"
+SUB_NAME=main
+
+# Где в uci лежит ссылка подписки. У первой — там же, где лежала всегда: перенос ключа
+# означал бы, что после обновления пакета роутер забыл свою подписку.
+sub_uci_key() {  # NAME FIELD(url|kind|title)
+    if [ "$1" = main ]; then
+        case "$2" in
+            url)  printf 'splify2.main.sub_url' ;;
+            kind) printf 'splify2.main.sub_kind' ;;
+            *)    printf 'splify2.main.sub_title' ;;
+        esac
+    else
+        printf 'splify2.sub_%s.%s' "$1" "$2"
+    fi
+}
+
+sub_get() {  # NAME FIELD
+    uci -q get "$(sub_uci_key "$1" "$2")"
+}
+
+sub_put() {  # NAME FIELD VALUE
+    uci_file || return 1
+    if [ "$1" = main ]; then
+        uci -q get splify2.main >/dev/null 2>&1 || uci -q set splify2.main=splify2
+    else
+        uci -q get "splify2.sub_$1" >/dev/null 2>&1 || uci -q set "splify2.sub_$1=subscription"
+    fi
+    if [ -n "$3" ]; then uci -q set "$(sub_uci_key "$1" "$2")=$3"
+    else uci -q delete "$(sub_uci_key "$1" "$2")" 2>/dev/null
+    fi
+}
+
+# Вид источника: url — подписка, которую есть чем обновить, links — вставленные руками
+# ссылки, none — источника нет.
+sub_kind_of() {  # NAME
+    _k="$(sub_get "$1" kind)"
+    [ -n "$_k" ] || { [ -n "$(sub_get "$1" url)" ] && _k=url || _k=none; }
+    printf '%s' "$_k"
+}
+
+# Все подписки роутера: первая и заведённые после неё. Перечень собирается из uci, а файлы
+# лишь дополняют его — подписка, чей файл скачан, но ключ потерян, всё равно должна быть
+# видна, иначе её нельзя ни обновить, ни удалить.
+sub_names() {
+    { [ -s "${SUB_MAIN:-/etc/steer/sub.txt}" ] || [ -n "$(uci -q get splify2.main.sub_url)" ] && echo main
+      uci -q show splify2 2>/dev/null | sed -n "s/^splify2\.sub_\([A-Za-z0-9_]*\)=subscription$/\1/p"
+      [ -d "$SUBS_DIR" ] && for _f in "$SUBS_DIR"/*.txt; do
+          [ -e "$_f" ] || continue
+          _b="${_f##*/}"; printf '%s\n' "${_b%.txt}"
+      done
+    } 2>/dev/null | awk 'NF && !seen[$0]++'
+}
+
+# Занята ли подписка выходом. Удалять файл, на который ссылается выход, нельзя молча: движок
+# читает его при подъёме, и правило осталось бы вести в туннель без единого узла.
+sub_used_by() {  # PATH
+    [ -s "$SPEC" ] || return 0
+    jsonfilter -i "$SPEC" -e '@.outputs[*].sub_file' 2>/dev/null | grep -Fxc -- "$1" 2>/dev/null || echo 0
+}
 MANIFEST="${MANIFEST:-/etc/splify2/manifest.json}"
 # Где выходит трафик выхода: страна и адрес, как их видит внешняя сторона. Хранится по файлу
 # на выход и переживает перезагрузку страницы — интерфейс рисует запомненное сразу, не дожидаясь
@@ -625,14 +710,29 @@ geo_refresh() {  # ВЫХОД
     command -v curl >/dev/null 2>&1 || return 1
     _gr_url="$(uci -q get splify2.main.geo_url)"
     [ -n "$_gr_url" ] || _gr_url="$GEO_URL_DEFAULT"
+    # ОДИН запрос на всё: адрес, страна и время ответа. Времени здесь взяться неоткуда,
+    # кроме как отсюда, — и незачем: соединение через устройство выхода уже установлено,
+    # а отдельная проверка отклика (outbound_probe) поднимает его ВТОРОЙ раз и через
+    # движок. Замерено на роутере: такая проверка занимает девятнадцать секунд на выход,
+    # то есть на четырёх выходах экран больше минуты стоит с надписью «меряем…».
+    #
+    # `time_total` — это весь путь: установка соединения, TLS и ответ. Оно и есть та
+    # задержка, которую человек чувствует, открывая страницу через этот выход; ICMP до
+    # узла к ней ближе не становится, а через TUN он и не ходит.
     _gr_out="$(curl -4 -fsS --interface "$_gr_dev" --connect-timeout 4 --max-time 8 \
-        "$_gr_url" 2>/dev/null)"
+        -w '\nsplify_ms=%{time_total}\n' "$_gr_url" 2>/dev/null)"
     _gr_ip="$(printf '%s\n' "$_gr_out" | sed -n 's/^ip=\(.*\)$/\1/p' | head -1)"
     _gr_cc="$(printf '%s\n' "$_gr_out" | sed -n 's/^loc=\([A-Za-z][A-Za-z]\)$/\1/p' | head -1)"
+    # Секунды с дробью -> миллисекунды целым: считает awk, потому что shell дробей не знает.
+    _gr_ms="$(printf '%s\n' "$_gr_out" | sed -n 's/^splify_ms=\(.*\)$/\1/p' | head -1 |
+        awk '{ printf "%d", $1 * 1000 }' 2>/dev/null)"
+    case "${_gr_ms:-}" in ''|*[!0-9]*) _gr_ms=0 ;; esac
     [ -n "$_gr_ip" ] || return 1
     mkdir -p "$GEO_DIR" 2>/dev/null
-    printf '%s %s %s %s\n' "$(date +%s)" "${_gr_cc:--}" "$_gr_ip" "$(geo_ident "$1")" \
-        > "$GEO_DIR/geo-$1" 2>/dev/null
+    # Время ответа дописано ПЯТЫМ полем, а не вставлено в середину: строки, записанные
+    # прежней версией, читаются теми же четырьмя переменными, и пятая просто остаётся пустой.
+    printf '%s %s %s %s %s\n' "$(date +%s)" "${_gr_cc:--}" "$_gr_ip" "$(geo_ident "$1")" \
+        "$_gr_ms" > "$GEO_DIR/geo-$1" 2>/dev/null
 }
 
 # Достать JSON из вывода движка, к которому подмешаны его же человеческие строки.
@@ -1754,11 +1854,17 @@ list)
         json_add_string text; json_add_string url; json_add_boolean append
     json_close_object
     json_add_object engine; json_close_object
-    json_add_object sub_set; json_add_string url; json_close_object
-    json_add_object sub_info; json_close_object
-    # Без входа: ссылку метод берёт из uci — второй источник той же ссылки означал бы,
-    # что остаток можно спросить у панели, которой роутер не пользуется.
-    json_add_object sub_quota; json_close_object
+    # `name` — какая из подписок. Поля нет — первая (main), и это же значение приходит от
+    # интерфейсов, которые про несколько подписок ещё не знают.
+    json_add_object sub_set
+        json_add_string url; json_add_string name; json_add_string title
+    json_close_object
+    json_add_object sub_info; json_add_string name; json_close_object
+    json_add_object sub_list; json_close_object
+    json_add_object sub_del; json_add_string name; json_close_object
+    # Ссылку метод берёт из uci — второй источник той же ссылки означал бы, что остаток
+    # можно спросить у панели, которой роутер не пользуется.
+    json_add_object sub_quota; json_add_string name; json_close_object
     # Архив настроек. offset/append/final — куски: ubus не резиновый, и целиком архив в
     # одно сообщение не влезает (тот же довод, что у порций list_put).
     #
@@ -2606,7 +2712,10 @@ splify2: набор обфускаторов изменился — экземп
         read -r input
         json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
         json_get_var url url
+        json_get_var sub_name name
+        json_get_var sub_title title
         [ -n "$url" ] || fail "не указана ссылка"
+        sub_use "$sub_name"
         mkdir -p "$(dirname "$SUB")"
         case "$url" in
             https://*|http://*)
@@ -2648,13 +2757,14 @@ splify2: набор обфускаторов изменился — экземп
         # Для vless:// сохраняется ВИД, а не текст: показывать человеку обратно ссылку с
         # его же ключом незачем, а обновлять её нечем — обновляют подписку, не ссылку.
         uci_file || fail "не удалось создать $UCI_SPLIFY2 — кончилось место?"
-        uci -q get splify2.main >/dev/null 2>&1 || uci -q set splify2.main=splify2
-        [ "$kind" = url ] && uci -q set splify2.main.sub_url="$url" || uci -q delete splify2.main.sub_url
-        uci -q set splify2.main.sub_kind="$kind"
+        [ "$kind" = url ] && sub_put "$SUB_NAME" url "$url" || sub_put "$SUB_NAME" url ""
+        sub_put "$SUB_NAME" kind "$kind"
+        [ -n "$sub_title" ] && sub_put "$SUB_NAME" title "$sub_title"
         uci -q commit splify2
         json_init
         json_add_boolean ok 1
         json_add_string kind "$kind"
+        json_add_string name "$SUB_NAME"
         json_add_string path "$SUB"
         json_add_int bytes "$(wc -c 2>/dev/null < "$SUB" || echo 0)"
         # Сказанное панелью про устройство — в ответе, а не в журнале: человек нажал кнопку
@@ -2670,14 +2780,15 @@ splify2: набор обфускаторов изменился — экземп
         ;;
 
     sub_info)
+        read -r input 2>/dev/null || input=''
+        sub_use "$(jsonfilter -s "${input:-{\}}" -e '@.name' 2>/dev/null)"
         json_init
-        json_add_string url "$(uci -q get splify2.main.sub_url)"
+        json_add_string url "$(sub_get "$SUB_NAME" url)"
+        json_add_string name "$SUB_NAME"
         # Вид источника: url — подписка, которую можно обновить; links — вставленные
         # руками ссылки, обновлять которые нечем. Интерфейсу это нужно, чтобы не
         # предлагать «Обновить» там, где обновление ничего не значит.
-        kind="$(uci -q get splify2.main.sub_kind)"
-        [ -n "$kind" ] || { [ -n "$(uci -q get splify2.main.sub_url)" ] && kind=url || kind=none; }
-        json_add_string kind "$kind"
+        json_add_string kind "$(sub_kind_of "$SUB_NAME")"
         json_add_string path "$SUB"
         # Идентификатор устройства отдаётся ВСЕГДА, а не только после скачивания: человек
         # заводит роутер в панели заранее, и найти там свою коробку он может только по этой
@@ -2710,12 +2821,14 @@ splify2: набор обфускаторов изменился — экземп
         # Подписку метод НЕ подменяет — ни файл, ни узлы, ни выбранный узел. Поэтому его
         # можно звать при открытии обзора, ничем не рискуя: единственное следствие —
         # переписанный файл остатка.
-        url="$(uci -q get splify2.main.sub_url)"
-        kind="$(uci -q get splify2.main.sub_kind)"
-        [ -n "$kind" ] || { [ -n "$url" ] && kind=url || kind=none; }
+        read -r input 2>/dev/null || input=''
+        sub_use "$(jsonfilter -s "${input:-{\}}" -e '@.name' 2>/dev/null)"
+        url="$(sub_get "$SUB_NAME" url)"
+        kind="$(sub_kind_of "$SUB_NAME")"
         json_init
         json_add_boolean ok 1
         json_add_string kind "$kind"
+        json_add_string name "$SUB_NAME"
         if [ "$kind" != url ] || [ -z "$url" ]; then
             # Спрашивать некого: узлы вставлены ссылками vless:// (или их нет вовсе), а
             # ссылка не панель — заголовков у неё не бывает. Отказом это не считаем:
@@ -2731,6 +2844,72 @@ splify2: набор обфускаторов изменился — экземп
             json_add_string why "панель не сообщила остаток трафика"
         fi
         sub_userinfo_emit
+        json_dump
+        ;;
+
+    sub_list)
+        # Все подписки роутера одним ответом. Именно списком, а не по одной: экран VLESS
+        # показывает их вместе, и десять вызовов ради десяти строк — это десять запусков
+        # shell на роутере с 64 МБ.
+        #
+        # Остаток здесь приходит ЗАПОМНЕННЫЙ, как и в sub_info: наружу за ним ходит
+        # отдельный sub_quota, который зовут по нажатию.
+        json_init
+        json_add_array subs
+        for n in $(sub_names); do
+            sub_use "$n"
+            json_add_object ""
+            json_add_string name "$SUB_NAME"
+            json_add_string title "$(sub_get "$SUB_NAME" title)"
+            json_add_string url "$(sub_get "$SUB_NAME" url)"
+            json_add_string kind "$(sub_kind_of "$SUB_NAME")"
+            json_add_string path "$SUB"
+            if [ -s "$SUB" ]; then
+                json_add_boolean present 1
+                json_add_int bytes "$(wc -c 2>/dev/null < "$SUB" || echo 0)"
+                json_add_int mtime "$(date -r "$SUB" +%s 2>/dev/null || echo 0)"
+            else
+                json_add_boolean present 0
+            fi
+            # Сколько выходов на неё ссылается: по этому числу интерфейс говорит, чем
+            # занята подписка, и отказывается удалять занятую.
+            json_add_int used "$(sub_used_by "$SUB")"
+            sub_userinfo_emit
+            json_close_object
+        done
+        json_close_array
+        json_add_string hwid "$(hwid)"
+        json_dump
+        ;;
+
+    sub_del)
+        # Удалить подписку целиком: файл узлов, запомненный остаток и ключи uci.
+        #
+        # ЗАНЯТУЮ НЕ УДАЛЯЕМ. Выход читает файл узлов при подъёме, и снос файла под живым
+        # выходом — это правило, которое ведёт в туннель без единого узла: маршрутизация
+        # выглядит настроенной, а трафик не идёт никуда. Поэтому отказ со словами, чем она
+        # занята, а не молчаливое удаление.
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var sub_name name
+        [ -n "$sub_name" ] || fail "не указано имя подписки"
+        sub_use "$sub_name"
+        used="$(sub_used_by "$SUB")"
+        [ "${used:-0}" = 0 ] || fail "подписка занята выходами: $used"
+        rm -f "$SUB" "$SUB_INFO"
+        if [ "$SUB_NAME" = main ]; then
+            uci -q delete splify2.main.sub_url 2>/dev/null
+            uci -q delete splify2.main.sub_kind 2>/dev/null
+            uci -q delete splify2.main.sub_title 2>/dev/null
+        else
+            uci -q delete "splify2.sub_$SUB_NAME" 2>/dev/null
+        fi
+        uci -q commit splify2
+        # Узлы сменились для всех, кто их читал, — клиента надо перечитать.
+        dirty_mark "$VLESS_DIRTY" params
+        json_init
+        json_add_boolean ok 1
+        json_add_string name "$SUB_NAME"
         json_dump
         ;;
 
@@ -3172,9 +3351,9 @@ splify2: набор обфускаторов изменился — экземп
 
         _geo_f="$GEO_DIR/geo-$output"
         _geo_now="$(date +%s)"
-        _geo_ip=''; _geo_cc=''; _geo_at=0
+        _geo_ip=''; _geo_cc=''; _geo_at=0; _geo_ms=''
         if [ -s "$_geo_f" ]; then
-            read -r _geo_at _geo_cc _geo_ip _geo_id < "$_geo_f"
+            read -r _geo_at _geo_cc _geo_ip _geo_id _geo_ms < "$_geo_f"
             case "${_geo_at:-}" in ''|*[!0-9]*) _geo_at=0 ;; esac
             # Прочерк в файле означает «страну не назвали»: поле в строке обязано быть,
             # иначе следующее (адрес) прочиталось бы на его место.
@@ -3183,7 +3362,7 @@ splify2: набор обфускаторов изменился — экземп
             # Прежнее измерение не отдаём вовсе: «Эстония» рядом с только что выбранной
             # Польшей хуже пустоты, потому что выглядит как ответ.
             if [ -n "${_geo_id:-}" ] && [ "$_geo_id" != "$(geo_ident "$output")" ]; then
-                _geo_at=0; _geo_cc=''; _geo_ip=''
+                _geo_at=0; _geo_cc=''; _geo_ip=''; _geo_ms=''
             fi
         fi
         _geo_age=$(( _geo_now - _geo_at ))
@@ -3208,6 +3387,9 @@ splify2: набор обфускаторов изменился — экземп
             json_add_string output "$output"
             [ -n "$_geo_ip" ] && json_add_string ip "$_geo_ip"
             [ -n "$_geo_cc" ] && json_add_string cc "$_geo_cc"
+            # Время ответа того же запроса. Ноль означает «не мерили» — так читаются и
+            # строки, записанные прежней версией, где пятого поля не было вовсе.
+            [ "${_geo_ms:-0}" -gt 0 ] 2>/dev/null && json_add_int ms "$_geo_ms"
             [ "$_geo_at" -gt 0 ] && json_add_int at "$_geo_at"
             json_add_boolean cached 1
             json_dump
@@ -3217,11 +3399,12 @@ splify2: набор обфускаторов изменился — экземп
         json_init
         json_add_string output "$output"
         if geo_refresh "$output"; then
-            read -r _geo_at _geo_cc _geo_ip _geo_id < "$GEO_DIR/geo-$output"
+            read -r _geo_at _geo_cc _geo_ip _geo_id _geo_ms < "$GEO_DIR/geo-$output"
             [ "${_geo_cc:-}" = "-" ] && _geo_cc=''
             unset _geo_id
             json_add_string ip "$_geo_ip"
             [ -n "$_geo_cc" ] && json_add_string cc "$_geo_cc"
+            [ "${_geo_ms:-0}" -gt 0 ] 2>/dev/null && json_add_int ms "$_geo_ms"
             json_add_int at "$_geo_at"
             json_add_boolean cached 0
         else
@@ -3229,6 +3412,7 @@ splify2: набор обфускаторов изменился — экземп
             # прошлый раз» полезнее пустоты, а его возраст виден по полю at.
             [ -n "$_geo_ip" ] && json_add_string ip "$_geo_ip"
             [ -n "$_geo_cc" ] && json_add_string cc "$_geo_cc"
+            [ "${_geo_ms:-0}" -gt 0 ] 2>/dev/null && json_add_int ms "$_geo_ms"
             [ "$_geo_at" -gt 0 ] && json_add_int at "$_geo_at"
             json_add_string why "через выход не ответили — выход не поднят, нет curl или молчит адрес проверки"
         fi
