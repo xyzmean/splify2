@@ -455,15 +455,26 @@ printf '1\n'     > "$T/outnet/lan1/type";   printf 'up\n'   > "$T/outnet/lan1/op
 # не выдумка стенда, а то, из-за чего перечень обязан показывать ВЫВЕДЕННУЮ сеть.
 cat > "$T/bin/ip" <<'EOF'
 #!/bin/sh
+# Адреса: и по одному устройству, и ВСЕ РАЗОМ. Второе — то, как настоящий `ip` отвечает на
+# `ip -4 -o addr show` без имени; перечень сетей клиентов спрашивает именно так, одним
+# запуском вместо запуска на устройство.
+all() {
+    echo "3: br-lan    inet 192.168.1.1/24 brd 192.168.1.255 scope global br-lan"
+    echo "4: wan    inet 46.42.17.15/22 brd 46.42.19.255 scope global wan"
+    echo "9: tailscale0    inet 100.64.1.5/32 scope global tailscale0"
+    echo "8: ztrfyzwvfa    inet 10.147.17.20/24 brd 10.147.17.255 scope global ztrfyzwvfa"
+    echo "1: lo    inet 127.0.0.1/8 scope host lo"
+}
 dev=""
 for a in "$@"; do dev="$a"; done
 case "$1" in rule|route) exit 0 ;; esac
 case "$dev" in
-    br-lan)     echo "3: br-lan    inet 192.168.1.1/24 brd 192.168.1.255 scope global br-lan" ;;
-    wan)        echo "4: wan    inet 46.42.17.15/22 brd 46.42.19.255 scope global wan" ;;
-    tailscale0) echo "9: tailscale0    inet 100.64.1.5/32 scope global tailscale0" ;;
-    ztrfyzwvfa) echo "8: ztrfyzwvfa    inet 10.147.17.20/24 brd 10.147.17.255 scope global ztrfyzwvfa" ;;
-    lo)         echo "1: lo    inet 127.0.0.1/8 scope host lo" ;;
+    show)       all ;;
+    br-lan)     all | grep " br-lan " ;;
+    wan)        all | grep " wan " ;;
+    tailscale0) all | grep " tailscale0 " ;;
+    ztrfyzwvfa) all | grep " ztrfyzwvfa " ;;
+    lo)         all | grep " lo " ;;
 esac
 exit 0
 EOF

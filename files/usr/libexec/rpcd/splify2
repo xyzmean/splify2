@@ -2508,20 +2508,36 @@ splify2: набор обфускаторов изменился — экземп
         json_init
         json_add_array devices
         _dev_seen=" "
+        # Файлы /sys читаются ВСТРОЕННЫМ read, а имя берётся подстановкой параметра.
+        # Было четыре запуска процессов на устройство (basename и три cat, у одного из них
+        # ещё sed с head в конвейере), устройств на типовой коробке десять — сорок с лишним
+        # процессов на вызов. Замер на стенде 10.8.1.87: 287 мс, из которых сам ответ —
+        # единицы миллисекунд. Тот же приём и по той же причине уже применён к счётчикам
+        # устройств (см. fast.sh).
         for d in "$OUT_SYSNET"/*; do
-            n="$(basename "$d")"
             [ -d "$d" ] || continue
-            case "$(cat "$d/type" 2>/dev/null)" in
+            n="${d##*/}"
+            _t=''
+            read -r _t < "$d/type" 2>/dev/null || continue
+            case "$_t" in
                 65534|768) ;;
                 *) continue ;;
             esac
             # Физическое устройство туннелем не бывает: у него есть ссылка device.
             [ -e "$d/device" ] && continue
             _dev_seen="$_dev_seen$n "
+            _op=''
+            read -r _op < "$d/operstate" 2>/dev/null || _op=''
+            # DEVTYPE стоит в uevent отдельной строкой; строк там единицы, поэтому перебор
+            # встроенным read дешевле запуска sed.
+            _kind=''
+            while read -r _l; do
+                case "$_l" in DEVTYPE=*) _kind="${_l#DEVTYPE=}"; break ;; esac
+            done < "$d/uevent" 2>/dev/null
             json_add_object ""
             json_add_string name "$n"
-            json_add_boolean up "$([ "$(cat "$d/operstate" 2>/dev/null)" = down ] && echo 0 || echo 1)"
-            json_add_string kind "$(cat "$d/uevent" 2>/dev/null | sed -n 's/^DEVTYPE=//p' | head -1)"
+            json_add_boolean up "$([ "$_op" = down ] && echo 0 || echo 1)"
+            json_add_string kind "$_kind"
             json_close_object
         done
         # Устройства выходов, которые поднимает САМ ДВИЖОК (kind=vless, kind=xsteer).
@@ -2582,6 +2598,13 @@ splify2: набор обфускаторов изменился — экземп
         # же интерфейсе.
         _cn_wan="$(uci -q get network.wan.device 2>/dev/null)"
         [ -n "$_cn_wan" ] || _cn_wan="$(uci -q get network.wan.ifname 2>/dev/null)"
+        # Адреса ВСЕХ устройств одним запуском `ip`, а не по запуску на устройство.
+        # Строки вида «br-lan 192.168.1.1/24»; второе поле после `inet` — адрес с префиксом,
+        # хвост строки (brd, scope) отбрасывается. Было десять запусков на типовой коробке,
+        # и каждый на 880 МГц стоит около двадцати миллисекунд (замер на стенде: 283 мс на
+        # вызов при десяти мс на сам `ip`).
+        _cn_addrs="$(ip -4 -o addr show 2>/dev/null |
+                     awk '{ for (i = 1; i < NF; i++) if ($i == "inet") { print $2, $(i + 1); break } }')"
         json_init
         json_add_array nets
         for d in "$SYSNET"/*; do
@@ -2590,19 +2613,29 @@ splify2: набор обфускаторов изменился — экземп
             [ "$n" = lo ] && continue
             # Порт внутри моста: своя сеть у него не бывает, клиенты придут через мост.
             [ -e "$d/master" ] && continue
+            _op=''
+            read -r _op < "$d/operstate" 2>/dev/null || _op=''
             json_add_object ""
             json_add_string name "$n"
-            json_add_boolean up "$([ "$(cat "$d/operstate" 2>/dev/null)" = down ] && echo 0 || echo 1)"
+            json_add_boolean up "$([ "$_op" = down ] && echo 0 || echo 1)"
             json_add_boolean wan "$([ -n "$_cn_wan" ] && [ "$n" = "$_cn_wan" ] && echo 1 || echo 0)"
             json_add_array subnets
-            # Второе поле после `inet` — адрес с префиксом; хвост строки (brd, scope)
-            # отбрасывается. Устройство без адреса даёт пустой массив, а не пропуск: выбрать
-            # его законно, адрес появится вместе с поднятием.
-            for a in $(ip -4 -o addr show "$n" 2>/dev/null |
-                       awk '{ for (i = 1; i < NF; i++) if ($i == "inet") { print $(i + 1); break } }'); do
-                case "$a" in */*) ;; *) continue ;; esac
-                json_add_string "" "$(cidr_net "$a")"
+            # Устройство без адреса даёт пустой массив, а не пропуск: выбрать его законно,
+            # адрес появится вместе с поднятием.
+            _OIFS="$IFS"; IFS='
+'
+            for _row in $_cn_addrs; do
+                IFS="$_OIFS"
+                set -- $_row
+                if [ "${1:-}" = "$n" ]; then
+                    case "${2:-}" in
+                        */*) json_add_string "" "$(cidr_net "$2")" ;;
+                    esac
+                fi
+                IFS='
+'
             done
+            IFS="$_OIFS"
             json_close_array
             json_close_object
         done
