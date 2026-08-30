@@ -145,11 +145,13 @@ cp -r luci/htdocs/luci-static/resources/view "$PKG/www/luci-static/resources/"
 cp -r luci/root/usr/share "$PKG/usr/"
 cp files/usr/libexec/rpcd/splify2 "$PKG/usr/libexec/rpcd/splify2"
 cp files/usr/sbin/splify2-update-lists "$PKG/usr/sbin/splify2-update-lists"
-# Скачивание общее для обеих половин: rpcd-объект и обновление списков подключают этот
-# файл. Забыть его — значит выкатить пакет, где ни одна из половин не запускается вовсе
-# (`. /usr/lib/splify2/fetch.sh` в шапке), поэтому ниже стоит барьер.
+# Общие куски обеих половин: скачивание (fetch.sh) и быстрый путь опроса (fast.sh). Каждый
+# подключается строкой `. /usr/lib/splify2/…`, и забыть любой — значит выкатить пакет, где
+# соответствующая половина не запускается вовсе. Копируется КАТАЛОГ ЦЕЛИКОМ, а не файлы по
+# именам: список тут уже вырос с одного до двух, и следующий забыли бы ровно так же. Барьер
+# ниже сверяет пакет с тем, что скрипты на самом деле подключают.
 mkdir -p "$PKG/usr/lib/splify2"
-cp files/usr/lib/splify2/fetch.sh "$PKG/usr/lib/splify2/fetch.sh"
+cp files/usr/lib/splify2/*.sh "$PKG/usr/lib/splify2/"
 # Домены GitHub для фикса Zapret Manager. Едут В ПАКЕТЕ, а не скачиваются: список нужен ровно
 # тогда, когда до GitHub не дойти, и качать его оттуда же было бы замкнутым кругом.
 mkdir -p "$PKG/etc/steer/lists"
@@ -159,7 +161,7 @@ mkdir -p "$PKG/etc/uci-defaults"
 cp files/etc/uci-defaults/99-splify2 "$PKG/etc/uci-defaults/99-splify2"
 chmod 0755 "$PKG/etc/uci-defaults/99-splify2"
 chmod 0755 "$PKG/usr/libexec/rpcd/splify2" "$PKG/usr/sbin/splify2-update-lists"
-chmod 0644 "$PKG/usr/lib/splify2/fetch.sh"
+chmod 0644 "$PKG"/usr/lib/splify2/*.sh
 
 # Протокол xsteer: обработчик netifd и страница LuCI.
 #
@@ -258,11 +260,20 @@ chmod +x build/scripts/post-install
 # варианта: install.sh при установке одной строкой и карточка в самом интерфейсе, если
 # движка нет. Отсутствие движка интерфейс переживает и говорит об этом прямо — это
 # предусмотренное состояние, а не поломка.
-# Барьер: обе половины начинаются со строки `. /usr/lib/splify2/fetch.sh`, и пакет без
-# этого файла не запускает НИ ОДНУ из них — ни ubus-объект, ни ночное обновление. Отказ
-# при этом выглядит как «раздел splify2 пропал из LuCI», то есть виной кажется интерфейс.
-test -s "$PKG/usr/lib/splify2/fetch.sh" || {
-    echo "в пакете нет usr/lib/splify2/fetch.sh — rpcd-объект не запустится"; exit 1; }
+# Барьер: всё, что половины подключают строкой `. /usr/lib/splify2/…`, обязано лежать в
+# пакете. Пакет без такого файла не запускает подключающую половину вовсе — ни ubus-объект,
+# ни ночное обновление, — а выглядит это как «раздел splify2 пропал из LuCI», то есть виной
+# кажется интерфейс.
+#
+# Проверяются ИМЕНА ИЗ САМИХ СКРИПТОВ, а не список здесь: пока барьер знал одно имя
+# (fetch.sh), про второй такой файл он промолчал бы, а второй появился (fast.sh, быстрый путь
+# опроса). Теперь добавить подключение и забыть укладку нельзя.
+for _need in $(grep -ho '/usr/lib/splify2/[a-z0-9_-]*\.sh' \
+                    files/usr/libexec/rpcd/splify2 files/usr/sbin/splify2-update-lists |
+               sort -u); do
+    test -s "$PKG$_need" || {
+        echo "в пакете нет ${_need#/} — подключающая его половина не запустится"; exit 1; }
+done
 # Без списка фикс Zapret Manager молча превращается в ничто: канал не заводится, домены
 # GitHub идут напрямую, и человек упирается ровно в то, ради чего фикс и сделан.
 test -s "$PKG/etc/steer/lists/zm-github.lst" || {

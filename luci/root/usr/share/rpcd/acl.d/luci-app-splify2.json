@@ -22,6 +22,7 @@
           "backup_get",
           "vless_nodes",
           "vless_probe",
+          "live",
           "dev_stats",
           "diag",
           "engine_state",

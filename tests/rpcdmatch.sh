@@ -324,6 +324,13 @@ case "${1:-}" in
 esac
 # status: собирается из спеки, чтобы у выходов была метка. Без неё фикс Zapret Manager
 # нечем проверить — он берёт метку именно оттуда, а не выдумывает.
+# Проверки состояния: заглушка отвечает так же, как движок, — документом с приговорами.
+# Нужна для круга опроса: он спрашивает их по просьбе, и «пришло/не пришло» без ответа
+# заглушки не отличить от «движок старый».
+if [ "$1" = diag ]; then
+    printf '{"schema":1,"checks":[{"id":"table","verdict":"ok","what":"таблица на месте","why":""}],"warn":0,"fail":0}\n'
+    exit 0
+fi
 if [ "$1" = status ]; then
     spec=""
     while [ $# -gt 0 ]; do case "$1" in --spec) spec="$2"; shift 2 ;; *) shift ;; esac; done
@@ -424,6 +431,18 @@ printf 'down\n' > "$T/sysnet/br-guest/operstate"  # гостевой мост п
 # Туннельные устройства — отдельной фикстурой (шов OUT_SYSNET): метод `devices` отвечает на
 # другой вопрос, чем client_nets, и отбирает по /sys/class/net/*/type. 65534 — ARPHRD_NONE
 # (wireguard, tun), у моста и порта тип другой, и в перечень они попасть не должны.
+# Счётчики устройств — своя фикстура (шов SYSNET_STATS): их читают и метод dev_stats, и круг
+# опроса `live`, и до сих пор они брались из настоящего /sys, то есть стендом не проверялись
+# вовсе.
+mkdir -p "$T/statnet/wg0/statistics" "$T/statnet/br-lan/statistics" "$T/statnet/lo/statistics"
+for d in wg0 br-lan lo; do
+    printf '11\n' > "$T/statnet/$d/statistics/rx_bytes"
+    printf '22\n' > "$T/statnet/$d/statistics/tx_bytes"
+    printf '3\n'  > "$T/statnet/$d/statistics/rx_packets"
+    printf '4\n'  > "$T/statnet/$d/statistics/tx_packets"
+done
+printf '223000000\n' > "$T/statnet/wg0/statistics/rx_bytes"
+
 mkdir -p "$T/outnet/wg0" "$T/outnet/br-lan" "$T/outnet/lan1"
 printf '65534\n' > "$T/outnet/wg0/type";    printf 'up\n'   > "$T/outnet/wg0/operstate"
 printf 'DEVTYPE=wireguard\n' > "$T/outnet/wg0/uevent"
@@ -467,6 +486,8 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         SANDBOX="$T" \
         PATH="$T/bin:$PATH" \
         JSHN_SH="$ROOT/tests/stub/jshn.sh" FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
+        FAST_SH="$ROOT/files/usr/lib/splify2/fast.sh" \
+        SYSNET_STATS="${SYSNET_STATS_FIXTURE:-$T/statnet}" \
         STEER="$T/bin/steer" \
         SPEC="$T/etc/spec.json" \
         LISTS="$T/lists" \
@@ -1897,6 +1918,71 @@ cat > "$T/etc/spec.json" <<'EOF'
 EOF
 check "устройство, которое уже есть, не задваивается" "wg0" "$(devs "$(rpcd devices)")"
 printf '{"schema":1,"outputs":{},"channels":[]}\n' > "$T/etc/spec.json"
+
+# ---- перечень своих списков: три процесса на каталог, а не два на файл ---------------
+# Метод был самым дорогим у объекта: `grep -c .` и `date -r` в подстановке на КАЖДЫЙ файл, а
+# файлов на роутере со всем каталогом 46 — 92 запуска процессов, 1197 мс на вызов (замер на
+# стенде 10.8.1.87). Платил это человек каждый раз, открывая «Настройки» или каталог.
+#
+# Здесь проверяется не скорость, а то, что от неё не пострадал ответ: ключ остаётся ПУТЁМ
+# относительно каталога списков (по имени файла адресный список от доменного не отличить),
+# счёт остаётся счётом НЕПУСТЫХ строк, а время файла не потерялось.
+#
+# mktime() есть у busybox awk и у gawk, но НЕ у mawk: на машине с ним время придёт нулём, и
+# проверка ниже об этом честно скажет, вместо того чтобы промолчать.
+mkdir -p "$T/lists/domains" "$T/lists/custom"
+printf '1.2.3.0/24\n\n5.6.7.0/24\n8.9.0.0/16\n' > "$T/lists/three.lst"
+printf 'example.com\n' > "$T/lists/domains/one.lst"
+out="$(rpcd local_lists)"
+cnt() { printf '%s' "$1" | python3 -c 'import json,sys
+print(json.load(sys.stdin)["files"].get(sys.argv[1], {}).get("count", "НЕТ"))' "$2"; }
+check "счёт по непустым строкам, а не по всем" "3" "$(cnt "$out" three.lst)"
+check "доменный список отличим от адресного путём" "1" "$(cnt "$out" domains/one.lst)"
+check "время файла не потерялось" "yes" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys
+print("yes" if json.load(sys.stdin)["files"]["three.lst"]["mtime"] > 1000000000 else "no")')"
+rm -f "$T/lists/three.lst" "$T/lists/domains/one.lst"
+
+# ---- круг опроса одним вызовом ------------------------------------------------------
+# Пять вызовов на круг стоили роутеру 1220 мс, из них 630 — пятикратный разбор одного и того
+# же 250-килобайтного скрипта (замер на стенде 10.8.1.87, mipsel 24kc). Метод отдаёт то же
+# самое одним запуском. Проверяется здесь СОСТАВ ответа: раскладку полей читает интерфейс, и
+# разъехавшись, она молча оставит экран без чисел.
+cat > "$T/etc/spec.json" <<'EOF'
+{ "schema": 1, "outputs": { "vpn": { "kind": "interface", "device": "wg0" } }, "channels": [] }
+EOF
+out="$(rpcd live)"
+check "круг: состояние движка отдано дословно" "interface" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys
+print(json.load(sys.stdin)["status"]["outputs"]["vpn"]["kind"])' 2>/dev/null)"
+check "круг: счётчики устройств на месте" "223000000" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys
+print(json.load(sys.stdin)["devices"]["wg0"]["rx"])' 2>/dev/null)"
+check "круг: lo не считается устройством" "no" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys
+print("yes" if "lo" in json.load(sys.stdin)["devices"] else "no")' 2>/dev/null)"
+check "круг: сведения о сети на месте" "yes" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys
+d=json.load(sys.stdin)["net"]; print("yes" if "uptime" in d and "active_clients" in d else "no")' 2>/dev/null)"
+# Проверки движка — ТОЛЬКО по просьбе: они вдвое дороже состояния, а меняются реже. Молча
+# считать их каждый круг значило бы вернуть половину сэкономленного.
+check "круг: без просьбы проверок нет" "no" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys
+print("yes" if "diag" in json.load(sys.stdin) else "no")' 2>/dev/null)"
+out2="$(rpcd live '{"diag":true}')"
+check "круг: по просьбе проверки приходят дословно" "таблица на месте" \
+      "$(printf '%s' "$out2" | python3 -c 'import json,sys
+print(json.load(sys.stdin)["diag"]["checks"][0]["what"])' 2>/dev/null)"
+# Движок не ответил — честная ошибка, а не пустой объект: интерфейс покажет пустоту как
+# «всё в порядке», и это худшая из возможных неправд.
+# Спека, которую движок не разбирает: `steer status` не печатает ничего, и это ошибка, а не
+# пустота. Пустой объект интерфейс покажет как «всё в порядке» — худшая из возможных неправд.
+printf 'не json\n' > "$T/etc/spec.json"
+check "круг: молчание движка — это ошибка, а не пустота" "false" \
+      "$(rpcd live | jget ok)"
+printf '{"schema":1,"outputs":{},"channels":[]}\n' > "$T/etc/spec.json"
+
+check "метод объявлен в списке ubus" "yes" "$(rpcd_list | grep -q '"live"' && echo yes || echo no)"
 
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo "ЕСТЬ ПРОВАЛЫ: $fails")"
 [ "$fails" -eq 0 ]
