@@ -115,9 +115,18 @@ sub_names() {
 
 # Занята ли подписка выходом. Удалять файл, на который ссылается выход, нельзя молча: движок
 # читает его при подъёме, и правило осталось бы вести в туннель без единого узла.
-sub_used_by() {  # PATH
-    [ -s "$SPEC" ] || return 0
-    jsonfilter -i "$SPEC" -e '@.outputs[*].sub_file' 2>/dev/null | grep -Fxc -- "$1" 2>/dev/null || echo 0
+sub_used_by() {  # PATH -> ЧИСЛО
+    # Одно число и всегда. Прежняя запись (`grep -c ... || echo 0`) печатала ДВА нуля:
+    # grep без совпадений и печатает 0, и выходит с ненулевым кодом, то есть срабатывала и
+    # ветка `||`. Дальше это уезжало в json_add_int и роняло весь ответ — метод отдавал
+    # пустоту, а интерфейс показывал «подписок нет».
+    _u=0
+    if [ -s "$SPEC" ]; then
+        _u="$(jsonfilter -i "$SPEC" -e '@.outputs[*].sub_file' 2>/dev/null |
+              grep -Fx -c -- "$1" 2>/dev/null)"
+    fi
+    case "${_u:-}" in ''|*[!0-9]*) _u=0 ;; esac
+    printf '%s' "$_u"
 }
 MANIFEST="${MANIFEST:-/etc/splify2/manifest.json}"
 # Где выходит трафик выхода: страна и адрес, как их видит внешняя сторона. Хранится по файлу
@@ -437,6 +446,57 @@ sub_ui_field() {  # СТРОКА ПОЛЕ
 # расхода, который набирается сутками. Замерено на живом роутере: панель отвечала на HEAD
 # отказом, проба снимала файл, загрузка вслед записывала его заново — и «в среднем в сутки»
 # начинало считаться с нуля при каждом открытии обзора.
+# base64 -> текст СРЕДСТВАМИ AWK, и это не причуда.
+#
+# На роутере нет ни `base64`, ни `openssl`: проверено на 10.8.1.87 (OpenWrt 25.12) — обе
+# команды отсутствуют, busybox собран без них. Ставить пакет ради одной строки заголовка
+# нельзя: пакет надо где-то взять, а мы работаем как раз у тех, у кого с этим сложности.
+# Движок свой base64 разбирает в C и наружу его не отдаёт.
+b64_decode() {  # STDIN -> STDOUT
+    awk 'BEGIN {
+        b = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        for (i = 0; i < 64; i++) v[substr(b, i + 1, 1)] = i
+    }
+    { s = s $0 }
+    END {
+        gsub(/[^A-Za-z0-9+\/=]/, "", s)
+        n = 0; x = 0
+        for (i = 1; i <= length(s); i++) {
+            c = substr(s, i, 1)
+            if (c == "=") break
+            x = x * 64 + v[c]; n++
+            if (n == 4) { printf "%c%c%c", int(x / 65536) % 256, int(x / 256) % 256, x % 256; n = 0; x = 0 }
+        }
+        if (n == 3) { x = x * 64; printf "%c%c", int(x / 65536) % 256, int(x / 256) % 256 }
+        else if (n == 2) { x = x * 4096; printf "%c", int(x / 65536) % 256 }
+    }'
+}
+
+# Название подписки, как его назвала САМА панель.
+#
+# Панели отдают его заголовком `profile-title` — обычно в base64 с приставкой `base64:`
+# (так делают Marzban, Remnawave, 3x-ui), реже открытым текстом. Есть и запасной путь:
+# `content-disposition: attachment; filename="Riot VPN"`. Это то же имя, что человек видит в
+# своём клиенте, и брать его оттуда честнее, чем просить придумать своё: две подписки от
+# одного продавца иначе называются «sub2» и «sub3».
+#
+# Пусто — панель промолчала, и тогда имя останется тем, что дал человек.
+sub_title_from_headers() {
+    [ -n "$SUB_HDRS" ] || return 1
+    _t="$(printf '%s\n' "$SUB_HDRS" |
+        sed -n 's/^[Pp][Rr][Oo][Ff][Ii][Ll][Ee]-[Tt][Ii][Tt][Ll][Ee]:[[:space:]]*//p' | tail -1)"
+    if [ -z "$_t" ]; then
+        _t="$(printf '%s\n' "$SUB_HDRS" |
+            sed -n 's/.*[Ff][Ii][Ll][Ee][Nn][Aa][Mm][Ee]=\"*\([^\";]*\).*/\1/p' | tail -1)"
+    fi
+    [ -n "$_t" ] || return 1
+    case "$_t" in
+        base64:*) _t="$(printf '%s' "${_t#base64:}" | b64_decode 2>/dev/null)" ;;
+    esac
+    # Управляющие символы и кавычки вон: строка уедет в uci и в JSON.
+    printf '%s' "$_t" | tr -d '\r\n\t"\\' | cut -c1-48
+}
+
 sub_userinfo_save() {  # [keep]
     [ -n "$SUB_HDRS" ] || return 1
     _ui="$(printf '%s\n' "$SUB_HDRS" |
@@ -2759,12 +2819,16 @@ splify2: набор обфускаторов изменился — экземп
         uci_file || fail "не удалось создать $UCI_SPLIFY2 — кончилось место?"
         [ "$kind" = url ] && sub_put "$SUB_NAME" url "$url" || sub_put "$SUB_NAME" url ""
         sub_put "$SUB_NAME" kind "$kind"
+        # Название: что дал человек, иначе то, что назвала панель. Своё имя переписывать
+        # ответом панели нельзя — человек его для того и вписал.
+        [ -n "$sub_title" ] || sub_title="$(sub_title_from_headers 2>/dev/null)"
         [ -n "$sub_title" ] && sub_put "$SUB_NAME" title "$sub_title"
         uci -q commit splify2
         json_init
         json_add_boolean ok 1
         json_add_string kind "$kind"
         json_add_string name "$SUB_NAME"
+        json_add_string title "${sub_title:-}"
         json_add_string path "$SUB"
         json_add_int bytes "$(wc -c 2>/dev/null < "$SUB" || echo 0)"
         # Сказанное панелью про устройство — в ответе, а не в журнале: человек нажал кнопку
@@ -2780,7 +2844,13 @@ splify2: набор обфускаторов изменился — экземп
         ;;
 
     sub_info)
-        read -r input 2>/dev/null || input=''
+        # `|| input=''` ЗДЕСЬ БЫЛО ОШИБКОЙ. ubus отдаёт JSON без завершающего перевода
+        # строки, и `read` в этом случае возвращает ненулевой код, УЖЕ ЗАПОЛНИВ переменную.
+        # Ветка `||` затирала прочитанное: имя подписки не доезжало, метод отвечал по
+        # первой, и на экране у второй подписки стояли чужие числа. Остальные методы
+        # читают вход простым `read -r input` — по той же причине.
+        input=''
+        read -r input 2>/dev/null || true
         sub_use "$(jsonfilter -s "${input:-{\}}" -e '@.name' 2>/dev/null)"
         json_init
         json_add_string url "$(sub_get "$SUB_NAME" url)"
@@ -2821,7 +2891,13 @@ splify2: набор обфускаторов изменился — экземп
         # Подписку метод НЕ подменяет — ни файл, ни узлы, ни выбранный узел. Поэтому его
         # можно звать при открытии обзора, ничем не рискуя: единственное следствие —
         # переписанный файл остатка.
-        read -r input 2>/dev/null || input=''
+        # `|| input=''` ЗДЕСЬ БЫЛО ОШИБКОЙ. ubus отдаёт JSON без завершающего перевода
+        # строки, и `read` в этом случае возвращает ненулевой код, УЖЕ ЗАПОЛНИВ переменную.
+        # Ветка `||` затирала прочитанное: имя подписки не доезжало, метод отвечал по
+        # первой, и на экране у второй подписки стояли чужие числа. Остальные методы
+        # читают вход простым `read -r input` — по той же причине.
+        input=''
+        read -r input 2>/dev/null || true
         sub_use "$(jsonfilter -s "${input:-{\}}" -e '@.name' 2>/dev/null)"
         url="$(sub_get "$SUB_NAME" url)"
         kind="$(sub_kind_of "$SUB_NAME")"

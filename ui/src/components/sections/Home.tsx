@@ -3,7 +3,8 @@ import { ArrowRight, LoaderCircle, Plus, Search, TriangleAlert } from 'lucide-re
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { SubBlock, TunnelBlock, type Facts } from '@/components/OutputCards'
-import { deadline, rpc } from '@/lib/rpc'
+import { deadline, rpc, type SubQuota } from '@/lib/rpc'
+import { subsRemember, subsRemembered } from '@/lib/subs'
 import { human, type DiagCheck, type Live } from '@/lib/live'
 import { usePending } from '@/lib/pending'
 import { ON_FAIL_TEXT, type Channel, type ChannelStatus, type OutputStatus } from '@/lib/model'
@@ -528,14 +529,45 @@ function OutputsColumn({
     busy: boolean
     onRefresh: () => void
 }) {
+    /* Какой выход к какой подписке относится — знает СПЕКА, а не состояние: `steer status`
+     * поля `sub_file` не печатает вовсе. Пока группировка шла по состоянию, ни одна локация
+     * не попадала ни в один блок — на экране оставался голый остаток. */
+    const { spec } = usePending()
     const outputs = Object.entries(live.status?.outputs || {})
     const vless = outputs.filter(([, o]) => o.kind === 'vless')
     const tunnels = outputs.filter(([, o]) => o.kind === 'interface')
 
+    /** Подписки роутера. Их бывает несколько, и блок полагается КАЖДОЙ: остаток, срок и
+     *  локации у них свои, а один блок на все смешал бы числа двух панелей.
+     *
+     *  null — бэкенд постарше, который про перечень не знает: тогда подписка одна и блок
+     *  один, как было. */
+    /* Начинается перечень С ЗАПОМНЕННОГО. Вызов `sub_list` уходит после того, как загрузятся
+     * LuCI, загрузчик и бандл, и до его ответа блоков подписок нет вовсе — а появившись, они
+     * разъезжают всё, что под ними, тем заметнее, чем подписок больше. Запомнены только
+     * имена и пути; числа каждая подписка помнит сама (см. lib/subs.ts). */
+    const [subs, setSubs] = useState<
+        { name: string; title?: string; kind?: string; path: string; quota?: SubQuota }[] | null
+    >(() => subsRemembered())
+    useEffect(() => {
+        let stop = false
+        rpc.subList()
+            .then((r) => {
+                if (stop) return
+                setSubs(r.subs || [])
+                subsRemember(r.subs)
+            })
+            /* Бэкенд постарше перечня не знает — подписка одна, и блок ей рисуется прежним
+             * способом. Запомненное при этом снимается: иначе страница рисовала бы блоки
+             * подписок, о которых этот роутер рассказать уже не может. */
+            .catch(() => { if (!stop) { setSubs(null); subsRemember([]) } })
+        return () => { stop = true }
+    }, [])
+
     /* Ни подписки, ни туннеля — столбца нет вовсе. Пустой столбец с заголовком «Выходы»
      * занимал бы место ради строки «ничего нет», а про отсутствие выходов уже сказано над
      * столбцами, и сказано с последствием («трафику некуда идти»). */
-    if (vless.length === 0 && tunnels.length === 0) return null
+    if (vless.length === 0 && tunnels.length === 0 && !subs?.length) return null
 
     return (
         <div className="space-y-3">
@@ -554,11 +586,21 @@ function OutputsColumn({
                 </button>
             </div>
 
-            {vless.length > 0 && (
-                <SubBlock
-                    outs={vless.map(([name, st]) => ({ name, st, facts: facts[name] }))}
-                />
-            )}
+            {/* По блоку на КАЖДУЮ ПОДПИСКУ: остаток и сроки у них свои, и один блок на две
+                панели смешал бы их числа. Локации — строками внутри своей подписки. */}
+            {subs === null
+                ? vless.length > 0 && (
+                      <SubBlock outs={vless.map(([name, st]) => ({ name, st, facts: facts[name] }))} />
+                  )
+                : subs.map((s) => (
+                      <SubBlock
+                          key={s.name}
+                          sub={s}
+                          outs={vless
+                              .filter(([n, o]) => (spec?.outputs?.[n]?.sub_file || o.sub_file || '') === s.path)
+                              .map(([name, st]) => ({ name, st, facts: facts[name] }))}
+                      />
+                  ))}
             {tunnels.map(([name, st]) => (
                 <TunnelBlock key={name} name={name} st={st} facts={facts[name]} />
             ))}

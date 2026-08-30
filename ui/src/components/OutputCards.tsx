@@ -52,59 +52,71 @@ function Ping({ p }: { p?: { ms: number; state: string } }) {
     )
 }
 
-/** Блок подписки: остаток по счёту панели и КАЖДАЯ активная локация отдельной строкой.
+/** Блок подписки: сколько трафика осталось по счёту панели.
  *
- *  Локаций несколько, потому что выходов из одной подписки бывает несколько — пул собирается
- *  во вкладке VPN, и правило ведёт в пул, а не в узел. Одна строка на выход отвечает на
- *  вопрос «где я сейчас» для каждого из них; свести их в одну значило бы назвать одну страну
- *  там, где их две.
+ *  ТОЛЬКО ОСТАТОК. Локации у подписки свои блоки (LocationBlock), по блоку на каждую: у
+ *  локации своё состояние, свой отклик и свой адрес, и сложенные в блок подписки три локации
+ *  читаются как одно целое, которым они не являются.
  *
  *  Остаток спрашивается у панели ПРИ КАЖДОМ открытии: запомненное рисуется сразу, свежее
  *  приезжает следом. Порог в четверть часа экономил обращение наружу ценой того, ради чего
  *  страницу и открывают. */
-export function SubBlock({ outs }: { outs: OutRef[] }) {
-    const seen = useRef<Snapshot>(cacheGet<Snapshot>('card') || {})
-    const remember = useCallback((p: Snapshot) => {
-        seen.current = { ...seen.current, ...p }
-        cacheSet('card', seen.current)
-    }, [])
+export function SubBlock({ outs = [], sub }: {
+    /** Локации этой подписки: строкой на каждую — флаг со страной, отклик и адрес под глазом.
+     *  Строкой, а не своим блоком: «сколько осталось» и «откуда я выхожу» — один вопрос про
+     *  одну подписку, и разносить их по экрану значит заставлять сводить их глазами. */
+    outs?: OutRef[]
+    /** Какая это подписка. Нет — единственная, та, что лежит на своём месте: так отвечает
+     *  бэкенд постарше, который про несколько подписок не знает. */
+    sub?: { name: string; title?: string; kind?: string; quota?: SubQuota }
+}) {
+    /** Ключ памяти У КАЖДОЙ ПОДПИСКИ СВОЙ.
+     *
+     *  Общий ключ означал две беды разом: во втором блоке рисовались числа первой (лимит
+     *  соседки на безлимитной подписке), а свои числа второй не запоминались вовсе — на
+     *  каждом открытии он стоял пустым, пока не ответит панель. Имя подписки в ключе
+     *  разводит их окончательно; «card» без имени остаётся у единственной подписки, чтобы
+     *  запомненное прежними версиями не пропало. */
+    const cacheKey = sub ? `card:${sub.name}` : 'card'
+    const seen = useRef<Snapshot>(cacheGet<Snapshot>(cacheKey) || {})
+    const remember = useCallback(
+        (p: Snapshot) => {
+            seen.current = { ...seen.current, ...p }
+            cacheSet(cacheKey, seen.current)
+        },
+        [cacheKey],
+    )
 
-    const [kind, setKind] = useState<'url' | 'links' | 'none' | null>(seen.current.kind ?? null)
-    const [quota, setQuota] = useState<SubQuota | undefined>(seen.current.quota)
+    /* Запомненный снимок — ТОЛЬКО у единственной подписки. Он один на страницу, и подставить
+     * его во второй блок значило бы показать там числа первой: ровно это и было видно на
+     * роутере — безлимитная подписка отрисовалась с чужим лимитом 800 ГБ. У названной
+     * подписки числа приходят перечнем (sub_list) и спрашиваются по её имени. */
+    const [kind, setKind] = useState<'url' | 'links' | 'none' | null>(
+        (sub?.kind as 'url' | 'links' | 'none') ?? seen.current.kind ?? null,
+    )
+    /** Числа прошлого открытия — свои у этой подписки: они рисуются сразу, до ответа
+     *  роутера, а свежие приезжают следом. */
+    const [quota, setQuota] = useState<SubQuota | undefined>(sub?.quota ?? seen.current.quota)
     /** null — ещё не знаем; строка — панель молчит, и вот почему. */
     const [why, setWhy] = useState<string | null>(null)
     const [busy, setBusy] = useState(false)
-    /** Имя узла подписки по имени выхода — ЗАПАСНАЯ подпись локации: пока измерение не
-     *  пришло, подпись продавца лучше пустоты. */
-    const [nodes, setNodes] = useState<Record<string, string>>(seen.current.node ?? {})
+    /** Опрос панели делается ОДИН раз за жизнь блока: без этого признака он повторялся бы на
+     *  каждом приходе ответа, потому что ответ меняет состояние. */
     const asked = useRef(false)
     const alive = useRef(true)
-    useEffect(() => () => { alive.current = false }, [])
-
-    const key = outs.map((o) => `${o.name}:${o.st?.up ? 1 : 0}`).join(',')
+    /* Признак ставится ЗАНОВО при каждом заходе эффекта, а не только снимается при уходе.
+     * В StrictMode React вызывает эффект дважды — монтирование, уборка, монтирование, — и
+     * снятый один раз признак больше никогда не поднимался: ответ панели приходил в блок,
+     * который считал себя мёртвым, и «спрашиваем…» висело вечно. */
     useEffect(() => {
-        let stop = false
-        for (const o of outs)
-            rpc.vlessNodes(o.name)
-                .then((r) => {
-                    if (stop) return
-                    const n = (r.nodes || []).find((x) => x.index === r.node)
-                    if (!n?.name) return
-                    setNodes((s) => {
-                        const next = { ...s, [o.name]: n.name }
-                        remember({ node: next })
-                        return next
-                    })
-                })
-                .catch(() => {})
-        return () => { stop = true }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [key, remember])
+        alive.current = true
+        return () => { alive.current = false }
+    }, [])
 
     const refresh = useCallback(async () => {
         setBusy(true)
         try {
-            const r = await deadline(rpc.subQuota(), 30000, 'панель не ответила')
+            const r = await deadline(rpc.subQuota(sub?.name), 30000, 'панель не ответила')
             if (!alive.current) return
             setQuota(r.quota)
             setWhy(r.quota ? null : r.why || 'панель не сообщила остаток')
@@ -121,6 +133,14 @@ export function SubBlock({ outs }: { outs: OutRef[] }) {
     }, [remember])
 
     useEffect(() => {
+        /* Про НАЗВАННУЮ подписку всё уже сказано перечнем (sub_list): второй вопрос о том же
+         * означал бы два ответа об одной подписке в одном экране. */
+        if (sub) {
+            setKind((sub.kind as 'url' | 'links' | 'none') ?? 'none')
+            if (sub.quota) { setQuota(sub.quota); remember({ quota: sub.quota, kind: sub.kind as never }) }
+            else setWhy('')
+            return
+        }
         let stop = false
         rpc.subInfo()
             .then((r) => {
@@ -132,7 +152,7 @@ export function SubBlock({ outs }: { outs: OutRef[] }) {
             })
             .catch(() => { if (!stop) setKind('none') })
         return () => { stop = true }
-    }, [remember])
+    }, [remember, sub])
 
     /* Отдельным заходом в очередь: LuCI складывает вызовы одного такта в ОДИН запрос к ubus
      * и выполняет их подряд, поэтому поход к панели через интернет задержал бы всю страницу.
@@ -151,7 +171,7 @@ export function SubBlock({ outs }: { outs: OutRef[] }) {
             {/* Строка переносится: «обновлено 12 мин назад» плюс кнопка не влезают рядом с
                 заголовком в 390 пикселях, и кнопка уезжала за край карточки. */}
             <CardHeader className="flex-row flex-wrap items-baseline justify-between gap-x-2 gap-y-1 space-y-0">
-                <CardTitle>Подписка</CardTitle>
+                <CardTitle>{sub?.title || (sub && sub.name !== 'main' ? sub.name : 'Подписка')}</CardTitle>
                 <div className="flex items-baseline gap-2 text-xs text-muted-foreground">
                     {v?.age && <span>обновлено {v.age}</span>}
                     {/* Кнопка есть и когда числа свежие: «обновлено 3 мин назад» — это повод
@@ -262,25 +282,41 @@ export function SubBlock({ outs }: { outs: OutRef[] }) {
                     </>
                 ) : null}
 
-                {/* Локации — ниже остатка и всегда: «сколько осталось» и «откуда я выхожу» это
-                    один вопрос про одну подписку, и разносить их по экрану значит заставлять
-                    сводить их глазами. */}
+
+                {/* Локации — ниже остатка и всегда. */}
                 <ul className={`space-y-2.5 ${v || kind === 'url' ? 'mt-3 border-t border-border pt-3' : ''}`}>
                     {outs.map((o) => (
                         <li key={o.name}>
-                            <Where
-                                name={o.name}
-                                st={o.st}
-                                facts={o.facts}
-                                fallback={nodes[o.name] || null}
-                                showIp
-                            />
+                            <Location name={o.name} st={o.st} facts={o.facts} />
                         </li>
                     ))}
                 </ul>
             </CardContent>
         </Card>
     )
+}
+
+/** Строка локации внутри блока подписки: имя выхода, страна с флагом, отклик и адрес.
+ *
+ *  СВОИМ БЛОКОМ, а не строкой внутри подписки. Локация — это то, чем человек выходит в
+ *  интернет прямо сейчас: у неё своё состояние (поднята ли), свой отклик и свой адрес, и
+ *  сложенные в один блок три локации читаются как одно целое, которым они не являются. */
+function Location({ name, st, facts }: OutRef) {
+    /** Имя узла, выбранного движком, — ЗАПАСНАЯ подпись локации: пока измерение не пришло
+     *  (или устарело), из него берётся хотя бы страна, которую назвал продавец. */
+    const [node, setNode] = useState<string | null>(null)
+    useEffect(() => {
+        let stop = false
+        rpc.vlessNodes(name)
+            .then((r) => {
+                const n = (r.nodes || []).find((x) => x.index === r.node)
+                if (!stop && n?.name) setNode(n.name)
+            })
+            .catch(() => {})
+        return () => { stop = true }
+    }, [name, st?.device])
+
+    return <Where name={name} st={st} facts={facts} fallback={node} showIp />
 }
 
 /** Блок своего туннеля: WireGuard, AmneziaWG, xsteer.
@@ -338,13 +374,7 @@ function Where({
                 <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
                     <Flag cc={cc} />
                     <span className="min-w-0 truncate text-[13px] font-medium">{place}</span>
-                    {/* Имя ВЫХОДА, а не узла: две локации одной подписки меряются в одну и ту
-                        же страну, и без него строки неразличимы. Подпись продавца сюда не идёт
-                        — она спорит с измерением: узел зовётся «🇩🇪 Германия №2», а трафик
-                        выходит в Нидерландах, и на экране оказались бы две страны разом. */}
-                    {showIp && place !== name && (
-                        <span className="shrink-0 text-[11px] text-muted-foreground">{name}</span>
-                    )}
+
                 </span>
                 <Ping p={facts?.ping} />
             </div>

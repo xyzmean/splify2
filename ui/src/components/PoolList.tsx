@@ -1,14 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { ArrowRight, Globe, Plus, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle } from '@/components/ui/card'
-import Flag from '@/components/Flag'
+import HubRow from '@/components/HubRow'
 import PoolEditor from '@/components/PoolEditor'
-import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
 import { pending } from '@/lib/pending'
 import { country } from '@/lib/geo'
-import { EMPTY_SPEC, ON_FAIL_TEXT, type Output, type Spec } from '@/lib/model'
+import { EMPTY_SPEC, type Output, type Spec } from '@/lib/model'
 import { type Live } from '@/lib/live'
 
 /** Выходы: во что правила ведут трафик.
@@ -54,18 +53,6 @@ export default function PoolList({ live }: { live: Live }) {
         pending.edit(next)
     }
 
-    function remove(name: string) {
-        if (!spec) return
-        const used = spec.channels.filter((c) => c.out === name).map((c) => c.name)
-        if (used.length) {
-            notify(`Выход «${name}» занят правилами: ${used.join(', ')}`, 'warning')
-            return
-        }
-        const outputs = { ...spec.outputs }
-        delete outputs[name]
-        edit({ ...spec, outputs })
-    }
-
     if (!spec) return <div className="p-5 text-sm text-muted-foreground">Загрузка…</div>
 
     if (editing !== null) {
@@ -100,79 +87,39 @@ export default function PoolList({ live }: { live: Live }) {
                     </CardHeader>
                 </Card>
             ) : (
-                <ul className="divide-y divide-border rounded-xl border border-border bg-card shadow-card lg:rounded-2xl">
+                <div className="space-y-2.5">
                     {rows.map(([name, o]) => {
                         const st = live.status?.outputs?.[name]
                         const g = geo[name]
                         const devs = devList(o)
-                        const active = st?.device || devs[0]
-                        const spare = devs.filter((d) => d !== active)
                         const rules = spec.channels.filter((c) => c.out === name).length
+                        /* Строка отвечает на «куда ведёт и работает ли»: где выходит сейчас,
+                         * из чего собран, сколько правил на нём висит. */
+                        const state =
+                            o.kind === 'direct'
+                                ? 'напрямую, мимо туннеля'
+                                : [
+                                      country(g?.cc),
+                                      o.kind === 'vless'
+                                          ? 'подписка'
+                                          : devs.join(' → ') || 'устройство не выбрано',
+                                      g?.ms ? `${g.ms} мс` : '',
+                                      rules ? `правил: ${rules}` : '',
+                                  ]
+                                      .filter(Boolean)
+                                      .join(' · ')
                         return (
-                            <li
+                            <HubRow
                                 key={name}
-                                className="flex items-start gap-3 rounded-xl p-3.5 focus-within:ring-2 focus-within:ring-primary lg:p-4"
-                            >
-                                <span
-                                    className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
-                                        o.kind === 'direct'
-                                            ? 'bg-muted-foreground'
-                                            : st?.up
-                                              ? 'bg-success'
-                                              : 'bg-destructive'
-                                    }`}
-                                    aria-hidden="true"
-                                />
-                                <button
-                                    type="button"
-                                    onClick={() => setEditing(name)}
-                                    className="min-w-0 flex-1 bg-transparent p-0 text-left focus:outline-none focus:shadow-none"
-                                >
-                                    <span className="flex flex-wrap items-baseline gap-x-2">
-                                        <span className="text-sm font-medium">{name}</span>
-                                        {o.kind !== 'direct' && (
-                                            <span className="flex items-baseline gap-1.5 text-xs text-subtle">
-                                                <Flag cc={g?.cc} />
-                                                {[country(g?.cc), g?.ms ? `${g.ms} мс` : '']
-                                                    .filter(Boolean)
-                                                    .join(' · ')}
-                                            </span>
-                                        )}
-                                        {rules > 0 && (
-                                            <span className="text-[11px] text-muted-foreground">
-                                                правил: {rules}
-                                            </span>
-                                        )}
-                                    </span>
-                                    <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                                        {o.kind === 'direct'
-                                            ? 'напрямую, мимо туннеля'
-                                            : o.kind === 'vless'
-                                              ? [
-                                                    'подписка',
-                                                    active || '',
-                                                    spare.length ? `запас: ${spare.join(', ')}` : '',
-                                                ]
-                                                    .filter(Boolean)
-                                                    .join(' · ')
-                                              : [
-                                                    devs.join(' → ') || 'устройство не выбрано',
-                                                    `если всё упало: ${ON_FAIL_TEXT[o.on_fail || 'drop']}`,
-                                                ].join(' · ')}
-                                    </span>
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => remove(name)}
-                                    aria-label={`удалить ${name}`}
-                                    className="shrink-0 bg-transparent p-0 text-muted-foreground transition-colors hover:text-destructive focus:outline-none focus:shadow-none"
-                                >
-                                    <Trash2 className="h-4 w-4" />
-                                </button>
-                            </li>
+                                icon={o.kind === 'direct' ? ArrowRight : o.kind === 'vless' ? Globe : ShieldCheck}
+                                title={name}
+                                state={state}
+                                alarm={o.kind !== 'direct' && st?.up === false}
+                                onClick={() => setEditing(name)}
+                            />
                         )
                     })}
-                </ul>
+                </div>
             )}
         </div>
     )

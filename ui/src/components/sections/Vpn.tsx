@@ -61,6 +61,9 @@ export default function Vpn({ live }: { live: Live }) {
         .filter((o) => o.kind === 'interface')
         .flatMap((o) => (o.devices?.length ? o.devices : o.device ? [o.device] : []))
     const vlessCount = outputs.filter((o) => o.kind === 'vless').length
+    const subCount = new Set(
+        outputs.filter((o) => o.kind === 'vless').map((o) => o.sub_file || ''),
+    ).size
     const xs = devices.filter((d) => d.kind === 'xsteer' || /^xs-/.test(d.name)).map((d) => d.name)
 
     return (
@@ -75,7 +78,11 @@ export default function Vpn({ live }: { live: Live }) {
                 <HubRow
                     icon={Globe}
                     title="VLESS"
-                    state={vlessCount ? `локаций: ${vlessCount}` : 'локаций нет'}
+                    state={
+                        vlessCount
+                            ? `подписок: ${subCount} · локаций: ${vlessCount}`
+                            : 'подписок нет'
+                    }
                     onClick={() => setScreen('vless')}
                 />
                 <HubRow

@@ -5,6 +5,7 @@ import Home from '@/components/sections/Home'
 import { rpc, type SubQuota } from '@/lib/rpc'
 import { live } from './fixtures'
 import type { OutputStatus, Status } from '@/lib/model'
+import type { OutRef } from '@/components/OutputCards'
 
 // Остаток трафика подписки — то, чего в интерфейсе не было вовсе, а спрашивают про него
 // первым: «сколько мне ещё осталось». Панель называет его заголовком ответа
@@ -42,10 +43,13 @@ const info = (p: Record<string, unknown> = {}) =>
 const VLESS: OutputStatus = { name: 'vl', kind: 'vless', device: 'vl', up: true }
 const WG: OutputStatus = { name: 'wg0', kind: 'interface', device: 'wg0', devices: ['wg0'], up: true }
 
-/** Блок подписки с одним поднятым выходом — обычный случай. */
-const sub = (p: { st?: OutputStatus; facts?: Parameters<typeof SubBlock>[0]['outs'][0]['facts'] } = {}) => (
+/** Блок подписки: остаток и строки локаций под ним — как в концепте. */
+const sub = (p: { st?: OutputStatus; facts?: OutRef['facts'] } = {}) => (
     <SubBlock outs={[{ name: 'vl', st: p.st ?? VLESS, facts: p.facts }]} />
 )
+
+/** То же, но когда нас интересует только строка локации. */
+const loc = sub
 
 const nodes = (name: string) =>
     ({ output: 'vl', sub_file: '/etc/steer/sub.txt', node: 1, usable: 2, skipped: 0, foreign: 0,
@@ -194,7 +198,7 @@ describe('блок «Подписка»: остаток трафика (Andromed
     })
 })
 
-describe('локации подписки: по строке на выход, с откликом и закрытым адресом', () => {
+describe('блок локации: страна, отклик и закрытый адрес', () => {
     beforeEach(() => {
         vi.restoreAllMocks()
         window.localStorage.clear()
@@ -206,15 +210,13 @@ describe('локации подписки: по строке на выход, с
         vi.spyOn(rpc, 'vlessNodes').mockResolvedValue(nodes('🇩🇪 Германия №2 — Riot VPN'))
         render(sub())
         expect(await screen.findByText(/68,0 ГБ/)).toBeInTheDocument()
-        // Строка выхода — «страна + имя выхода», как в дизайн-паке: «vless-nl · Нидерланды».
-        // Имя узла от продавца сюда не идёт, оно живёт на экране VLESS.
+        // Страна — из флага в имени узла; само имя продавца в строку не идёт.
         expect(await screen.findByText('Германия')).toBeInTheDocument()
-        expect(screen.getByText('vl')).toBeInTheDocument()
     })
 
     it('страна берётся у ТОГО узла, который выбран движком, а не у первого в подписке', async () => {
         vi.spyOn(rpc, 'vlessNodes').mockResolvedValue(nodes('🇵🇱 Польша №2'))
-        render(sub())
+        render(loc())
         expect(await screen.findByText('Польша')).toBeInTheDocument()
         expect(screen.queryByText(/Авто/)).toBeNull()
     })
@@ -222,26 +224,24 @@ describe('локации подписки: по строке на выход, с
     it('измеренная страна старше подписи продавца', async () => {
         // Подпись продавца намеренно ДРУГАЯ: узел переехал, и верить надо измерению.
         vi.spyOn(rpc, 'vlessNodes').mockResolvedValue(nodes('🇩🇪 Германия №2 — Riot VPN'))
-        render(sub({ facts: { geo: { cc: 'NL', ip: '1.2.3.4' } } }))
+        render(loc({ facts: { geo: { cc: 'NL', ip: '1.2.3.4' } } }))
         expect(await screen.findByText(/Нидерланды/)).toBeInTheDocument()
         expect(screen.queryByText(/Германия/)).toBeNull()
     })
 
     it('отклик стоит рядом с локацией', async () => {
         vi.spyOn(rpc, 'vlessNodes').mockResolvedValue(nodes('🇳🇱 Нидерланды'))
-        render(sub({ facts: { geo: { cc: 'NL' }, ping: { ms: 42, state: 'ok' } } }))
+        render(loc({ facts: { geo: { cc: 'NL' }, ping: { ms: 42, state: 'ok' } } }))
         expect(await screen.findByText('42 мс')).toBeInTheDocument()
     })
 
     it('узел не ответил — так и сказано, а не «0 мс»', async () => {
         vi.spyOn(rpc, 'vlessNodes').mockResolvedValue(nodes('🇳🇱 Нидерланды'))
-        render(sub({ facts: { geo: { cc: 'NL' }, ping: { ms: -1, state: 'нет ответа' } } }))
+        render(loc({ facts: { geo: { cc: 'NL' }, ping: { ms: -1, state: 'нет ответа' } } }))
         expect(await screen.findByText('нет ответа')).toBeInTheDocument()
     })
 
-    it('две локации одной подписки различимы по имени выхода', async () => {
-        // Пул собирается из локаций: правило ведёт в пул, а не в узел. Свести две страны в
-        // одну строку значило бы назвать одну там, где их две.
+    it('две локации одной подписки — две строки в её блоке', async () => {
         vi.spyOn(rpc, 'vlessNodes').mockResolvedValue(nodes('🇳🇱 Нидерланды'))
         render(
             <SubBlock
@@ -257,7 +257,7 @@ describe('локации подписки: по строке на выход, с
 
     it('соединение работает — внешний адрес назван рядом с локацией', async () => {
         vi.spyOn(rpc, 'vlessNodes').mockResolvedValue(nodes('🇩🇪 Германия №2'))
-        render(sub({ facts: { geo: { cc: 'DE', ip: '1.2.3.4' } } }))
+        render(loc({ facts: { geo: { cc: 'DE', ip: '1.2.3.4' } } }))
         expect(await screen.findByText(/Германия/)).toBeInTheDocument()
         expect(screen.getByText('внешний адрес')).toBeInTheDocument()
         expect(screen.getByText('1.2.3.4')).toBeInTheDocument()
@@ -267,7 +267,7 @@ describe('локации подписки: по строке на выход, с
         // Главную открывают при людях и снимают с экрана. Адрес выхода — то, чем роутер виден
         // снаружи, и показывать его постоянно незачем: смотрят на него раз в месяц.
         vi.spyOn(rpc, 'vlessNodes').mockResolvedValue(nodes('🇩🇪 Германия №2'))
-        render(sub({ facts: { geo: { cc: 'DE', ip: '1.2.3.4' } } }))
+        render(loc({ facts: { geo: { cc: 'DE', ip: '1.2.3.4' } } }))
         const ip = await screen.findByText('1.2.3.4')
         // Адрес остаётся в строке — открытие не должно двигать соседние строки, — но
         // прочитать его нельзя и выделить мышью тоже.
@@ -292,7 +292,7 @@ const PROBING: OutputStatus = {
 }
 const FAILED: OutputStatus = { ...VLESS, up: false, probe: { state: 'failed', total: 29 } }
 
-describe('соединения нет — строка про беду, а не про страну', () => {
+describe('соединения нет — блок про беду, а не про страну', () => {
     beforeEach(() => {
         vi.restoreAllMocks()
         window.localStorage.clear()
@@ -302,26 +302,26 @@ describe('соединения нет — строка про беду, а не 
     })
 
     it('выход не поднят: сказано о беде', async () => {
-        render(sub({ st: DOWN, facts: { geo: { cc: 'DE', ip: '1.2.3.4' } } }))
+        render(loc({ st: DOWN, facts: { geo: { cc: 'DE', ip: '1.2.3.4' } } }))
         expect(await screen.findByText('Нет соединения')).toBeInTheDocument()
         expect(screen.getByText(/трафик этого выхода никуда не идёт/)).toBeInTheDocument()
     })
 
     it('и прошлый внешний адрес рядом со сломанным туннелем не показывается', async () => {
-        render(sub({ st: DOWN, facts: { geo: { cc: 'DE', ip: '1.2.3.4' } } }))
+        render(loc({ st: DOWN, facts: { geo: { cc: 'DE', ip: '1.2.3.4' } } }))
         expect(await screen.findByText('Нет соединения')).toBeInTheDocument()
         expect(screen.queryByText(/1\.2\.3\.4/)).toBeNull()
     })
 
     it('перебор узлов — это не отказ, а «подключается»', async () => {
-        render(sub({ st: PROBING }))
+        render(loc({ st: PROBING }))
         expect(await screen.findByText('Подключается…')).toBeInTheDocument()
         expect(screen.getByText(/3 из 29/)).toBeInTheDocument()
         expect(screen.queryByText('Нет соединения')).toBeNull()
     })
 
     it('узлы перебрали и ни один не ответил — сказано именно это', async () => {
-        render(sub({ st: FAILED }))
+        render(loc({ st: FAILED }))
         expect(await screen.findByText('Нет соединения')).toBeInTheDocument()
         expect(screen.getByText(/ни один узел подписки не ответил/)).toBeInTheDocument()
     })
@@ -527,13 +527,13 @@ describe('страна из имени узла, когда измерения �
 
     it('измерения нет — страна берётся из флага в имени узла', async () => {
         vi.spyOn(rpc, 'vlessNodes').mockResolvedValue(nodes('🇳🇱 Мобильный #6'))
-        render(sub())
+        render(loc())
         expect(await screen.findByText('Нидерланды')).toBeInTheDocument()
     })
 
     it('измерение есть — оно старше подписи продавца', async () => {
         vi.spyOn(rpc, 'vlessNodes').mockResolvedValue(nodes('🇳🇱 Мобильный #6'))
-        render(sub({ facts: { geo: { cc: 'DE' } } }))
+        render(loc({ facts: { geo: { cc: 'DE' } } }))
         expect(await screen.findByText('Германия')).toBeInTheDocument()
         expect(screen.queryByText('Нидерланды')).toBeNull()
         // Имени узла в строке нет вовсе: оно спорило бы с измерением.
@@ -542,7 +542,44 @@ describe('страна из имени узла, когда измерения �
 
     it('ни измерения, ни флага — остаётся имя узла', async () => {
         vi.spyOn(rpc, 'vlessNodes').mockResolvedValue(nodes('Мобильный #6'))
-        render(sub())
+        render(loc())
         expect(await screen.findByText('Мобильный #6')).toBeInTheDocument()
+    })
+})
+
+// «Одна с лимитом, другая без, но он посчитал, что лимит у обоих» — с живого экрана. Снимок
+// прошлого открытия лежит в памяти браузера ОДИН на страницу, и во втором блоке он показывал
+// числа первой подписки. У названной подписки числа свои: они приходят перечнем и
+// спрашиваются по её имени.
+describe('числа не перетекают между подписками', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks()
+        window.localStorage.clear()
+        vi.spyOn(rpc, 'vlessNodes').mockRejectedValue(new Error('не спрашиваем'))
+    })
+
+    it('у каждой подписки своя память: числа прошлого открытия видны сразу', () => {
+        window.localStorage.setItem(
+            'splify2:card:sub2',
+            JSON.stringify({ kind: 'url', quota: quota({ total: '0', down: String(41 * GB) }) }),
+        )
+        vi.spyOn(rpc, 'subQuota').mockReturnValue(new Promise(() => {}) as never)
+        render(<SubBlock sub={{ name: 'sub2', title: 'Blue', kind: 'url' }} outs={[]} />)
+        // Без await: числа обязаны быть в первом же кадре.
+        expect(screen.getByText('из ∞ израсходовано')).toBeInTheDocument()
+    })
+
+    it('у безлимитной не появляется лимит соседки', async () => {
+        // В памяти лежит подписка на 200 ГБ — это первая.
+        window.localStorage.setItem('splify2:card', JSON.stringify({ kind: 'url', quota: quota() }))
+        vi.spyOn(rpc, 'subQuota').mockResolvedValue({
+            ok: true, kind: 'url', asked: true,
+            quota: quota({ up: '0', down: String(41 * GB), total: '0' }),
+        } as never)
+        render(<SubBlock sub={{ name: 'sub2', title: 'Blue', kind: 'url' }} outs={[]} />)
+        // Панель назвала объём нулём — это безлимит: крупным расход, мелким «из ∞».
+        expect(await screen.findByText('из ∞ израсходовано')).toBeInTheDocument()
+        expect(screen.queryByText(/200,0 ГБ/)).toBeNull()
+        expect(screen.queryByText(/68,0 ГБ/)).toBeNull()
     })
 })

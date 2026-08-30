@@ -88,7 +88,7 @@ export default function IfacesPanel({ live }: { live: Live }) {
                         const on = outs.length > 0
                         const live_ = d.up || d.name in (live.devs || {})
                         return (
-                            <li key={d.name} className="flex items-center gap-3 p-3.5 lg:p-4">
+                            <li key={d.name} className="flex select-none items-center gap-3 p-3.5 lg:p-4">
                                 <span
                                     className={`h-2 w-2 shrink-0 rounded-full ${
                                         live_ ? 'bg-success' : 'bg-muted-foreground'

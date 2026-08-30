@@ -539,6 +539,36 @@
     outline: 2px solid var(--sp-primary, #5e72e4);
     outline-offset: 1px;
   }
+  /* СВЕЧЕНИЕ ПРИ НАВЕДЕНИИ — чужое, и его тут быть не должно.
+   *
+   *  Стоковая тема OpenWrt красит ЛЮБУЮ кнопку при наведении: `button:hover` получает
+   *  `box-shadow: inset 0 1px 3px …, 0 0 8px rgba(82,168,236,.6)` — синий ореол снаружи и
+   *  вдавленность внутри (bootstrap/cascade.css, одно правило на .btn:focus, input:focus и
+   *  button:hover разом). На строке списка это выглядит как вторая рамка внутри первой:
+   *  ровно то, что было видно на роутере.
+   *
+   *  Гасим на нашей стороне и только тень: `border-color` там объявлен с !important, но у
+   *  наших кнопок ширина рамки нулевая, и красить нечего. Свои тени (`hover:shadow-*`,
+   *  `ring-*`) остаются — они утилиты, а утилита с псевдоклассом бьёт это правило по
+   *  специфичности. */
+  .splify-react-root button:hover { box-shadow: none; }
+
+  /* СТРОКА-КНОПКА: обводку рисует СТРОКА, а не кнопка внутри неё.
+   *
+   *  Список выходов, подписок и подпунктов — это ряды, у которых нажимается вся строка
+   *  целиком, а внутри неё живут ещё и свои кнопки (стрелки, корзина). Кольцо фокуса там
+   *  ставит контейнер (`has-[:focus-visible]:ring-2`), и второе кольцо на самой кнопке
+   *  означало бы две рамки одна в другой — ровно это и было видно на роутере.
+   *
+   *  Утилитой `focus:shadow-none` это не гасится: тема бьёт по `button:focus` с !important,
+   *  а `ring-*` у Tailwind — та же тень, поэтому глобально её снимать нельзя. Отсюда свой
+   *  класс: он снимает чужую обводку ровно там, где мы её не просили. */
+  .splify-react-root .sp-row:focus,
+  .splify-react-root .sp-row:focus-visible,
+  .splify-react-root .sp-row:hover {
+    outline: none !important;
+    box-shadow: none !important;
+  }
   /* Argon's dark.css forces `border:1px solid #3c3c3c !important` on every
      button. Argon itself repaints the border on its filled (apply/primary)
      buttons to match the fill — mirror that for ours. */

@@ -24,7 +24,7 @@ export default function HubRow({
             type="button"
             onClick={onClick}
             className={[
-                'flex w-full items-center gap-3.5 rounded-xl border border-border bg-card p-3.5 text-left shadow-card',
+                'flex w-full select-none items-center gap-3.5 rounded-xl border border-border bg-card p-3.5 text-left shadow-card',
                 'transition-colors duration-200 hover:bg-accent',
                 'focus:outline-none focus:shadow-none focus-visible:ring-2 focus-visible:ring-primary lg:rounded-2xl lg:p-4',
             ].join(' ')}

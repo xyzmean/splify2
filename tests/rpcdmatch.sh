@@ -434,8 +434,18 @@ chmod +x "$T/bin/ip"
 
 # ---- вызов настоящего скрипта -------------------------------------------------
 # Один вход на все проверки: разница между ними — только в фикстурах и переменных.
+# Вызов БЕЗ завершающего перевода строки — ровно так передаёт запрос ubus.
+#
+# Разница не косметическая: `read` на входе без перевода строки возвращает НЕНУЛЕВОЙ код,
+# уже заполнив переменную, и обработчик, написанный как `read -r input || input=''`, затирал
+# прочитанное. Метод молча отвечал по первой подписке, а на экране у второй стояли чужие
+# числа. Стенд всё это время передавал вход с переводом строки и потому ловушку не видел.
+rpcd_raw() {  # МЕТОД JSON_ЗАПРОСА
+    RPCD_NO_NEWLINE=1 rpcd "$@"
+}
+
 rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; для перечня методов есть rpcd_list
-    printf '%s\n' "${2:-}" | env \
+    if [ "${RPCD_NO_NEWLINE:-0}" = 1 ]; then printf '%s' "${2:-}"; else printf '%s\n' "${2:-}"; fi | env \
         SANDBOX="$T" \
         PATH="$T/bin:$PATH" \
         JSHN_SH="$ROOT/tests/stub/jshn.sh" FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
@@ -443,6 +453,7 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         SPEC="$T/etc/spec.json" \
         LISTS="$T/lists" \
         SUB="$T/etc/sub.txt" \
+        SUBS_DIR="$T/etc/subs" \
         MANIFEST="$T/etc/manifest.json" \
         INITD="$T/bin/initd-steer" \
         RPCD_INITD="$T/bin/initd-rpcd" \
@@ -1050,10 +1061,11 @@ check "путь файла настройки — шов, а не литерал
       "$(grep -c '^UCI_SPLIFY2=' "$SCRIPT")"
 check "прямых путей /etc/config/splify2 в коде не осталось" "1" \
       "$(grep -c '/etc/config/splify2' "$SCRIPT")"
-# Пять мест: sub_set, ветка настроек, ui_get|ui_set, fetch_mode|fetch_mode_set и
-# zm_fix|zm_fix_set. Число растёт вместе с методами, которые пишут в uci, — и это ровно тот
-# случай, когда барьер должен ломаться: новый метод обязан заводить файл той же функцией.
-check "файл заводится одной функцией на все места" "5" \
+# Шесть мест: sub_set, sub_put (ключи подписок), ветка настроек, ui_get|ui_set,
+# fetch_mode|fetch_mode_set и zm_fix|zm_fix_set. Число растёт вместе с методами, которые
+# пишут в uci, — и это ровно тот случай, когда барьер должен ломаться: новый метод обязан
+# заводить файл той же функцией.
+check "файл заводится одной функцией на все места" "6" \
       "$(grep -c '^ *uci_file ||' "$SCRIPT")"
 check "перенаправлением файл больше не заводится" "0" \
       "$(grep -c ': > "\?/etc/config' "$SCRIPT")"
@@ -1090,6 +1102,43 @@ check "устройство названо честно, а не выдуман�
       "$(grep -qi '^x-device-os: OpenWrt' "$T/curl.hdrs" && echo yes || echo no);$(grep -qi '^x-device-model: Xiaomi AX3000T' "$T/curl.hdrs" && echo yes || echo no)"
 check "sub_info отдаёт идентификатор до всякого скачивания" "$want" \
       "$(rpcd sub_info | jget hwid)"
+
+# ---- несколько подписок ------------------------------------------------------
+#
+# Подписок на роутере бывает несколько: у человека две панели, и локации из обеих он
+# складывает в пулы. Первая осталась на прежнем месте (/etc/steer/sub.txt) — на этот путь
+# ссылаются выходы в спеках установленных роутеров.
+rm -rf "$T/etc/subs"
+out="$(rpcd sub_set '{"url":"https://panel.invalid/sub/second","name":"blue"}')"
+check "вторая подписка легла своим файлом" "yes" \
+      "$([ -s "$T/etc/subs/blue.txt" ] && echo yes || echo no)"
+check "первую она не тронула" "yes" \
+      "$([ -s "$T/etc/sub.txt" ] && echo yes || echo no)"
+check "перечень называет обе" "blue main" \
+      "$(rpcd sub_list | python3 -c 'import json,sys
+print(" ".join(sorted(d["name"] for d in json.load(sys.stdin)["subs"])))')"
+
+# ЛОВУШКА, ради которой заведён rpcd_raw: ubus передаёт запрос без завершающего перевода
+# строки. Обработчик обязан прочитать имя и в этом случае — иначе он молча отвечает по
+# первой подписке, и на экране у второй стоят чужие числа (поймано на роутере).
+check "имя подписки читается и без перевода строки на входе" "blue" \
+      "$(rpcd_raw sub_info '{"name":"blue"}' | jget name)"
+check "и путь тогда её собственный" "$T/etc/subs/blue.txt" \
+      "$(rpcd_raw sub_info '{"name":"blue"}' | jget path)"
+
+# Занятую выходом не удаляем: движок читает файл узлов при подъёме, и снос под живым выходом
+# оставил бы правило вести в туннель без единого узла.
+cat > "$T/etc/spec.json" <<JSON
+{"schema":1,"outputs":{"vl":{"name":"vl","kind":"vless","sub_file":"$T/etc/subs/blue.txt","node":-1}},"channels":[]}
+JSON
+out="$(rpcd sub_del '{"name":"blue"}')"
+check "занятая подписка не удаляется" "false" "$(printf '%s' "$out" | jget ok)"
+check "и сказано, сколькими выходами занята" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'занята выходами' && echo yes || echo no)"
+printf '%s\n' '{"schema":1,"outputs":{},"channels":[]}' > "$T/etc/spec.json"
+out="$(rpcd sub_del '{"name":"blue"}')"
+check "свободная — удаляется вместе с файлом" "true;no" \
+      "$(printf '%s' "$out" | jget ok);$([ -e "$T/etc/subs/blue.txt" ] && echo yes || echo no)"
 
 # Сигналы панели читаются из ответных заголовков: без них отказ выглядел бы как «подписка
 # скачалась, узлы не работают».

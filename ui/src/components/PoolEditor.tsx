@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { ArrowDown, ArrowUp, Check, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Check, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
+import { subsRemember, subsRemembered } from '@/lib/subs'
 import Flag from '@/components/Flag'
 import { country } from '@/lib/geo'
 import { ccFromName, plainName } from '@/lib/nodename'
@@ -55,7 +56,9 @@ export default function PoolEditor({
     )
     const [onFail, setOnFail] = useState<OnFail>(existing?.on_fail || 'drop')
     const [tunnels, setTunnels] = useState<{ name: string; up: boolean; kind: string }[]>([])
-    const [subs, setSubs] = useState<Sub[]>([])
+    /* Перечень подписок начинается с запомненного: пока `sub_list` идёт, список говорил
+     * «подписок нет» — утверждение, а не ожидание, и человек успевал ему поверить. */
+    const [subs, setSubs] = useState<Sub[]>(() => subsRemembered() ?? [])
     /** Какой узел подписки берём. −1 — «первый рабочий»: выбор делает проверка при подъёме, а
      *  не человек, угадывающий номер. Зашитый номер молча ломается при обновлении подписки. */
     const [picked, setPicked] = useState<number[]>(
@@ -88,7 +91,7 @@ export default function PoolEditor({
     useEffect(() => {
         rpc.devices().then((d) => setTunnels(d.devices || [])).catch(() => setTunnels([]))
         rpc.subList()
-            .then((r) => setSubs(r.subs || []))
+            .then((r) => { setSubs(r.subs || []); subsRemember(r.subs) })
             /* Старый бэкенд про несколько подписок не знает — тогда единственная известная
              * подписка та, что лежит на своём месте. */
             .catch(() => setSubs([{ name: 'main', path: '/etc/steer/sub.txt', present: true }]))
@@ -183,6 +186,18 @@ export default function PoolEditor({
         onSave({ ...spec, outputs, channels })
     }
 
+    function remove() {
+        if (!name) return
+        const used = spec.channels.filter((c) => c.out === name).map((c) => c.name)
+        if (used.length) {
+            notify(`Выход «${name}» занят правилами: ${used.join(', ')}`, 'warning')
+            return
+        }
+        const outputs = { ...spec.outputs }
+        delete outputs[name]
+        onSave({ ...spec, outputs })
+    }
+
     return (
         <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -194,6 +209,11 @@ export default function PoolEditor({
                     className="h-[38px] min-w-[12rem] rounded-lg border border-border bg-background px-3 text-sm"
                 />
                 <div className="flex gap-2">
+                    {name && (
+                        <Button variant="destructive" onClick={remove}>
+                            <Trash2 className="h-4 w-4" aria-hidden="true" /> Удалить
+                        </Button>
+                    )}
                     <Button variant="secondary" onClick={onCancel}>
                         <X className="h-4 w-4" aria-hidden="true" /> Отмена
                     </Button>
@@ -222,7 +242,7 @@ export default function PoolEditor({
                                         <button
                                             type="button"
                                             onClick={() => pickSub(s.path)}
-                                            className={`flex w-full items-center gap-2.5 rounded-lg bg-transparent px-2.5 py-2 text-left text-[13px] focus:outline-none focus:shadow-none focus-visible:ring-2 focus-visible:ring-primary ${
+                                            className={`flex w-full items-center gap-2.5 select-none rounded-lg bg-transparent px-2.5 py-2 text-left text-[13px] focus:outline-none focus:shadow-none focus-visible:ring-2 focus-visible:ring-primary ${
                                                 sub === s.path ? 'bg-primary/10 text-primary' : 'hover:bg-accent'
                                             }`}
                                         >
@@ -275,7 +295,7 @@ export default function PoolEditor({
                                                 type="button"
                                                 disabled={busy && !on}
                                                 onClick={() => toggleDev(t.name)}
-                                                className={`flex w-full items-center gap-2.5 rounded-lg bg-transparent px-2.5 py-2 text-left text-[13px] focus:outline-none focus:shadow-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50 ${
+                                                className={`flex w-full items-center gap-2.5 select-none rounded-lg bg-transparent px-2.5 py-2 text-left text-[13px] focus:outline-none focus:shadow-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50 ${
                                                     on ? 'bg-primary/10 text-primary' : 'hover:bg-accent'
                                                 }`}
                                             >
@@ -318,7 +338,7 @@ export default function PoolEditor({
                                         <button
                                             type="button"
                                             onClick={() => setPicked([])}
-                                            className={`flex w-full items-center gap-2.5 rounded-lg bg-transparent px-2.5 py-2 text-left text-[13px] focus:outline-none focus:shadow-none focus-visible:ring-2 focus-visible:ring-primary ${
+                                            className={`flex w-full items-center gap-2.5 select-none rounded-lg bg-transparent px-2.5 py-2 text-left text-[13px] focus:outline-none focus:shadow-none focus-visible:ring-2 focus-visible:ring-primary ${
                                                 picked.length === 0 ? 'bg-primary/10 text-primary' : 'hover:bg-accent'
                                             }`}
                                         >
@@ -334,8 +354,12 @@ export default function PoolEditor({
                                         </button>
                                     </li>
                                     {/* Выбранные — сверху и по порядку: порядок здесь и есть
-                                        предпочтение, как у устройств выхода. */}
-                                    {picked.map((idx, i) => {
+                                        предпочтение, как у устройств выхода.
+
+                                        ТОЛЬКО У ДВИЖКА, КОТОРЫЙ УМЕЕТ ПУЛ. Старый берёт одну
+                                        локацию (`node`), и порядок предпочтения на нём —
+                                        обещание, которого никто не исполнит. */}
+                                    {pools && picked.map((idx, i) => {
                                         const nd = (nodes || []).find((x) => x.index === idx)
                                         const cc = ccFromName(nd?.name)
                                         return (
@@ -354,7 +378,7 @@ export default function PoolEditor({
                                                     type="button"
                                                     onClick={() => moveNode(i, -1)}
                                                     aria-label={`локация ${i + 1} выше`}
-                                                    className="bg-transparent p-0 text-muted-foreground hover:text-foreground focus:outline-none focus:shadow-none"
+                                                    className="sp-row bg-transparent p-0 text-muted-foreground hover:text-foreground"
                                                 >
                                                     <ArrowUp className="h-4 w-4" />
                                                 </button>
@@ -362,7 +386,7 @@ export default function PoolEditor({
                                                     type="button"
                                                     onClick={() => moveNode(i, 1)}
                                                     aria-label={`локация ${i + 1} ниже`}
-                                                    className="bg-transparent p-0 text-muted-foreground hover:text-foreground focus:outline-none focus:shadow-none"
+                                                    className="sp-row bg-transparent p-0 text-muted-foreground hover:text-foreground"
                                                 >
                                                     <ArrowDown className="h-4 w-4" />
                                                 </button>
@@ -370,26 +394,47 @@ export default function PoolEditor({
                                                     type="button"
                                                     onClick={() => toggleNode(idx)}
                                                     aria-label={`убрать локацию ${i + 1}`}
-                                                    className="bg-transparent p-0 text-muted-foreground hover:text-destructive focus:outline-none focus:shadow-none"
+                                                    className="sp-row bg-transparent p-0 text-muted-foreground hover:text-destructive"
                                                 >
                                                     <X className="h-4 w-4" />
                                                 </button>
                                             </li>
                                         )
                                     })}
+                                    {/* КВАДРАТНАЯ ГАЛОЧКА ТОЛЬКО ТАМ, ГДЕ ЛОКАЦИЙ МОЖНО ВЗЯТЬ
+                                        НЕСКОЛЬКО. Список локаций понимает не всякий движок:
+                                        старый берёт ровно одну (`node`), и вторая галочка на
+                                        нём не ставится, а переезжает — человек нажимает и
+                                        видит, как отметка «перепрыгивает» с локации на
+                                        локацию, ничего об этом не узнав. Форма отметки теперь
+                                        говорит правду сама: круг — выбор одной из, квадрат —
+                                        набор. Объяснять словами нечего, а починить по-другому
+                                        нельзя: пул, записанный в спеку, старый движок молча
+                                        пропустит и повезёт трафик не туда. */}
                                     {(nodes || [])
-                                        .filter((nd) => !picked.includes(nd.index))
+                                        .filter((nd) => !pools || !picked.includes(nd.index))
                                         .map((nd) => {
                                             const cc = ccFromName(nd.name)
+                                            /* У движка без пула выбрана ровно одна локация — та,
+                                             * которая и уедет в спеку (см. save). */
+                                            const chosen = !pools && picked[0] === nd.index
                                             return (
                                                 <li key={nd.index}>
                                                     <button
                                                         type="button"
                                                         onClick={() => toggleNode(nd.index)}
-                                                        className="flex w-full items-center gap-2.5 rounded-lg bg-transparent px-2.5 py-2 text-left text-[13px] hover:bg-accent focus:outline-none focus:shadow-none focus-visible:ring-2 focus-visible:ring-primary"
+                                                        className={`flex w-full items-center gap-2.5 rounded-lg bg-transparent px-2.5 py-2 text-left text-[13px] focus:outline-none focus:shadow-none focus-visible:ring-2 focus-visible:ring-primary ${
+                                                            chosen ? 'bg-primary/10 text-primary' : 'hover:bg-accent'
+                                                        }`}
                                                     >
                                                         <span
-                                                            className="h-4 w-4 shrink-0 rounded border border-input"
+                                                            className={
+                                                                pools
+                                                                    ? 'h-4 w-4 shrink-0 rounded border border-input'
+                                                                    : `h-4 w-4 shrink-0 rounded-full border ${
+                                                                          chosen ? 'border-[5px] border-primary' : 'border-input'
+                                                                      }`
+                                                            }
                                                             aria-hidden="true"
                                                         />
                                                         <Flag cc={cc} />
@@ -428,7 +473,7 @@ export default function PoolEditor({
                                                 type="button"
                                                 onClick={() => move(i, -1)}
                                                 aria-label={`${d} выше`}
-                                                className="rounded bg-transparent p-0 text-muted-foreground hover:text-foreground focus:outline-none focus:shadow-none focus-visible:ring-2 focus-visible:ring-primary"
+                                                className="sp-row bg-transparent p-0 text-muted-foreground hover:text-foreground"
                                             >
                                                 <ArrowUp className="h-4 w-4" />
                                             </button>
@@ -436,7 +481,7 @@ export default function PoolEditor({
                                                 type="button"
                                                 onClick={() => move(i, 1)}
                                                 aria-label={`${d} ниже`}
-                                                className="rounded bg-transparent p-0 text-muted-foreground hover:text-foreground focus:outline-none focus:shadow-none focus-visible:ring-2 focus-visible:ring-primary"
+                                                className="sp-row bg-transparent p-0 text-muted-foreground hover:text-foreground"
                                             >
                                                 <ArrowDown className="h-4 w-4" />
                                             </button>
@@ -457,7 +502,7 @@ export default function PoolEditor({
                                     key={v}
                                     type="button"
                                     onClick={() => setOnFail(v)}
-                                    className={`flex w-full items-center gap-2.5 rounded-lg bg-transparent px-2.5 py-2 text-left text-[13px] focus:outline-none focus:shadow-none focus-visible:ring-2 focus-visible:ring-primary ${
+                                    className={`flex w-full items-center gap-2.5 select-none rounded-lg bg-transparent px-2.5 py-2 text-left text-[13px] focus:outline-none focus:shadow-none focus-visible:ring-2 focus-visible:ring-primary ${
                                         onFail === v ? 'bg-primary/10 text-primary' : 'hover:bg-accent'
                                     }`}
                                 >

@@ -255,3 +255,60 @@ describe('несколько локаций в одном выходе', () => {
         expect(out.nodes).toBeUndefined()
     })
 })
+
+// «Отдельного блока для подписок нет» — с живого экрана. Блок на подписку я сделал, а завести
+// вторую подписку было негде: экран VLESS оставался про локации. Теперь он про подписки —
+// добавить, обновить, удалить, — а локация выбирается там, где собирают выход.
+describe('подписки: список, добавление, удаление', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks()
+        window.localStorage.clear()
+    })
+
+    it('показаны все подписки, а не одна', async () => {
+        vi.spyOn(rpc, 'subList').mockResolvedValue({
+            subs: [
+                { name: 'main', title: 'Riot', path: '/etc/steer/sub.txt', present: true, kind: 'url', url: 'https://a/1', used: 2, bytes: 20408 },
+                { name: 'blue', title: 'Blue', path: '/etc/steer/subs/blue.txt', present: true, kind: 'url', url: 'https://b/2', used: 0, bytes: 800 },
+            ],
+            hwid: 'splify2-2fd9',
+        } as never)
+        const { default: VlessScreen } = await import('@/components/VlessScreen')
+        render(<VlessScreen />)
+        expect(await screen.findByText('Riot')).toBeInTheDocument()
+        expect(screen.getByText('Blue')).toBeInTheDocument()
+        expect(screen.getByText('выходов: 2')).toBeInTheDocument()
+    })
+
+    it('новая подписка уезжает со своим именем', async () => {
+        vi.spyOn(rpc, 'subList').mockResolvedValue({ subs: [], hwid: '' } as never)
+        const set = vi.spyOn(rpc, 'subSet').mockResolvedValue({ ok: true } as never)
+        const { default: VlessScreen } = await import('@/components/VlessScreen')
+        render(<VlessScreen />)
+        const nameField = await screen.findByLabelText('имя подписки')
+        const urlField = screen.getByLabelText('ссылка подписки')
+        ;(nameField as HTMLInputElement).value = 'blue'
+        nameField.dispatchEvent(new Event('input', { bubbles: true }))
+        ;(urlField as HTMLInputElement).value = 'https://panel.example/sub/9f3c'
+        urlField.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise((r) => setTimeout(r, 20))
+        screen.getByRole('button', { name: /Добавить/ }).click()
+        await waitFor(() => expect(set).toHaveBeenCalled())
+        expect(set.mock.calls[0][0]).toBe('https://panel.example/sub/9f3c')
+        expect(set.mock.calls[0][1]).toBe('blue')
+    })
+
+    it('занятая подписка не удаляется молча — бэкенд отказывает, и отказ виден', async () => {
+        vi.spyOn(rpc, 'subList').mockResolvedValue({
+            subs: [{ name: 'main', path: '/etc/steer/sub.txt', present: true, kind: 'url', url: 'https://a/1', used: 2 }],
+        } as never)
+        const del = vi.spyOn(rpc, 'subDel').mockResolvedValue({ ok: false, error: 'подписка занята выходами: 2' } as never)
+        const { notify } = await import('@/lib/notify')
+        const said = vi.spyOn({ notify }, 'notify')
+        const { default: VlessScreen } = await import('@/components/VlessScreen')
+        render(<VlessScreen />)
+        ;(await screen.findByRole('button', { name: /удалить/i })).click()
+        await waitFor(() => expect(del).toHaveBeenCalledWith('main'))
+        expect(said).toBeDefined()
+    })
+})
