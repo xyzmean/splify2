@@ -460,7 +460,9 @@ cat > "$T/bin/ip" <<'EOF'
 # запуском вместо запуска на устройство.
 all() {
     echo "3: br-lan    inet 192.168.1.1/24 brd 192.168.1.255 scope global br-lan"
-    echo "4: wan    inet 46.42.17.15/22 brd 46.42.19.255 scope global wan"
+    # Адрес wan подменяем из теста: бывает, что сторона провайдера сама частная (роутер за
+    # роутером), и тогда «клиентом» выглядит всякий, кто пришёл оттуда.
+    echo "4: wan    inet ${IP_WAN_ADDR:-46.42.17.15/22} brd 46.42.19.255 scope global wan"
     echo "9: tailscale0    inet 100.64.1.5/32 scope global tailscale0"
     echo "8: ztrfyzwvfa    inet 10.147.17.20/24 brd 10.147.17.255 scope global ztrfyzwvfa"
     echo "1: lo    inet 127.0.0.1/8 scope host lo"
@@ -499,6 +501,7 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         JSHN_SH="$ROOT/tests/stub/jshn.sh" FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
         FAST_SH="$ROOT/files/usr/lib/splify2/fast.sh" \
         SYSNET_STATS="${SYSNET_STATS_FIXTURE:-$T/statnet}" \
+        CONNTRACK="${CONNTRACK_FIXTURE:-$T/nf_conntrack}" \
         STEER="$T/bin/steer" \
         SPEC="$T/etc/spec.json" \
         LISTS="$T/lists" \
@@ -1953,6 +1956,43 @@ check "время файла не потерялось" "yes" \
       "$(printf '%s' "$out" | python3 -c 'import json,sys
 print("yes" if json.load(sys.stdin)["files"]["three.lst"]["mtime"] > 1000000000 else "no")')"
 rm -f "$T/lists/three.lst" "$T/lists/domains/one.lst"
+
+# ---- I-157: «устройств в сети» считалось по одной подсети network.lan ----------------
+# Человек отметил в перечне сетей клиентов tailscale0 и ztXXXXXX, трафик оттуда
+# маршрутизируется, а в числе на обзоре его нет: считались только адреса из network.lan.
+# Занижение молчаливое, при подписи «устройств в сети» — число выглядит осмысленным и потому
+# убедительно врёт. Заменить одну подсеть списком нельзя: у tailscale0 адрес на роутере /32,
+# и подсеть пиров из него не выводится. Считаются разные ЧАСТНЫЕ адреса-инициаторы, кроме
+# адресов самого роутера.
+cat > "$T/nf_conntrack" <<'EOF'
+ipv4 2 udp 17 30 src=192.168.1.77 dst=192.168.1.1 sport=9 dport=53 src=192.168.1.1 dst=192.168.1.77 sport=53 dport=9 mark=0
+ipv4 2 tcp 6 431999 ESTABLISHED src=192.168.1.50 dst=1.1.1.1 sport=1 dport=443 src=1.1.1.1 dst=46.42.17.15 sport=443 dport=1 mark=0
+ipv4 2 tcp 6 431999 ESTABLISHED src=192.168.1.50 dst=8.8.8.8 sport=2 dport=443 src=8.8.8.8 dst=46.42.17.15 sport=443 dport=2 mark=0
+ipv4 2 udp 17 30 src=192.168.9.7 dst=1.1.1.1 sport=3 dport=53 src=1.1.1.1 dst=46.42.17.15 sport=53 dport=3 mark=0
+ipv4 2 tcp 6 431999 ESTABLISHED src=100.64.1.9 dst=140.82.121.4 sport=4 dport=443 src=140.82.121.4 dst=46.42.17.15 sport=443 dport=4 mark=0
+ipv4 2 tcp 6 431999 ESTABLISHED src=10.147.17.31 dst=140.82.121.4 sport=5 dport=443 src=140.82.121.4 dst=46.42.17.15 sport=443 dport=5 mark=0
+ipv4 2 tcp 6 431999 ESTABLISHED src=192.168.1.1 dst=1.1.1.1 sport=6 dport=443 src=1.1.1.1 dst=46.42.17.15 sport=443 dport=6 mark=0
+ipv4 2 tcp 6 120 SYN_SENT src=185.200.1.7 dst=46.42.17.15 sport=7 dport=22 src=46.42.17.15 dst=185.200.1.7 sport=22 dport=7 mark=0
+EOF
+out="$(rpcd net_info)"
+# Четыре разных частных инициатора: телефон (192.168.1.50, два соединения — одно устройство),
+# гостевая сеть (192.168.9.7), пир Tailscale (100.64.1.9) и хост ZeroTier (10.147.17.31).
+# НЕ считаются: адрес самого роутера (192.168.1.1), сканер из интернета (185.200.1.7) и
+# устройство, которое только спросило DNS у роутера (192.168.1.77) — это соединение К нему, а
+# не через него. Считались бы — здесь стояло бы семь.
+check "клиенты считаются по всем сетям, а не по одной (I-157)" "4" \
+      "$(printf '%s' "$out" | jget active_clients)"
+
+# Сторона провайдера бывает частной: роутер за роутером, адрес wan вида 10.x. Тогда всякий,
+# кто подключился К РОУТЕРУ оттуда, выглядел бы клиентом — на стенде 10.8.1.87 это была
+# ssh-сессия, и число на обзоре росло от самого факта подключения. Подсеть wan исключается
+# целиком, а домашние сети при этом считаются по-прежнему.
+cat > "$T/nf_conntrack2" <<'EOF'
+ipv4 2 tcp 6 431999 ESTABLISHED src=192.168.1.50 dst=1.1.1.1 sport=1 dport=443 src=1.1.1.1 dst=10.8.1.87 sport=443 dport=1 mark=0
+ipv4 2 tcp 6 431999 ESTABLISHED src=10.8.0.3 dst=10.8.1.87 sport=2 dport=22 src=10.8.1.87 dst=10.8.0.3 sport=22 dport=2 mark=0
+EOF
+check "пришедший со стороны провайдера клиентом не считается" "1" \
+      "$(IP_WAN_ADDR=10.8.1.87/16 CONNTRACK_FIXTURE="$T/nf_conntrack2" rpcd net_info | jget active_clients)"
 
 # ---- круг опроса одним вызовом ------------------------------------------------------
 # Пять вызовов на круг стоили роутеру 1220 мс, из них 630 — пятикратный разбор одного и того
