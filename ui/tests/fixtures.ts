@@ -15,7 +15,6 @@ export function live(patch: Partial<Live> = {}): Live {
         diag: null,
         diagOld: false,
         devs: null,
-        engine: null,
         speed: { ch: {}, dev: {} },
         refresh: () => {},
         ...patch,

@@ -1,7 +1,9 @@
+import { useEffect, useState } from 'react'
 import { Check, Info, TriangleAlert, XCircle } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { type Live } from '@/lib/live'
 import { parseLog } from '@/lib/log'
+import { rpc } from '@/lib/rpc'
 
 /** Диагностика: то, за чем приходят, когда «применилось, но не работает».
  *
@@ -15,6 +17,28 @@ import { parseLog } from '@/lib/log'
  *  не влезало в остальные вкладки, и по его названию нельзя было угадать содержимое. */
 
 export default function Diagnostics({ live }: { live: Live }) {
+    /* Журнал движка спрашивает ЭТОТ экран, пока он открыт, а не общий круг опроса.
+     *
+     * Читает его один-единственный список — тот, что ниже, — а стоил он дороже всего
+     * остального вместе взятого: `logread -l 300 | grep steer` это 76 мс на каждом круге,
+     * плюс запуск скрипта объекта (126 мс), то есть 350 мс каждые пять секунд ради строк,
+     * которых на экране в это время нет. Замер на стенде 10.8.1.87.
+     *
+     * Общий круг от этого не расходится во времени с журналом: числа и вердикты приходят
+     * своим ответом, строки журнала — своим, и сверять их между собой незачем — это
+     * разные вопросы. Расхождение мгновений опасно там, где два числа об одном и том же
+     * (см. шапку lib/live.ts), а здесь такого нет. */
+    const [log, setLog] = useState<string[] | null>(null)
+    useEffect(() => {
+        let stop = false
+        const pull = () =>
+            rpc.engineState()
+                .then((e) => { if (!stop) setLog(e.log || []) })
+                .catch(() => { if (!stop) setLog([]) })
+        void pull()
+        const id = setInterval(() => { if (!document.hidden) void pull() }, 5000)
+        return () => { stop = true; clearInterval(id) }
+    }, [])
 
     const bad = (live.diag?.checks || []).filter((c) => c.verdict === 'fail' || c.verdict === 'warn')
     /* Советы отдельно и НЕ в счётчиках: они верны всегда, а не описывают эту установку. Смешав
@@ -102,9 +126,9 @@ export default function Diagnostics({ live }: { live: Live }) {
                     <CardTitle>Логи steer</CardTitle>
                 </CardHeader>
                 <CardContent>
-                    {live.engine?.log?.length ? (
+                    {log?.length ? (
                         <div className="max-h-72 overflow-auto rounded-xl border border-border bg-muted p-3 text-[11px] leading-relaxed">
-                            {live.engine.log.map((line, i) => {
+                            {log.map((line, i) => {
                                 const l = parseLog(line)
                                 return (
                                     <div key={i} className="flex gap-2 whitespace-pre-wrap">

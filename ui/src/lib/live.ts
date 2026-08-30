@@ -32,11 +32,6 @@ export interface Diag {
     fail: number
 }
 
-export interface EngineState {
-    instances: Record<string, { running: boolean; pid: number }>
-    log: string[]
-}
-
 export interface Build {
     present: boolean
     vless: boolean
@@ -76,7 +71,6 @@ export interface Live {
      *  выглядело бы как поломка интерфейса на исправном роутере. */
     diagOld: boolean
     devs: Record<string, { rx: string; tx: string }> | null
-    engine: EngineState | null
     /** Скорость прямо сейчас, готовыми строками. Пусто до второго опроса и когда трафика
      *  нет: нуль там был бы неправдой — мы его не измеряли. */
     speed: {
@@ -127,9 +121,14 @@ export function useLive(): Live {
     const [status, setStatus] = useState<Status | null>(saved.current?.status ?? null)
     const [error, setError] = useState<string | null>(null)
     const [diag, setDiag] = useState<Diag | null>(saved.current?.diag ?? null)
+    /* Снимок для следующего открытия страницы кладётся каждым кругом, а проверки приходят не
+     * каждым: без этой ссылки круг без проверок стирал бы из снимка вердикт, который у нас
+     * есть, и страница открывалась бы без него — то самое «Загрузка…» вместо состояния,
+     * ради снятия которого снимок и заведён. */
+    const diagNow = useRef<Diag | null>(saved.current?.diag ?? null)
+    useEffect(() => { diagNow.current = diag }, [diag])
     const [diagOld, setDiagOld] = useState(false)
     const [devs, setDevs] = useState<Record<string, { rx: string; tx: string }> | null>(null)
-    const [engine, setEngine] = useState<EngineState | null>(null)
     const [speed, setSpeed] = useState<Live['speed']>({ ch: {}, dev: {} })
     const [build, setBuild] = useState<Build | null>(saved.current?.build ?? null)
     const [releases, setReleases] = useState<Releases | null>(null)
@@ -150,65 +149,89 @@ export function useLive(): Live {
          * из разницы снимков, снятых с неверным интервалом (I-013). Опоздавший круг не
          * ставится в очередь — следующий тик всё равно принесёт свежее. */
         let inflight = false
-        const load = async () => {
-            if (inflight) return
-            inflight = true
-            try {
+        /* Проверки движка спрашиваются НЕ каждый круг.
+         *
+         * Замер на стенде (mipsel 24kc, 880 МГц): круг без проверок стоит роутеру 240 мс,
+         * с проверками — 432 мс, то есть они почти удваивают самую частую работу во всём
+         * интерфейсе. А меняются они реже всего: приговор перестаёт быть верным, когда
+         * что-то применили или туннель упал. Первое интерфейс знает сам — после apply он
+         * зовёт refresh(), а тот перезапускает эффект и первым же кругом спрашивает
+         * проверки. Второе видно и без них: поле `up` выхода приходит каждый круг и
+         * рисуется сразу.
+         *
+         * Поэтому проверки идут первым кругом, после каждого refresh(), при возвращении на
+         * вкладку — и раз в двадцать секунд просто так. */
+        const DIAG_EVERY = 4
+        let round = 0
+        /* Объект ubus старее интерфейса: пакет обновили, rpcd не перезапустили. Тогда
+         * метода `live` нет, и круг идёт прежними пятью вызовами. Проверяется один раз за
+         * жизнь эффекта: отказ метода — это не «сеть моргнула», он не пройдёт и в
+         * следующий раз. */
+        let legacy = false
+
+        /* Беда приезжает УСПЕШНЫМ промисом. Бэкенд по контракту (docs/rpcd-api.md)
+         * отвечает на любую ошибку объектом {ok:false, error} и кодом возврата нуль,
+         * поэтому промис резолвится, и проверка одного лишь status === 'rejected'
+         * такую беду не замечает вовсе.
+         *
+         * Цена была ровно обратной задуманному: движок не отвечает (спека битая,
+         * файла списка нет, движок откатили) → status отдаёт {ok:false,...} →
+         * setError(null) и объект ошибки в состоянии → рельс печатает «Работает»
+         * зелёной точкой, а заголовок диагностики — «Всё в порядке». Ветка «Проверка
+         * состояния недоступна», написанная ровно под этот случай, была недостижима.
+         * В самом бэкенде про это сказано прямо: «честная ошибка, а не пустой объект,
+         * который интерфейс покажет как „всё в порядке“». */
+        const failure = (v: unknown): string | null => {
+            if (!v || typeof v !== 'object') return null
+            const o = v as { ok?: unknown; error?: unknown }
+            if (o.ok === false || o.ok === 0)
+                return typeof o.error === 'string' && o.error ? o.error : 'бэкенд вернул ошибку'
+            return null
+        }
+        const asText = (e: unknown): string => String(e instanceof Error ? e.message : e)
+
+        /** Один круг прежними вызовами — для объекта, который не знает `live`. */
+        const loadLegacy = async (withDiag: boolean) => {
             /* allSettled, а не all: отказ одного источника не должен уносить остальные.
              * Проверок состояния нет у старого движка, и это не повод гасить экран. */
-            const [s, d, e, g, ni] = await Promise.allSettled([
-                rpc.status(), rpc.devStats(), rpc.engineState(), rpc.diag(), rpc.netInfo(),
+            const [s, d, g, ni] = await Promise.allSettled([
+                rpc.status(), rpc.devStats(),
+                withDiag ? rpc.diag() : Promise.resolve(null), rpc.netInfo(),
             ])
             if (stop) return
-            /* Беда приезжает УСПЕШНЫМ промисом. Бэкенд по контракту (docs/rpcd-api.md)
-             * отвечает на любую ошибку объектом {ok:false, error} и кодом возврата нуль,
-             * поэтому промис резолвится, и проверка одного лишь status === 'rejected'
-             * такую беду не замечает вовсе.
-             *
-             * Цена была ровно обратной задуманному: движок не отвечает (спека битая,
-             * файла списка нет, движок откатили) → status отдаёт {ok:false,...} →
-             * setError(null) и объект ошибки в состоянии → StatusRail печатает «Работает»
-             * зелёной точкой, а заголовок диагностики — «Всё в порядке». Ветка «Проверка
-             * состояния недоступна», написанная ровно под этот случай, была недостижима.
-             * В самом бэкенде про это сказано прямо: «честная ошибка, а не пустой объект,
-             * который интерфейс покажет как „всё в порядке“». */
-            const failure = (v: unknown): string | null => {
-                if (!v || typeof v !== 'object') return null
-                const o = v as { ok?: unknown; error?: unknown }
-                if (o.ok === false || o.ok === 0)
-                    return typeof o.error === 'string' && o.error ? o.error : 'бэкенд вернул ошибку'
-                return null
-            }
-            const rejected = (r: { reason?: unknown }): string =>
-                String(r.reason instanceof Error ? r.reason.message : r.reason)
-
             if (s.status === 'fulfilled' && !failure(s.value)) { setStatus(s.value); setError(null) }
-            else setError(s.status === 'fulfilled' ? failure(s.value)! : rejected(s))
+            else setError(s.status === 'fulfilled' ? failure(s.value)! : asText(s.reason))
+            const devices = d.status === 'fulfilled' && !failure(d.value) ? d.value.devices || {} : null
+            if (withDiag) {
+                if (g.status === 'fulfilled' && g.value && !failure(g.value)) {
+                    setDiag(g.value); setDiagOld(false)
+                } else setDiagOld(true)
+            }
+            const netv = ni.status === 'fulfilled' && !failure(ni.value) ? ni.value : null
+            finish(s.status === 'fulfilled' && !failure(s.value) ? s.value : null, devices, netv, null)
+        }
+
+        const finish = (
+            st: Status | null,
+            devices: Record<string, { rx: string; tx: string }> | null,
+            netv: { uptime: number; active_clients: number } | null,
+            dg: Diag | null,
+        ) => {
             /* Первый ответ роутера — конец «прошлого»: дальше на экране живое. */
             setStale(false)
-            const devices = d.status === 'fulfilled' && !failure(d.value) ? d.value.devices || {} : null
             if (devices) setDevs(devices)
-            if (e.status === 'fulfilled' && !failure(e.value)) setEngine(e.value)
-            if (g.status === 'fulfilled' && !failure(g.value)) { setDiag(g.value); setDiagOld(false) }
-            else setDiagOld(true)
-            if (ni.status === 'fulfilled' && !failure(ni.value)) setNet(ni.value)
+            if (netv) setNet(netv)
 
             /* Снимок для следующего открытия. Только то, что не вредит, устарев и будучи
              * помеченным: состояние выходов, счёт проверок и версия движка. Скорости сюда не
              * едут — они считаются из разницы двух опросов, и «прошлая скорость» это число
              * ни о чём. */
-            if (s.status === 'fulfilled' && !failure(s.value)) {
-                cacheSet('live', {
-                    status: s.value,
-                    diag: g.status === 'fulfilled' && !failure(g.value) ? g.value : null,
-                    build: null,
-                })
-            }
+            if (st) cacheSet('live', { status: st, diag: dg ?? diagNow.current, build: null })
 
             const now = Date.now()
             const ch: Record<string, { up: number; down: number }> = {}
-            if (s.status === 'fulfilled' && !failure(s.value))
-                for (const c of s.value.channels || [])
+            if (st)
+                for (const c of st.channels || [])
                     ch[c.name] = { up: c.bytes ?? 0, down: c.down_bytes ?? 0 }
             const dev: Record<string, { rx: number; tx: number }> = {}
             if (devices)
@@ -232,6 +255,33 @@ export function useLive(): Live {
                 setSpeed({ ch: chs, dev: devs2 })
             }
             prev.current = { t: now, ch, dev }
+        }
+
+        const load = async (force?: 'diag') => {
+            if (inflight) return
+            inflight = true
+            const withDiag = force === 'diag' || round % DIAG_EVERY === 0
+            round++
+            try {
+                if (legacy) { await loadLegacy(withDiag); return }
+                const r = await rpc.live(withDiag).catch((e) => asText(e))
+                if (stop) return
+                if (typeof r === 'string') {
+                    /* Метода нет — это не отказ роутера, а старый объект. Переходим на
+                     * прежние вызовы молча: человеку показывать нечего, всё работает. */
+                    legacy = true
+                    await loadLegacy(withDiag)
+                    return
+                }
+                const bad = failure(r)
+                if (bad) { setError(bad); setStale(false); return }
+                setStatus(r.status)
+                setError(null)
+                if (withDiag) {
+                    if (r.diag) { setDiag(r.diag); setDiagOld(false) }
+                    else if (r.diag_old) setDiagOld(true)
+                }
+                finish(r.status, r.devices || null, r.net || null, r.diag ?? null)
             } finally {
                 inflight = false
             }
@@ -254,7 +304,7 @@ export function useLive(): Live {
         const onVisible = () => {
             if (document.hidden) return
             prev.current = null
-            void load()
+            void load('diag')
         }
         document.addEventListener('visibilitychange', onVisible)
         return () => {
@@ -306,7 +356,7 @@ export function useLive(): Live {
     }, [nonce])
 
     return {
-        status, error, diag, diagOld, devs, engine, speed, build, net, releases, selfUpdate, stale,
+        status, error, diag, diagOld, devs, speed, build, net, releases, selfUpdate, stale,
         refresh: () => setNonce((n) => n + 1),
     }
 }
