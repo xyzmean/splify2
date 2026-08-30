@@ -347,16 +347,17 @@ PYEOF
     exit 0
 fi
 if [ "$1" = outputs ]; then
-    spec=""; kind=""; obfs=0
+    spec=""; kind=""; obfs=0; devs=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --spec) spec="$2"; shift 2 ;;
             --kind) kind="$2"; shift 2 ;;
             --obfs) obfs=1; shift ;;
+            --devices) devs=1; shift ;;
             *) shift ;;
         esac
     done
-    [ -s "$spec" ] && KIND="$kind" OBFS="$obfs" python3 - "$spec" <<'PYEOF'
+    [ -s "$spec" ] && KIND="$kind" OBFS="$obfs" DEVS="$devs" python3 - "$spec" <<'PYEOF'
 import json, os, sys
 try:
     d = json.load(open(sys.argv[1]))
@@ -369,7 +370,15 @@ for name, o in (d.get('outputs') or {}).items():
         if o.get('obfs'):
             print(name)
     elif not os.environ.get('KIND') or o.get('kind') == os.environ['KIND']:
-        print(name)
+        # --devices печатает УСТРОЙСТВО, а не имя выхода: у vless и xsteer оно выводится из
+        # имени (не длиннее IFNAMSIZ), но может быть задано в спеке явно. Выход без
+        # устройства (kind=direct) движок при этом пропускает.
+        if os.environ.get('DEVS') == '1':
+            dev = o.get('device') or (name[:15] if o.get('kind') != 'direct' else '')
+            if dev:
+                print(dev)
+        else:
+            print(name)
 PYEOF
 fi
 exit "${STEER_RC:-0}"
@@ -411,6 +420,15 @@ mkdir -p "$T/sysnet/lo" "$T/sysnet/br-lan" "$T/sysnet/lan1" "$T/sysnet/wan" \
 ln -s ../br-lan "$T/sysnet/lan1/master"          # порт внутри моста — не своя сеть
 for d in lo br-lan lan1 wan tailscale0 ztrfyzwvfa; do printf 'up\n' > "$T/sysnet/$d/operstate"; done
 printf 'down\n' > "$T/sysnet/br-guest/operstate"  # гостевой мост поднимут позже
+
+# Туннельные устройства — отдельной фикстурой (шов OUT_SYSNET): метод `devices` отвечает на
+# другой вопрос, чем client_nets, и отбирает по /sys/class/net/*/type. 65534 — ARPHRD_NONE
+# (wireguard, tun), у моста и порта тип другой, и в перечень они попасть не должны.
+mkdir -p "$T/outnet/wg0" "$T/outnet/br-lan" "$T/outnet/lan1"
+printf '65534\n' > "$T/outnet/wg0/type";    printf 'up\n'   > "$T/outnet/wg0/operstate"
+printf 'DEVTYPE=wireguard\n' > "$T/outnet/wg0/uevent"
+printf '772\n'   > "$T/outnet/br-lan/type"; printf 'up\n'   > "$T/outnet/br-lan/operstate"
+printf '1\n'     > "$T/outnet/lan1/type";   printf 'up\n'   > "$T/outnet/lan1/operstate"
 
 # ip: единственная подкоманда, которая нужна перечню сетей, — адреса устройства. Форма
 # строки как у настоящего `ip -4 -o addr show`, включая хвост после префикса: разбор обязан
@@ -462,6 +480,7 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         OBFS_DIRTY="$T/var/obfs-dirty" \
         HWID_SYSNET="${HWID_SYSNET_FIXTURE:-$T/sys/class/net}" \
         SYSNET="${SYSNET_FIXTURE:-$T/sysnet}" \
+        OUT_SYSNET="${OUT_SYSNET_FIXTURE:-$T/outnet}" \
         UCI_SPLIFY2="${UCI_SPLIFY2_FIXTURE:-$T/etc/config/splify2}" \
         SYSINFO_MODEL="$T/etc/sysinfo-model" \
         CURL_RESP_HDRS="${CURL_RESP_HDRS:-}" \
@@ -1837,6 +1856,47 @@ check "опущенное — опущенным, но из перечня не 
 # выбрать его законно, сеть появится вместе с адресом.
 check "у устройства без адреса подсетей нет" "" "$(netof "$out" br-guest)"
 check "метод объявлен в списке ubus" "yes" "$(rpcd_list | grep -q client_nets && echo yes || echo no)"
+
+# ---- I-161: смешанный пул не собрать, пока туннель выключен --------------------------
+# Метод `devices` отвечает на «куда можно выпустить трафик» и отбирал кандидатов по
+# /sys/class/net. Устройство выхода kind=vless/xsteer создаёт сам движок — вместе со своим
+# процессом, а не с настройкой, — поэтому настроенная, но остановленная сейчас локация в
+# перечень не попадала вовсе, и законную форму смешанного пула (устройство локации рядом с
+# wg0) с экрана было не собрать. Вопрос здесь про НАСТРОЙКУ: выключенная сегодня локация
+# завтра поднимется, и класть её в пул человек вправе сейчас.
+cat > "$T/etc/spec.json" <<'EOF'
+{ "schema": 1,
+  "outputs": {
+    "nl": { "kind": "vless", "sub_file": "/etc/steer/sub.txt" },
+    "hub": { "kind": "xsteer", "device": "xs0" },
+    "vpn": { "kind": "interface", "device": "wg0" },
+    "direct": { "kind": "direct" }
+  },
+  "channels": [] }
+EOF
+out="$(rpcd devices)"
+devs() { printf '%s' "$1" | python3 -c 'import json,sys
+print(" ".join(d["name"] for d in json.load(sys.stdin)["devices"]))'; }
+upof() { printf '%s' "$1" | python3 -c 'import json,sys
+n=[d for d in json.load(sys.stdin)["devices"] if d["name"]==sys.argv[1]]
+print(json.dumps(n[0]["up"]) if n else "НЕТ")' "$2"; }
+
+check "устройство выключенной локации подписки предлагается (I-161)" "yes" \
+      "$(case " $(devs "$out") " in *" nl "*) echo yes ;; *) echo no ;; esac)"
+check "устройство выключенного хаба xsteer — тоже, и своим именем из спеки (I-161)" "yes" \
+      "$(case " $(devs "$out") " in *" xs0 "*) echo yes ;; *) echo no ;; esac)"
+check "выключенное не выдаётся за поднятое" "false" "$(upof "$out" nl)"
+check "живой туннель остаётся первым и поднятым" "true" "$(upof "$out" wg0)"
+# Мост и порт по-прежнему не кандидаты: выход в них молча ничего не маршрутизирует.
+check "мост и порт в кандидаты не попадают" "wg0 nl xs0" "$(devs "$out")"
+# Живое устройство не задваивается: движок называет то же имя, что уже прочитано из /sys.
+cat > "$T/etc/spec.json" <<'EOF'
+{ "schema": 1,
+  "outputs": { "wg0": { "kind": "xsteer", "device": "wg0" } },
+  "channels": [] }
+EOF
+check "устройство, которое уже есть, не задваивается" "wg0" "$(devs "$(rpcd devices)")"
+printf '{"schema":1,"outputs":{},"channels":[]}\n' > "$T/etc/spec.json"
 
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo "ЕСТЬ ПРОВАЛЫ: $fails")"
 [ "$fails" -eq 0 ]
