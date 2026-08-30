@@ -30,6 +30,18 @@ function num(v: string | undefined): number | null {
     return Number.isFinite(n) && n >= 0 ? n : null
 }
 
+/** Объём периода словами панели: пусто ИЛИ НОЛЬ — ограничения нет.
+ *
+ *  Ноль здесь не «нисколько не выдано»: `total=0` — принятое у панелей (Marzban, Remnawave,
+ *  3x-ui и родня) обозначение безлимитного тарифа, и мобильные клиенты читают его так же.
+ *  Замерено на живой подписке (sub.skytunnel.pw): панель отдаёт `upload=0; download=0;
+ *  total=0; expire=…`, и обзор рисовал по этому «0 Б из 0 Б осталось» с пустой полосой — то
+ *  есть показывал исчерпанную подписку там, где ограничения нет вовсе. */
+function totalNum(v: string | undefined): number | null {
+    const n = num(v)
+    return n === 0 ? null : n
+}
+
 export interface QuotaView {
     /** Израсходовано за период по счёту ПАНЕЛИ: отдано плюс принято. */
     used: number
@@ -53,6 +65,15 @@ export interface QuotaView {
     /** Кончится раньше сброса. Только когда известны оба срока — иначе это не утверждение,
      *  а предположение, и красить им карточку нельзя. */
     tight: boolean
+    /** Остатка хватит дольше, чем длится период: при нынешнем темпе трафик не кончится.
+     *
+     *  Нужен потому, что «хватит при таком темпе» на медленном расходе даёт числа, которые
+     *  никто не читает: остаток в 200 ГБ при десяти мегабайтах в сутки — это двадцать тысяч
+     *  суток, и строка «на 20 000 дней» сообщает не срок, а то, что срока нет. Там, где
+     *  сравнивать не с чем (панель не назвала конец периода), считаем таким запас больше
+     *  года: за год подписка сменится, и число суток теряет смысл раньше, чем кончится
+     *  трафик. */
+    outlasts: boolean
     /** Когда спрашивали панель, словами. Пусто, если время не названо. */
     age: string
 }
@@ -92,7 +113,7 @@ export function readQuota(q: SubQuota, now: number = Date.now()): QuotaView {
     const up = num(q.up) ?? 0
     const down = num(q.down) ?? 0
     const used = up + down
-    const total = num(q.total)
+    const total = totalNum(q.total)
     const left = total === null ? null : Math.max(0, total - used)
     const part = total && total > 0 ? Math.min(1, used / total) : null
 
@@ -112,9 +133,12 @@ export function readQuota(q: SubQuota, now: number = Date.now()): QuotaView {
     const forecastDays =
         perDay && perDay > 0 && left !== null ? Math.floor(left / perDay) : null
     const tight = forecastDays !== null && daysLeft !== null && forecastDays < daysLeft
+    const outlasts =
+        forecastDays !== null &&
+        (daysLeft !== null ? forecastDays >= daysLeft : forecastDays > 365)
 
     return {
-        used, total, left, part, expire, daysLeft, perDay, forecastDays, tight,
+        used, total, left, part, expire, daysLeft, perDay, forecastDays, tight, outlasts,
         age: atMs ? agoText(now - atMs) : '',
     }
 }

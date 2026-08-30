@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { LoaderCircle, RefreshCw } from 'lucide-react'
+import { Eye, EyeOff, LoaderCircle, RefreshCw } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { rpc, type SubQuota } from '@/lib/rpc'
 import { human } from '@/lib/live'
@@ -39,7 +39,17 @@ type Snapshot = {
     node?: string
 }
 
-export default function SubscriptionCard({ outputs }: { outputs?: Status['outputs'] }) {
+export default function SubscriptionCard({
+    outputs,
+    devs,
+}: {
+    outputs?: Status['outputs']
+    /** Счётчики устройств роутера (`dev_stats`). Нужны там, где считать объём больше некому:
+     *  у WireGuard панели нет вовсе, а безлимитная подписка обычно отдаёт нули вместо
+     *  расхода. Знак бесконечности без числа отвечает только на половину вопроса — «сколько
+     *  можно», — а спрашивают ещё и «сколько уже прошло». */
+    devs?: Record<string, { rx: string; tx: string }> | null
+}) {
     const seen = useRef<Snapshot>(cacheGet<Snapshot>('card') || {})
     const remember = useCallback((p: Snapshot) => {
         seen.current = { ...seen.current, ...p }
@@ -79,6 +89,12 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
      * гигабайт не потрачено. Поэтому сначала беда, и только у поднятого выхода — числа. */
     const st = tunnelOut ? (outputs || {})[tunnelOut] : undefined
     const up = st?.up === true
+    /* Сколько прошло через устройство туннеля по счёту РОУТЕРА: rx — принятое, tx — отданное.
+     * Счёт идёт с последней перезагрузки, и об этом сказано подписью под числом: выдать его
+     * за расход периода значило бы соврать в меньшую сторону после каждой перезагрузки.
+     * Нуль — считать нечем: устройства ещё нет, или счётчики не приехали. */
+    const devStat = st?.device ? devs?.[st.device] : undefined
+    const flow = devStat ? (Number(devStat.rx) || 0) + (Number(devStat.tx) || 0) : 0
     const probing = st?.probe?.state === 'probing'
     const [geo, setGeo] = useState<{ cc?: string; ip?: string } | null>(seen.current.geo ?? null)
     const [node, setNode] = useState<string | null>(seen.current.node ?? null)
@@ -243,7 +259,14 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
                        «неизвестно», а «ограничения нет», поэтому знак бесконечности, а не
                        прочерк. */
                     <>
-                        <Unlimited note="объём не ограничен: у туннеля нет счётчика" />
+                        <Unlimited
+                            used={flow}
+                            note={
+                                flow > 0
+                                    ? 'объём не ограничен · сосчитал роутер, с перезагрузки'
+                                    : 'объём не ограничен: у туннеля нет счётчика'
+                            }
+                        />
                         <dl className="mt-3 space-y-1 text-[13px]">
                             <Location cc={geo?.cc} name={country(geo?.cc) || node} />
                             <Address ip={geo?.ip} />
@@ -293,11 +316,19 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
                                     <dd className="font-medium">{human(v.perDay)}</dd>
                                 </div>
                             )}
+                            {/* Запаса хватает дольше периода — знак бесконечности вместо числа
+                                суток. «На 20 000 дней» — не срок, а способ сказать «не
+                                кончится», и число такой длины человек всё равно не читает: он
+                                видит много цифр и идёт дальше. */}
                             {v.forecastDays !== null && (
                                 <div className="flex items-baseline justify-between gap-2">
                                     <dt className="text-subtle">хватит при таком темпе</dt>
                                     <dd className={`font-medium ${v.tight ? 'text-warning-fg' : ''}`}>
-                                        на {daysText(v.forecastDays)}
+                                        {v.outlasts ? (
+                                            <span aria-label="до конца периода с запасом">∞</span>
+                                        ) : (
+                                            `на ${daysText(v.forecastDays)}`
+                                        )}
                                     </dd>
                                 </div>
                             )}
@@ -314,11 +345,29 @@ export default function SubscriptionCard({ outputs }: { outputs?: Status['output
                             </p>
                         )}
                     </>
-                ) : v && v.expire !== null ? (
-                    /* Объёма нет, срок есть — подписка без ограничения по трафику. Показывать
-                       «осталось 0 из 0» было бы выдумкой интерфейса. */
+                ) : v && (v.expire !== null || v.used > 0 || flow > 0) ? (
+                    /* Объёма нет (панель не назвала его вовсе или назвала нулём — так панели
+                       обозначают безлимит), а срок или расход есть. Показывать «осталось 0 из
+                       0» было бы выдумкой интерфейса, поэтому здесь знак бесконечности, а
+                       рядом — сколько трафика через неё уже прошло.
+                       Чей это счёт, решается по одному правилу: панель, если она вообще
+                       считает, иначе роутер. Складывать их нельзя — это два счёта одного и
+                       того же с разных сторон и с разных моментов. */
                     <>
-                        <Unlimited note={`панель назвала только срок: сброс ${resetText(v.expire)}`} />
+                        <Unlimited
+                            used={v.used || flow}
+                            note={[
+                                'объём не ограничен',
+                                v.used > 0
+                                    ? 'по счёту панели'
+                                    : flow > 0
+                                      ? 'сосчитал роутер, с перезагрузки'
+                                      : '',
+                                v.expire !== null ? `сброс ${resetText(v.expire)}` : '',
+                            ]
+                                .filter(Boolean)
+                                .join(' · ')}
+                        />
                         <dl className="mt-3 space-y-1 text-[13px]">
                             {v.daysLeft !== null && (
                                 <div className="flex items-baseline justify-between gap-2">
@@ -370,14 +419,35 @@ function Location({ cc, name }: { cc?: string; name: string | null }) {
 }
 
 /** Бесконечность вместо числа. Знак, а не слово: он занимает то же место, что и остаток, и
- *  читается с той же строки — человек сравнивает «сколько осталось» глазами, не читая. */
-function Unlimited({ note }: { note: string }) {
+ *  читается с той же строки — человек сравнивает «сколько осталось» глазами, не читая.
+ *
+ *  ЧИСЛО РЯДОМ СО ЗНАКОМ — израсходованное. Одна бесконечность отвечает только на половину
+ *  вопроса: «ограничения нет» — это не «ничего не прошло», а второе спрашивают ровно так же
+ *  часто. Крупным идёт объём, мелким — «из ∞ израсходовано»: та же форма строки, что у
+ *  подписки с объёмом («68,0 ГБ из 200,0 ГБ осталось»), и глазу не нужно перестраиваться,
+ *  переходя от одной карточки к другой.
+ *
+ *  Считать нечем — остаётся один знак: нуль вместо числа читался бы как «трафика не было»,
+ *  а его никто не мерил. */
+function Unlimited({ used, note }: { used?: number; note: string }) {
     return (
         <>
             <div className="flex flex-wrap items-baseline gap-x-2">
-                <span className="text-[30px] font-semibold leading-none" aria-label="без ограничения">
-                    ∞
-                </span>
+                {used ? (
+                    <>
+                        <span className="text-[30px] font-semibold leading-none">{human(used)}</span>
+                        <span className="text-[13px] text-muted-foreground">
+                            из ∞ израсходовано
+                        </span>
+                    </>
+                ) : (
+                    <span
+                        className="text-[30px] font-semibold leading-none"
+                        aria-label="без ограничения"
+                    >
+                        ∞
+                    </span>
+                )}
             </div>
             <p className="mt-1 text-xs text-muted-foreground">{note}</p>
         </>
@@ -426,13 +496,47 @@ function useTween(target: number | null): number | null {
 /** Внешний адрес — тот, которым роутер виден снаружи через этот выход.
  *
  *  Показывается только когда соединение работает: адрес, оставшийся от прошлого измерения,
- *  рядом со сломанным туннелем читался бы как «всё в порядке». */
+ *  рядом со сломанным туннелем читался бы как «всё в порядке».
+ *
+ *  ЗАКРЫТ ПО УМОЛЧАНИЮ, как номер карты в банковском приложении. Обзор открывают при людях,
+ *  показывают с телефона, снимают с экрана видео — а адрес выхода это то, чем роутер виден
+ *  снаружи: по нему находят и узел, и того, кто за ним. Смотреть на него постоянно незачем,
+ *  он нужен раз в месяц и на секунду, поэтому цена «нажать глаз» здесь мизерная, а цена
+ *  случайно показанного адреса — нет.
+ *
+ *  Размыт, а не заменён точками: длина и форма адреса остаются на месте, и строка не
+ *  прыгает, когда её открывают. Открытое состояние живёт до перерисовки карточки и никуда
+ *  не запоминается — закрытое обязано быть тем, что человек видит, открыв страницу. */
 function Address({ ip }: { ip?: string }) {
+    const [shown, setShown] = useState(false)
     if (!ip) return null
     return (
         <div className="flex items-baseline justify-between gap-2">
             <dt className="text-subtle">внешний адрес</dt>
-            <dd className="min-w-0 truncate text-right font-mono text-[12px] font-medium">{ip}</dd>
+            <dd className="flex min-w-0 items-center justify-end gap-1.5 text-right">
+                <span
+                    className="min-w-0 truncate font-mono text-[12px] font-medium"
+                    /* Размытие — стилем, а не классом: оно обязано работать и там, где
+                       утилита не попала в сборку. Выделять закрытый адрес мышью нельзя —
+                       иначе он копируется из-под размытия. */
+                    style={shown ? undefined : { filter: 'blur(4px)', userSelect: 'none' }}
+                    aria-hidden={!shown}
+                >
+                    {ip}
+                </span>
+                <button
+                    type="button"
+                    onClick={() => setShown((v) => !v)}
+                    aria-label={shown ? 'скрыть внешний адрес' : 'показать внешний адрес'}
+                    className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+                >
+                    {shown ? (
+                        <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+                    ) : (
+                        <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+                    )}
+                </button>
+            </dd>
         </div>
     )
 }

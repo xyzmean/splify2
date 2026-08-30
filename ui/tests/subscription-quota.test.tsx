@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/preact'
+import { fireEvent, render, screen, waitFor } from '@testing-library/preact'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import SubscriptionCard from '@/components/SubscriptionCard'
 import { rpc, type SubQuota } from '@/lib/rpc'
@@ -72,6 +72,18 @@ describe('карточка «Подписка»: остаток трафика (
         expect(screen.getByText('на 4 дня')).toBeInTheDocument()
     })
 
+    it('трафик не кончится до сброса — бесконечность вместо числа суток', async () => {
+        // 100 МБ за двое суток на остатке в 68 ГБ — это больше тысячи дней, а сброс через
+        // пятнадцать. «На 1 392 дня» здесь не срок, а способ сказать «не кончится».
+        vi.spyOn(rpc, 'subInfo').mockResolvedValue(
+            info({ quota: quota({ since_used: String(132 * GB - 100 * 1024 ** 2) }) }),
+        )
+        render(<SubscriptionCard />)
+        expect(await screen.findByText('хватит при таком темпе')).toBeInTheDocument()
+        expect(screen.getByLabelText('до конца периода с запасом')).toBeInTheDocument()
+        expect(screen.queryByText(/^на \d+ дн/)).toBeNull()
+    })
+
     it('темп ещё не измерен — строк про темп нет вовсе, а остаток есть', async () => {
         vi.spyOn(rpc, 'subInfo').mockResolvedValue(
             info({ quota: quota({ since: now() - 600, since_used: String(131 * GB) }) }),
@@ -120,12 +132,57 @@ describe('карточка «Подписка»: остаток трафика (
         await waitFor(() => expect(container.textContent).toBe(''))
     })
 
-    it('объём не назван, срок назван — знак бесконечности, а не «осталось 0 из 0»', async () => {
+    it('объём не назван, срок назван — бесконечность, а не «осталось 0 из 0»', async () => {
+        // И рядом с бесконечностью — сколько трафика через неё уже прошло: «ограничения нет»
+        // отвечает только на половину вопроса, вторая половина — «сколько я скачал».
         vi.spyOn(rpc, 'subInfo').mockResolvedValue(info({ quota: quota({ total: '' }) }))
         render(<SubscriptionCard />)
-        expect(await screen.findByText('∞')).toBeInTheDocument()
-        expect(screen.getByText(/панель назвала только срок/)).toBeInTheDocument()
+        expect(await screen.findByText('132,0 ГБ')).toBeInTheDocument()
+        expect(screen.getByText('из ∞ израсходовано')).toBeInTheDocument()
+        expect(screen.getByText(/по счёту панели/)).toBeInTheDocument()
         expect(screen.queryByText(/осталось/)).toBeNull()
+    })
+
+    it('панель назвала объём НУЛЁМ — это безлимит, а не исчерпанная подписка', async () => {
+        // Так отвечают живые панели (замерено на sub.skytunnel.pw): `upload=0; download=0;
+        // total=0; expire=…`. Ноль в total — принятое обозначение безлимита, и прочитанный
+        // буквально он рисовал «0 Б из 0 Б осталось» с пустой полосой.
+        vi.spyOn(rpc, 'subInfo').mockResolvedValue(
+            info({ quota: quota({ up: '0', down: '0', total: '0' }) }),
+        )
+        render(<SubscriptionCard />)
+        expect(await screen.findByText('∞')).toBeInTheDocument()
+        expect(screen.getByText(/объём не ограничен/)).toBeInTheDocument()
+        expect(screen.queryByText(/из 0 Б|осталось/)).toBeNull()
+    })
+
+    it('панель расход не считает — считает роутер, и сказано, чей это счёт', async () => {
+        vi.spyOn(rpc, 'subInfo').mockResolvedValue(
+            info({ quota: quota({ up: '0', down: '0', total: '0' }) }),
+        )
+        render(
+            <SubscriptionCard
+                outputs={OUT_VLESS}
+                devs={{ vl: { rx: String(20 * GB), tx: String(2 * GB) } }}
+            />,
+        )
+        expect(await screen.findByText('22,0 ГБ')).toBeInTheDocument()
+        expect(screen.getByText('из ∞ израсходовано')).toBeInTheDocument()
+        expect(screen.getByText(/сосчитал роутер, с перезагрузки/)).toBeInTheDocument()
+    })
+
+    it('счёт панели и счёт роутера не складываются: панель главнее', async () => {
+        // Два счёта одного и того же с разных сторон и с разных моментов. Сумма была бы
+        // числом, которого не наблюдал никто.
+        vi.spyOn(rpc, 'subInfo').mockResolvedValue(info({ quota: quota({ total: '0' }) }))
+        render(
+            <SubscriptionCard
+                outputs={OUT_VLESS}
+                devs={{ vl: { rx: String(20 * GB), tx: String(2 * GB) } }}
+            />,
+        )
+        expect(await screen.findByText('132,0 ГБ')).toBeInTheDocument()
+        expect(screen.queryByText(/154,0 ГБ|22,0 ГБ/)).toBeNull()
     })
 
     it('отказ метода — не то же, что молчание панели: причина видна дословно', async () => {
@@ -171,6 +228,21 @@ describe('локация и туннель без подписки', () => {
         render(<SubscriptionCard outputs={OUT_VLESS} />)
         expect(await screen.findByText(/Польша №2/)).toBeInTheDocument()
         expect(screen.queryByText(/Авто/)).toBeNull()
+    })
+
+    it('WireGuard: у роутера счётчик есть — бесконечность с числом', async () => {
+        // У туннеля нет панели, но есть устройство, и роутер считает всё, что через него
+        // прошло. Одна бесконечность здесь молчит о том, что видно в системе.
+        vi.spyOn(rpc, 'subInfo').mockResolvedValue(info({ kind: 'none', present: false }))
+        render(
+            <SubscriptionCard
+                outputs={OUT_WG}
+                devs={{ wg0: { rx: String(3 * GB), tx: String(GB) } }}
+            />,
+        )
+        expect(await screen.findByText('4,0 ГБ')).toBeInTheDocument()
+        expect(screen.getByText('из ∞ израсходовано')).toBeInTheDocument()
+        expect(screen.getByText(/сосчитал роутер, с перезагрузки/)).toBeInTheDocument()
     })
 
     it('WireGuard: бесконечность вместо числа, и наружу никто не идёт', async () => {
@@ -376,6 +448,21 @@ describe('соединения нет — карточка про беду, а �
         expect(await screen.findByText(/Германия/)).toBeInTheDocument()
         expect(screen.getByText('внешний адрес')).toBeInTheDocument()
         expect(screen.getByText('1.2.3.4')).toBeInTheDocument()
+    })
+
+    it('внешний адрес закрыт, пока его не открыли глазом', async () => {
+        // Обзор открывают при людях и снимают с экрана. Адрес выхода — то, чем роутер виден
+        // снаружи, и показывать его постоянно незачем: смотрят на него раз в месяц.
+        render(<SubscriptionCard outputs={OUT_VLESS} />)
+        const ip = await screen.findByText('1.2.3.4')
+        // Адрес остаётся в строке — открытие не должно двигать соседние строки, — но
+        // прочитать его нельзя и выделить мышью тоже.
+        expect(ip).toHaveStyle({ filter: 'blur(4px)', userSelect: 'none' })
+        fireEvent.click(screen.getByRole('button', { name: 'показать внешний адрес' }))
+        expect(screen.getByText('1.2.3.4')).not.toHaveStyle({ filter: 'blur(4px)' })
+        // И обратно: глаз закрывает адрес, а не только открывает.
+        fireEvent.click(screen.getByRole('button', { name: 'скрыть внешний адрес' }))
+        expect(screen.getByText('1.2.3.4')).toHaveStyle({ filter: 'blur(4px)' })
     })
 })
 
