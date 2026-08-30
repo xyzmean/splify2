@@ -27,6 +27,16 @@ OUT=out
 PKG=build/pkg
 RES="$PKG/www/luci-static/resources/splify2"
 
+# Куда уезжает вывод двух самых длинных шагов — сборки интерфейса и упаковки (I-044, R-034).
+#
+# ЗАЧЕМ ФАЙЛ, А НЕ ПРЯМОЙ ВЫВОД. На успехе печатать полтора экрана tsc и vite незачем: сборка
+# зовётся из релизного workflow, и шум там прячет то немногое, что стоит читать. А на провале
+# нужна ровно эта диагностика: без неё человек получал одну строку «сборка интерфейса
+# провалилась» и запускал сборку во второй раз руками, чтобы узнать причину. Файл даёт оба
+# поведения разом.
+BUILD_LOG=build/build.log
+mkdir -p build
+
 echo "splify2 $VERSION"
 
 # Каждый метод rpcd обязан быть в ACL LuCI, иначе он работает из ssh и НЕ работает из
@@ -121,7 +131,11 @@ bad="$(grep -rEn --include='*.tsx' '<h[1-6][^>]*className="[^"]*(text-\[[0-9]|te
     exit 1
 }
 
-( cd ui && npm run build >/dev/null 2>&1 ) || { echo "сборка интерфейса провалилась"; exit 1; }
+( cd ui && npm run build ) > "$BUILD_LOG" 2>&1 || {
+    echo "сборка интерфейса провалилась:"
+    cat "$BUILD_LOG"
+    exit 1
+}
 
 rm -rf "$PKG"
 mkdir -p "$RES" "$PKG/etc/init.d" "$PKG/usr/libexec/rpcd" "$PKG/usr/sbin" "$PKG/etc/splify2" \
@@ -255,14 +269,18 @@ test -s "$PKG/etc/steer/lists/zm-github.lst" || {
     echo "в пакете нет etc/steer/lists/zm-github.lst — фикс Zapret Manager не сработает"; exit 1; }
 
 mkdir -p "$OUT"
+# `&&` после установки apk-tools, а не `;`. С точкой с запятой провал установки игнорировался
+# и проявлялся командой позже — как отсутствующий `apk mkpkg`, о чём говорилось «упаковка
+# провалилась». Причина (нет сети в контейнере, зеркало alpine не отвечает) при этом не
+# называлась вовсе, а она совсем не та, о которой думает читающий это сообщение.
 docker run --rm -v "$PWD":/w -w /w alpine:latest sh -c \
-    "apk add --no-cache apk-tools >/dev/null 2>&1; apk mkpkg \
+    "apk add --no-cache apk-tools >/dev/null 2>&1 && apk mkpkg \
        --info name:luci-app-splify2 --info version:$VERSION-r1 \
        --info description:'splify2: каналы, выходы и списки поверх движка steer' \
        --info arch:noarch --info depends:'luci-base' \
        --script post-install:build/scripts/post-install \
-       -F $PKG -o $OUT/luci-app-splify2-$VERSION-1_noarch.apk" >/dev/null 2>&1 \
-    || { echo "упаковка apk провалилась"; exit 1; }
+       -F $PKG -o $OUT/luci-app-splify2-$VERSION-1_noarch.apk" > "$BUILD_LOG" 2>&1 \
+    || { echo "упаковка apk провалилась:"; cat "$BUILD_LOG"; exit 1; }
 
 # ---- тот же пакет в формате opkg ---------------------------------------------
 #
