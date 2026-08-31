@@ -74,17 +74,89 @@ describe('круг опроса: один вызов вместо пяти', () 
         vi.useFakeTimers()
         renderHook(() => useLive())
         await act(async () => { await Promise.resolve() })
-        expect(live).toHaveBeenLastCalledWith(true)
+        expect(live).toHaveBeenLastCalledWith(true, true)
 
         // Три круга подряд идут без проверок: приговор меняется, когда что-то применили или
         // туннель упал, — про первое интерфейс знает сам, второе видно по полю `up` выхода.
         for (const round of [1, 2, 3]) {
             await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
-            expect(live, `круг ${round}`).toHaveBeenLastCalledWith(false)
+            expect(live, `круг ${round}`).toHaveBeenLastCalledWith(false, false)
         }
-        // Двадцать секунд прошло — спрашиваем снова.
+        // Двадцать секунд прошло — спрашиваем снова. Память при этом НЕ просится: она нужна
+        // ровно первому кругу, тому, что рисует экран, а дальше страница и так опрашивает
+        // роутер каждые пять секунд — там память была бы не ускорением, а враньём.
         await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
-        expect(live).toHaveBeenLastCalledWith(true)
+        expect(live).toHaveBeenLastCalledWith(true, false)
+    })
+
+    // ---- память движка на первом круге ------------------------------------------------
+    //
+    // Движок помнит свой последний полный ответ и умеет отдать его немедленно
+    // (`steer status --fast`, снимок в состоянии). Полный ответ стоит 91 мс на стенде и нужен
+    // ПЕРВЫМ при открытии окна — то есть человек ждёт его на пустом экране вместе со всем
+    // остальным, что страница спрашивает в тот же миг.
+    //
+    // Опасность здесь не в скорости, а в честности: запомненный ответ описывает прошлое, и
+    // нарисовать его живым значит поставить «Работает» на туннеле, который к этому моменту
+    // упал. Поэтому проверяется не только «спросили память», но и всё, что из этого следует.
+    it('первый круг просит память движка, а следующий — нет', async () => {
+        const live = mockLive()
+        vi.useFakeTimers()
+        renderHook(() => useLive())
+        await act(async () => { await Promise.resolve() })
+        // Второй аргумент — просьба отдать запомненное.
+        expect(live.mock.calls[0]?.[1]).toBe(true)
+        await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+        for (const [i, call] of live.mock.calls.slice(1).entries())
+            expect(call[1], `круг ${i + 2}`).toBe(false)
+    })
+
+    it('запомненный ответ помечен прошлым и тут же догоняется свежим', async () => {
+        // Первый ответ — память движка (`cached`), второй — измерение.
+        const live = vi.spyOn(rpc, 'live').mockImplementation(((_d: boolean, fast: boolean) =>
+            Promise.resolve({
+                status: fast ? { ...STATUS, cached: true, at: 1000 } : STATUS,
+                devices: DEVICES, net: NET, diag: DIAG,
+            })) as never)
+        const { result } = renderHook(() => useLive())
+
+        // Свежий круг выпускается СРАЗУ за памятью, а не через пять секунд: просить память
+        // имеет смысл только затем, чтобы нарисовать экран немедленно, а оставить её на
+        // экране на пять секунд значило бы показывать прошлое там, где до сих пор стояло
+        // «Загрузка…».
+        await waitFor(() => expect(live).toHaveBeenCalledTimes(2))
+        await waitFor(() => expect(result.current.stale).toBe(false))
+        expect(result.current.status?.cached).toBeUndefined()
+    })
+
+    it('скорость по запомненному ответу не считается вовсе', async () => {
+        // Счётчики в памяти движка — те, что он видел до пяти минут назад. Взяв их точкой
+        // отсчёта, следующий круг поделил бы разницу за пять минут на свои доли секунды и
+        // показал бы скорость в сотню раз больше настоящей.
+        const CH = [{ name: 'ru', out: 'wg', kind: 'prefixes', live: true, bytes: 1_000_000, lists: 1, channels: [] }]
+        vi.spyOn(rpc, 'live').mockImplementation(((_d: boolean, fast: boolean) =>
+            Promise.resolve({
+                status: fast
+                    ? { ...STATUS, cached: true, at: 1000, channels: CH }
+                    : { ...STATUS, channels: [{ ...CH[0], bytes: 1_000_000 }] },
+                devices: DEVICES, net: NET, diag: DIAG,
+            })) as never)
+        const { result } = renderHook(() => useLive())
+        await waitFor(() => expect(result.current.stale).toBe(false))
+        // Ни одной строки скорости: точку отсчёта поставил свежий круг, и первая скорость
+        // появится на следующем опросе — там же, где появлялась всегда.
+        expect(result.current.speed.ch.ru).toBeUndefined()
+    })
+
+    it('движок старее ключа: ответ приходит живым, и второго круга не нужно', async () => {
+        // Бэкенд, спросив память у движка, который её не умеет, молча спрашивает состояние
+        // по-старому — и отвечает БЕЗ `cached`. Тогда догоняющий круг был бы лишней работой
+        // роутера: свежее уже на экране.
+        const live = mockLive()
+        const { result } = renderHook(() => useLive())
+        await waitFor(() => expect(result.current.status).not.toBeNull())
+        expect(live).toHaveBeenCalledTimes(1)
+        expect(result.current.stale).toBe(false)
     })
 
     it('объект старее интерфейса: круг идёт прежними вызовами, а экран не пустеет', async () => {

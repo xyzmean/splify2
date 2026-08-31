@@ -16,6 +16,8 @@
           "devices",
           "client_nets",
           "local_lists",
+          "list_custom",
+          "list_get",
           "engine",
           "sub_info",
           "sub_list",

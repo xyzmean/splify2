@@ -94,7 +94,9 @@ function declare<T>(method: string, params: string[] = []) {
 
 const specGetRaw = declare<Spec>('spec_get')
 const appliedGetRaw = declare<Spec>('applied_get')
-const listPutRaw = declare<unknown>('list_put', ['name', 'kind', 'text', 'url', 'append'])
+const listPutRaw = declare<unknown>('list_put',
+    ['name', 'kind', 'text', 'url', 'append', 'source', 'filename'])
+const listGetRaw = declare<unknown>('list_get', ['name', 'kind', 'offset'])
 const listRemoveByName = declare<unknown>('list_remove', ['name', 'kind'])
 const backupGetRaw = declare<unknown>('backup_get', ['offset'])
 const backupPutRaw = declare<unknown>('backup_put', ['text', 'append', 'final'])
@@ -196,6 +198,13 @@ export const rpc = {
         text?: string
         url?: string
         append?: boolean
+        /** ОТКУДА список: набран руками, выбран файлом, дан ссылкой. Посылается явно, а не
+         *  выводится из того, что мы прислали: файл едет тем же полем `text`, порциями, и
+         *  различить его от набранного руками на той стороне нечем. А различать надо — правят
+         *  их разными способами (см. CustomLists). */
+        source?: 'text' | 'file' | 'url'
+        /** Как файл назывался у человека. Только для показа: «выбран blocked.txt». */
+        filename?: string
     }) =>
         /* Булево, а не 1/0. Метод объявлен в бэкенде как `json_add_boolean append`, то
          * есть политика ubus для этого поля — BOOL, а число приезжает как INT32.
@@ -207,7 +216,8 @@ export const rpc = {
          * Стенд отправлял настоящее булево (`"append":true`) и потому был зелёным на
          * типе, которого в браузере не бывает. Остальные булевы поля интерфейс шлёт
          * правильно — см. steerInstall. */
-        listPutRaw(p.name, p.kind, p.text ?? '', p.url ?? '', p.append ?? false) as Promise<{
+        listPutRaw(p.name, p.kind, p.text ?? '', p.url ?? '', p.append ?? false,
+                   p.source ?? '', p.filename ?? '') as Promise<{
             ok: boolean
             error?: string
             path?: string
@@ -220,6 +230,47 @@ export const rpc = {
      *  тот же, что и у списков издателя. */
     listRemoveCustom: (name: string, kind: 'domains' | 'prefixes') =>
         listRemoveByName(name, kind) as Promise<{ ok: boolean; error?: string }>,
+
+    /** СВОИ списки с происхождением: чем каждый завели и, значит, чем его править.
+     *
+     *  Отдельно от localLists, потому что вопросы разные: тот отвечает «что уже лежит на
+     *  диске» про ВСЕ списки, включая издательские, и считается одним awk по всему каталогу;
+     *  здесь — единицы своих списков и то, чего у издательских не бывает.
+     *
+     *  `source` пустой значит «неизвестно»: список завели до появления этой записи, положили
+     *  в каталог руками или вернули из архива настроек. Тогда интерфейс предлагает все три
+     *  способа правки — врать одним неверным хуже, чем признать незнание. */
+    listCustom: declare<{
+        lists: {
+            name: string
+            kind: 'domains' | 'prefixes'
+            path: string
+            count: number
+            bytes: number
+            source: '' | 'text' | 'file' | 'url'
+            url: string
+            filename: string
+            at: number
+        }[]
+    }>('list_custom'),
+
+    /** Записи своего списка обратно, порциями по байтам.
+     *
+     *  Нужно редактору набранного руками: пустое поле вместо записей — это предложение
+     *  незаметно потерять набранное, а не «начни заново». Куски приходят байт в байт (границы
+     *  не по строкам), поэтому склеивать их надо простой конкатенацией. */
+    listGet: (name: string, kind: 'domains' | 'prefixes', offset = 0) =>
+        listGetRaw(name, kind, offset) as Promise<{
+            ok: boolean
+            error?: string
+            name?: string
+            kind?: string
+            total?: number
+            offset?: number
+            next?: number
+            eof?: boolean
+            text?: string
+        }>,
 
     /** Devices that could serve as an interface output — tunnels first. */
     devices: declare<{ devices: { name: string; up: boolean; kind: string }[] }>('devices'),
@@ -483,6 +534,13 @@ export const rpc = {
      *  `diag` просит проверки, и просит их не каждый круг: они вдвое дороже состояния, а
      *  меняются реже — см. useLive, где записано, когда именно.
      *
+     *  `fast` просит движок отдать ЗАПОМНЕННОЕ состояние вместо измеренного: он держит свой
+     *  последний полный ответ и печатает его немедленно, не разбирая спеку и не спрашивая ни
+     *  /sys, ни nft. Просит его только ПЕРВЫЙ круг — тот, что рисует экран; следом сразу же
+     *  идёт обычный круг за свежим. Ответ на быстрый круг несёт `status.cached` и
+     *  `status.at`, и пока свежий в пути, экран говорит «Обновление…» — рисовать память
+     *  живой нельзя.
+     *
      *  Метода нет — движок и объект старее интерфейса (пакет обновили, rpcd не перезапустили):
      *  useLive возвращается к пяти прежним вызовам, и ни один из них никуда не делся. */
     live: declare<{
@@ -494,7 +552,7 @@ export const rpc = {
         diag?: { checks: { id: string; verdict: 'ok' | 'note' | 'warn' | 'fail'; what: string; why: string }[]; warn: number; fail: number }
         /** Проверок не умеет сам движок (не объект): отдельное сообщение, а не молчание. */
         diag_old?: true
-    }>('live', ['diag']),
+    }>('live', ['diag', 'fast']),
 
     /** Счётчики устройств из /sys/class/net.
      *

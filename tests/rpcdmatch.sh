@@ -870,8 +870,112 @@ out="$(rpcd list_remove '{"name":"used"}')"
 check "занятый каналом свой список не удаляется (R-037)" \
       "false" "$(printf '%s' "$out" | jget ok)"
 
+# ---- ОТКУДА взялся свой список, и правка по этому же разделению ----------------
+#
+# Изменить свой список было нечем: рядом с ним стояла одна кнопка — удалить. А правят три
+# способа ввода по-разному, и это не оформление: у файла меняют ФАЙЛ, у ссылки — ССЫЛКУ, у
+# набранного руками — сами ЗАПИСИ. Не зная происхождения, интерфейс вынужден предлагать все
+# три всем — то есть предлагать заменить файл на двадцать тысяч строк тем, что человек
+# наберёт в текстовом поле.
+reset_logs
+rpcd list_put '{"name":"fromfile","kind":"prefixes","text":"10.9.0.0/16\n","source":"file","filename":"blocked.txt"}' >/dev/null
+out="$(rpcd list_custom)"
+check "происхождение «файл» запомнено вместе с именем файла" \
+      "file blocked.txt" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys
+for l in json.load(sys.stdin)["lists"]:
+    if l["name"] == "fromfile": print(l["source"], l["filename"])')"
+
+rpcd list_put '{"name":"fromurl","kind":"domains","url":"https://example.invalid/my.lst","source":"url"}' >/dev/null
+out="$(rpcd list_custom)"
+check "происхождение «ссылка» запомнено вместе со ссылкой" \
+      "url https://example.invalid/my.lst" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys
+for l in json.load(sys.stdin)["lists"]:
+    if l["name"] == "fromurl": print(l["source"], l["url"])')"
+
+# Поля `source` нет вовсе — так шлёт интерфейс постарше. Считаем по тому, что пришло: ссылка
+# значит ссылку, текст значит «руками». Это ровно прежнее поведение, только теперь записанное.
+rpcd list_put '{"name":"oldway","kind":"prefixes","text":"10.8.0.0/16\n"}' >/dev/null
+out="$(rpcd list_custom)"
+check "без поля source происхождение выводится из того, что пришло" \
+      "text" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys
+for l in json.load(sys.stdin)["lists"]:
+    if l["name"] == "oldway": print(l["source"])')"
+
+# Запись о происхождении НЕ должна выглядеть ещё одним списком: и local_lists, и сборка архива
+# обходят каталог по `*.lst`, а записи вида «source=file» санитайзер отбросил бы все до одной.
+out="$(rpcd local_lists)"
+check "запись о происхождении не видна как список" \
+      "нет" \
+      "$(printf '%s' "$out" | grep -q '\.src' && echo есть || echo нет)"
+
+# Порции запомнились по ПЕРВОЙ, а не по последней: порции — это один и тот же файл, и запись
+# при каждой означала бы, что имя файла берётся от куска, который его не несёт.
+rpcd list_put '{"name":"chunked","kind":"prefixes","text":"10.1.0.0/16\n","source":"file","filename":"big.txt"}' >/dev/null
+rpcd list_put '{"name":"chunked","kind":"prefixes","text":"10.2.0.0/16\n","append":true,"source":"file"}' >/dev/null
+out="$(rpcd list_custom)"
+check "имя файла не теряется на следующих порциях" \
+      "file big.txt" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys
+for l in json.load(sys.stdin)["lists"]:
+    if l["name"] == "chunked": print(l["source"], l["filename"])')"
+
+# Записи обратно: редактор набранного руками обязан показать то, что лежит на роутере.
+# Пустое поле вместо записей — это не «начни заново», а предложение молча потерять набранное.
+out="$(rpcd list_get '{"name":"oldway","kind":"prefixes"}')"
+check "записи своего списка читаются обратно" "10.8.0.0/16" \
+      "$(printf '%s' "$out" | jget text | tr -d '\n')"
+check "и признак конца выставлен" "true" "$(printf '%s' "$out" | jget eof)"
+
+# Порции нарезаются по БАЙТАМ и приезжают байт в байт. Потерянный на границе перевод строки
+# склеивает две записи в одну («10.0.0.0/810.1.0.0/8»), и обе исчезают из канала молча.
+printf '10.0.0.0/8\n10.1.0.0/8\n10.2.0.0/8\n' > "$T/lists/custom/bytes.lst"
+first="$(rpcd list_get '{"name":"bytes","kind":"prefixes","offset":0}')"
+out="$( { printf '%s\n' '{"name":"bytes","kind":"prefixes","offset":0}'; } | env \
+    SANDBOX="$T" PATH="$T/bin:$PATH" \
+    JSHN_SH="$ROOT/tests/stub/jshn.sh" FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
+    FAST_SH="$ROOT/files/usr/lib/splify2/fast.sh" \
+    STEER="$T/bin/steer" SPEC="$T/etc/spec.json" LISTS="$T/lists" \
+    SUB="$T/etc/sub.txt" MANIFEST="$T/etc/manifest.json" \
+    LIST_CHUNK=11 sh "$SCRIPT" call list_get 2>/dev/null)"
+check "первый кусок ровно в предел и с переводом строки на конце" "10.0.0.0/8" \
+      "$(printf '%s' "$out" | jget text | tr -d '\n')"
+check "и конец файла на первом куске не объявлен" "false" "$(printf '%s' "$out" | jget eof)"
+check "следующее смещение — по СЧИТАННЫМ байтам" "11" "$(printf '%s' "$out" | jget next)"
+check "весь файл одним куском отдаётся целиком" "3" \
+      "$(printf '%s' "$first" | jget text | grep -c .)"
+
+# Правке подлежит только СВОЙ список: список издателя приезжает по расписанию, и всякая
+# правка была бы стёрта следующим обновлением молча. Читать его этим методом нельзя вовсе —
+# он смотрит только в custom/.
+printf '1.2.3.0/24\n' > "$T/lists/news.lst"
+out="$(rpcd list_get '{"name":"news","kind":"prefixes"}')"
+check "список издателя этим методом не читается" "false" "$(printf '%s' "$out" | jget ok)"
+
+out="$(rpcd list_get '{"name":"../../etc/passwd","kind":"prefixes"}')"
+check "выйти из каталога списков именем нельзя и здесь" "false" "$(printf '%s' "$out" | jget ok)"
+
+# Удаление списка снимает и запись о происхождении: оставленная, она переехала бы на
+# СЛЕДУЮЩИЙ список того же имени и рассказала бы про него чужую правду.
+rpcd list_remove '{"name":"fromfile","kind":"prefixes"}' >/dev/null
+check "запись о происхождении удалена вместе со списком" "нет" \
+      "$([ -f "$T/lists/custom/fromfile.lst.src" ] && echo есть || echo нет)"
+
+# Метод, которого нет в ACL, вызвать из LuCI нельзя — метод есть, а кнопка не работает.
+acl="$ROOT/luci/root/usr/share/rpcd/acl.d/luci-app-splify2.json"
+check "правка списков разрешена в ACL на чтение" "yes" \
+      "$(python3 -c 'import json,sys
+r = json.load(open(sys.argv[1]))["luci-app-splify2"]["read"]["ubus"]["splify2"]
+print("yes" if "list_custom" in r and "list_get" in r else "no")' "$acl")"
+
 # Метод, которого нет в списке методов, ubus не покажет вовсе.
 out="$(rpcd_list)"
+check "методы правки списков объявлены в списке" "yes" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+print("yes" if "list_custom" in d and "list_get" in d else "no")')"
 check "оба метода объявлены в списке (R-017)" \
       "yes" "$(printf '%s' "$out" | python3 -c 'import json,sys
 d = json.load(sys.stdin)
