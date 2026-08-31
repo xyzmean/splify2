@@ -321,6 +321,66 @@ case "${1:-}" in
         [ -n "${STEER_JSON:-}" ] && printf '%s\n' "$STEER_JSON"
         exit "${STEER_RC:-0}"
         ;;
+    # ПОДПИСКА. Скачивание, разбор заголовков панели, идентификатор устройства и арифметика
+    # остатка трафика живут в ДВИЖКЕ (steer sub-fetch / sub-quota / sub-hwid), а не здесь: см.
+    # steer/src/ext/subfetch.c и стенд steer/tests/subfetchmatch.c, где всё это и проверяется.
+    #
+    # Заглушке поэтому незачем повторять поведение движка — и повторять его было бы вредно:
+    # проверялась бы заглушка, а не код. Она делает ровно то, что важно этому стенду:
+    # протоколирует аргументы (по ним видно, ЧТО именно спросил объект rpcd), кладёт файлы туда,
+    # куда просили, и отдаёт заданный ответ.
+    sub-hwid)
+        printf '{"hwid":"%s","os":"OpenWrt 25.12.5","model":"Xiaomi AX3000T"}\n' \
+               "${STEER_HWID-splify2-9c53221f0abc9c53}"
+        exit 0
+        ;;
+    sub-fetch)
+        shift
+        _out=""; _info=""; _url=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --out) _out="$2"; shift 2 ;;
+                --info) _info="$2"; shift 2 ;;
+                *) _url="$1"; shift ;;
+            esac
+        done
+        printf '%s %s %s\n' "$_url" "$_out" "$_info" >> "$SANDBOX/subfetch.log"
+        if [ -n "${STEER_SUB_RC:-}" ] && [ "$STEER_SUB_RC" != 0 ]; then
+            printf '{"ok":false,"error":"подписка не скачалась"}\n'
+            exit "$STEER_SUB_RC"
+        fi
+        [ -n "$_out" ] && printf '%s\n' "${STEER_SUB_BODY:-vless://k@h:443#n}" > "$_out"
+        if [ -n "$_info" ]; then
+            if [ -n "${STEER_SUB_INFO:-}" ]; then printf '%s\n' "$STEER_SUB_INFO" > "$_info"
+            else rm -f "$_info"
+            fi
+        fi
+        if [ -n "${STEER_SUB_JSON:-}" ]; then
+            printf '%s\n' "$STEER_SUB_JSON"
+        else
+            printf '{"ok":true,"url":"%s","usable":1,"title":"","hwid_sent":true}\n' "$_url"
+        fi
+        exit 0
+        ;;
+    sub-quota)
+        shift
+        _info=""; _url=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --info) _info="$2"; shift 2 ;;
+                *) _url="$1"; shift ;;
+            esac
+        done
+        printf '%s %s\n' "$_url" "$_info" >> "$SANDBOX/subquota.log"
+        [ -n "${STEER_QUOTA_RC:-}" ] && [ "$STEER_QUOTA_RC" != 0 ] && exit "$STEER_QUOTA_RC"
+        if [ -n "$_info" ]; then
+            if [ -n "${STEER_SUB_INFO:-}" ]; then printf '%s\n' "$STEER_SUB_INFO" > "$_info"
+            else rm -f "$_info"
+            fi
+        fi
+        printf '{"ok":true,"asked":true}\n'
+        exit 0
+        ;;
 esac
 # status: собирается из спеки, чтобы у выходов была метка. Без неё фикс Zapret Manager
 # нечем проверить — он берёт метку именно оттуда, а не выдумывает.
@@ -518,6 +578,12 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         OUT_SYSNET="${OUT_SYSNET_FIXTURE:-$T/outnet}" \
         UCI_SPLIFY2="${UCI_SPLIFY2_FIXTURE:-$T/etc/config/splify2}" \
         SYSINFO_MODEL="$T/etc/sysinfo-model" \
+        STEER_HWID="${STEER_HWID-splify2-9c53221f0abc9c53}" \
+        STEER_SUB_JSON="${STEER_SUB_JSON-}" \
+        STEER_SUB_INFO="${STEER_SUB_INFO-}" \
+        STEER_SUB_BODY="${STEER_SUB_BODY-vless://k@h:443#n}" \
+        STEER_SUB_RC="${STEER_SUB_RC:-0}" \
+        STEER_QUOTA_RC="${STEER_QUOTA_RC:-0}" \
         CURL_RESP_HDRS="${CURL_RESP_HDRS:-}" \
         CURL_HEAD_HDRS="${CURL_HEAD_HDRS-}" \
         CURL_HEAD_RC="${CURL_HEAD_RC:-0}" \
@@ -547,6 +613,18 @@ rpcd_list() {
 
 # Булево печатается как в JSON (true/false), а не как в python (True/False): иначе
 # проверка сравнивала бы ожидание с языком, на котором написана сама проверка.
+# Значение uci из хранилища заглушки. Прямо файлом, а не через `$T/bin/uci`: тот работает
+# только с SANDBOX в окружении, а проверкам удобнее спрашивать снаружи вызова.
+uci_get() {  # КЛЮЧ
+    line="$(grep "^$1=" "$T/uci.store" 2>/dev/null | tail -1)"
+    printf '%s' "${line#*=}"
+}
+uci_set() {  # КЛЮЧ ЗНАЧЕНИЕ
+    grep -v "^$1=" "$T/uci.store" > "$T/uci.store.t" 2>/dev/null
+    mv "$T/uci.store.t" "$T/uci.store" 2>/dev/null || : > "$T/uci.store"
+    printf '%s=%s\n' "$1" "$2" >> "$T/uci.store"
+}
+
 jget() {  # ПОЛЕ < JSON
     python3 -c 'import json,sys
 try: d = json.load(sys.stdin)
@@ -1232,34 +1310,88 @@ out="$(UCI_SPLIFY2_FIXTURE=/proc/nonexistent/splify2 rpcd sub_set '{"url":"vless
 check "недоступный файл настройки — отказ с причиной, а не тишина" "yes" \
       "$(printf '%s' "$out" | jget error | grep -q 'кончилось место' && echo yes || echo no)"
 
-# ---- идентификатор устройства для панели подписки (HWID) --------------------------
-# Панель, привязывающая подписку к устройствам, требует заголовок `x-hwid`. Клиенту без него
-# она отвечает не отказом, а ЗАГЛУШКОЙ: HTTP 200 и пара законных ссылок vless:// на
-# 0.0.0.0:1, где сообщение спрятано в имя узла. То есть подписка «скачалась», узлы «есть»,
-# туннель не поднимется никогда.
-rm -f "$T/curl.hdrs" "$T/etc/sub.txt"
+# ---- подписку скачивает ДВИЖОК, а не этот файл -----------------------------------
+#
+# Скачивание, заголовки запроса с идентификатором устройства, разбор ответных заголовков,
+# base64 названия, арифметика остатка трафика и повтор за другим форматом переехали в
+# steer sub-fetch / sub-quota / sub-hwid. Причина — в шапке steer/src/ext/subfetch.c;
+# проверяется всё это стендом steer/tests/subfetchmatch.c, где есть и поддельный curl, и
+# поддельный каталог устройств.
+#
+# ЗДЕСЬ проверяется другая граница, и только она: что объект rpcd спрашивает движок теми
+# аргументами, какими нужно, и что ответ движка доходит наверх не пересказанным. Повторять
+# здесь проверки движка значило бы проверять заглушку.
+rm -f "$T/subfetch.log" "$T/curl.log" "$T/etc/sub.txt"
 out="$(rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
 check "подписка скачалась" "true" "$(printf '%s' "$out" | jget ok)"
-check "запрос несёт идентификатор устройства" "yes" \
-      "$(grep -qi '^x-hwid: splify2-' "$T/curl.hdrs" && echo yes || echo no)"
-# Постоянство — главное свойство: идентификатор считается из MAC, а не из файла, потому что
-# сброс к заводским настройкам стирает overlay целиком, а MAC живёт в устройстве.
-h1="$(grep -i '^x-hwid:' "$T/curl.hdrs" | head -1)"
-rm -f "$T/curl.hdrs"
-out="$(rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
-check "тот же роутер — тот же идентификатор" "$h1" \
-      "$(grep -i '^x-hwid:' "$T/curl.hdrs" | head -1)"
-# Берётся ФИЗИЧЕСКИЙ порт с постоянным адресом: мост исключён отсутствием ссылки `device`,
-# wifi — битом «назначен локально». Проверяется значением: sha256 от 'splify2:<mac>'.
-want="splify2-$(printf 'splify2:9c:53:22:1f:0a:bc' | sha256sum | cut -c1-20)"
-check "идентификатор выведен из MAC физического порта" "x-hwid: $want" \
-      "$(grep -i '^x-hwid:' "$T/curl.hdrs" | head -1 | tr -d '\r')"
-check "MAC наружу не уходит" "no" \
-      "$(grep -qi '9c:53:22' "$T/curl.hdrs" && echo yes || echo no)"
-check "устройство названо честно, а не выдуманным телефоном" "yes;yes" \
-      "$(grep -qi '^x-device-os: OpenWrt' "$T/curl.hdrs" && echo yes || echo no);$(grep -qi '^x-device-model: Xiaomi AX3000T' "$T/curl.hdrs" && echo yes || echo no)"
-check "sub_info отдаёт идентификатор до всякого скачивания" "$want" \
+check "скачивал движок, и ему названы оба пути" \
+      "https://panel.invalid/sub/abc $T/etc/sub.txt $T/etc/sub.userinfo" \
+      "$(tail -1 "$T/subfetch.log")"
+# Своего скачивания подписки в объекте не осталось. Проверяется отсутствием обращений curl:
+# через curl здесь ходят только списки, и запрос к панели среди них был бы вторым путём
+# наружу со своими заголовками — тем самым, ради устранения которого работа и переехала.
+check "объект к панели сам не ходит" "no" \
+      "$([ -f "$T/curl.log" ] && echo yes || echo no)"
+
+# Идентификатор устройства тоже спрашивается у движка. Постоянство и рецептура — его забота
+# (стенд subfetchmatch); здесь важно, что объект НЕ считает его сам и отдаёт как есть.
+check "sub_info отдаёт идентификатор от движка" "splify2-9c53221f0abc9c53" \
       "$(rpcd sub_info | jget hwid)"
+check "и sub_list тоже" "splify2-9c53221f0abc9c53" "$(rpcd sub_list | jget hwid)"
+check "пустой ответ движка не превращается в выдуманный" "" \
+      "$(STEER_HWID='' rpcd sub_info | jget hwid)"
+# Свои реализации хеша и base64 из объекта убраны: они были там ровно потому, что на роутере
+# нет ни sha256sum наверняка, ни base64 вовсе, — а у движка и то, и другое есть в C.
+# Проверяется именно рецептура HWID, а не всякий хеш: отпечатки спеки (vless_fingerprint,
+# obfs_fingerprint) считаются md5sum-ом законно и никуда не переезжали.
+check "идентификатор устройства в объекте больше не считается" "0" \
+      "$(grep -c "splify2:%s" "$SCRIPT")"
+check "и base64 в awk из объекта убран" "0" \
+      "$(grep -c 'b64_decode' "$SCRIPT")"
+
+# ССЫЛКА ИЗ ОТВЕТА, А НЕ ТА, ЧТО ПРОСИЛИ. Движок мог перезапросить подписку с суффиксом
+# /json — панели с привязкой к устройствам выбирают формат ответа по клиенту, — и обновлять
+# в следующий раз надо по ТОЙ ссылке. Прежде это правило дублировалось в объекте строкой
+# `url="${url%/}/json"`, то есть оболочка повторяла решение, которое приняла не она.
+out="$(STEER_SUB_JSON='{"ok":true,"url":"https://panel.invalid/sub/abc/json","usable":9,"title":"Панель","hwid_sent":true}' \
+       rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
+check "сохранена ссылка из ответа движка" "https://panel.invalid/sub/abc/json" \
+      "$(rpcd sub_info | jget url)"
+check "и число пригодных узлов доехало" "9" "$(printf '%s' "$out" | jget usable)"
+check "название от панели взято движком и сохранено" "Панель" \
+      "$(uci_get splify2.main.sub_title)"
+
+# Название, которое дал ЧЕЛОВЕК, ответом панели не переписывается: он его для того и вписал.
+out="$(STEER_SUB_JSON='{"ok":true,"url":"https://panel.invalid/s","usable":1,"title":"Панель"}' \
+       rpcd sub_set '{"url":"https://panel.invalid/s","title":"моё"}')"
+check "своё название сильнее панельного" "моё" "$(uci_get splify2.main.sub_title)"
+
+# Слово панели про устройство доходит до человека дословно. Что именно она сказала — решает
+# движок по своим заголовкам; объект обязан не потерять это по дороге.
+out="$(STEER_SUB_JSON='{"ok":true,"url":"https://panel.invalid/s","usable":0,"warn":"панель не увидела идентификатора устройства и отдала заглушку вместо узлов"}' \
+       rpcd sub_set '{"url":"https://panel.invalid/s"}')"
+check "предупреждение движка доехало до ответа" "yes" \
+      "$(printf '%s' "$out" | jget warn | grep -q 'не увидела идентификатора' && echo yes || echo no)"
+out="$(STEER_SUB_JSON='{"ok":true,"url":"https://panel.invalid/s","usable":1}' \
+       rpcd sub_set '{"url":"https://panel.invalid/s"}')"
+check "на исправном ответе предупреждения нет" "" "$(printf '%s' "$out" | jget warn)"
+
+# ОТКАЗ ДВИЖКА — отказ метода, и настройка при этом не пишется: сохранённая ссылка на
+# подписку, которая не скачалась, выглядит настроенной и молча не работает.
+uci_set splify2.main.sub_url "https://panel.invalid/prev"
+out="$(STEER_SUB_RC=1 rpcd sub_set '{"url":"https://panel.invalid/broken"}')"
+check "отказ движка — отказ метода" "false" "$(printf '%s' "$out" | jget ok)"
+check "и причина названа" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'не скачалась' && echo yes || echo no)"
+check "прежняя ссылка не подменена" "https://panel.invalid/prev" \
+      "$(uci_get splify2.main.sub_url)"
+
+# Вставленные руками ссылки vless:// никуда не ходят — значит и движок для них не зовётся:
+# скачивать нечего, и запуск процесса был бы работой без вопроса.
+rm -f "$T/subfetch.log"
+out="$(rpcd sub_set '{"url":"vless://key@host:443#node"}')"
+check "для ссылок vless:// движок не зовётся" "links;no" \
+      "$(printf '%s' "$out" | jget kind);$([ -f "$T/subfetch.log" ] && echo yes || echo no)"
 
 # ---- несколько подписок ------------------------------------------------------
 #
@@ -1298,140 +1430,136 @@ out="$(rpcd sub_del '{"name":"blue"}')"
 check "свободная — удаляется вместе с файлом" "true;no" \
       "$(printf '%s' "$out" | jget ok);$([ -e "$T/etc/subs/blue.txt" ] && echo yes || echo no)"
 
-# Сигналы панели читаются из ответных заголовков: без них отказ выглядел бы как «подписка
-# скачалась, узлы не работают».
-out="$(CURL_RESP_HDRS='x-hwid-active: true
-x-hwid-not-supported: true' rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
-check "«панель не увидела HWID» названо словами" "yes" \
-      "$(printf '%s' "$out" | jget warn | grep -q 'не увидела идентификатора' && echo yes || echo no)"
-out="$(CURL_RESP_HDRS='x-hwid-limit: true' rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
-check "«лимит устройств» назван вместе со следующим шагом" "yes" \
-      "$(printf '%s' "$out" | jget warn | grep -q 'освободите слот' && echo yes || echo no)"
-out="$(rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
-check "на исправном ответе предупреждения нет" "" "$(printf '%s' "$out" | jget warn)"
+# ---- НЕСКОЛЬКО ПОДПИСОК: каждая со своей парой файлов --------------------------
+#
+# Подписок на роутере бывает несколько, и главное свойство здесь — что движку называются
+# пути ИМЕННО ЭТОЙ подписки. Ошибка была бы молчаливой в худшем виде: остаток второй панели,
+# записанный поверх остатка первой, выглядит как правда, а узлы, скачанные в чужой файл,
+# уводят трафик к другому поставщику.
+rm -f "$T/subfetch.log" "$T/subquota.log"
+rm -rf "$T/etc/subs"
+# Первая подписка заводится ЗДЕСЬ, а не берётся из состояния предыдущих проверок: те
+# оставляли её то ссылками vless://, то вовсе без ссылки, и проверка «первую не тронуло»
+# смотрела бы не на то.
+rpcd sub_set '{"url":"https://first.invalid/sub"}' >/dev/null
+out="$(rpcd sub_set '{"url":"https://second.invalid/sub","name":"green"}')"
+check "второй подписке названы её собственные пути" \
+      "https://second.invalid/sub $T/etc/subs/green.txt $T/etc/subs/green.userinfo" \
+      "$(tail -1 "$T/subfetch.log")"
+check "и файл лёг именно туда" "yes" \
+      "$([ -s "$T/etc/subs/green.txt" ] && echo yes || echo no)"
+check "первую это не тронуло" "yes" \
+      "$([ -s "$T/etc/sub.txt" ] && echo yes || echo no)"
+# Ссылка второй подписки живёт в своей секции uci, а не поверх первой.
+check "ссылка второй подписки в своей секции" "https://second.invalid/sub" \
+      "$(uci_get splify2.sub_green.url)"
+check "и ссылка первой на месте" "https://first.invalid/sub" \
+      "$(uci_get splify2.main.sub_url)"
+# Остаток второй подписки спрашивается по ЕЁ файлу: общий файл означал бы, что обзор
+# показывает остаток одной панели под именем другой.
+out="$(rpcd sub_quota '{"name":"green"}')"
+check "остаток второй подписки спрошен по её файлу" \
+      "https://second.invalid/sub $T/etc/subs/green.userinfo" \
+      "$(tail -1 "$T/subquota.log")"
+# Имя, которого нет, в путь не превращается: оно чистится до латиницы и цифр, потому что
+# становится и именем файла, и именем секции uci.
+out="$(rpcd sub_set '{"url":"https://third.invalid/sub","name":"../../etc/passwd"}')"
+check "имя подписки не выходит за каталог" "no" \
+      "$(tail -1 "$T/subfetch.log" | grep -q '/etc/passwd' && echo yes || echo no)"
 
-# Роутер без пригодного MAC (только мост и локально назначенный wifi) — идентификатор не
-# выдумывается: пустая строка честнее случайного числа, которое после перезагрузки станет
-# другим устройством.
-rm -rf "$T/sys-nomac"; mkdir -p "$T/sys-nomac/br-lan" "$T/sys-nomac/wlan0/device"
-printf 'aa:bb:cc:dd:ee:ff\n' > "$T/sys-nomac/br-lan/address"
-printf '02:11:22:33:44:55\n' > "$T/sys-nomac/wlan0/address"
-check "без постоянного MAC идентификатор не выдумывается" "" \
-      "$(HWID_SYSNET_FIXTURE="$T/sys-nomac" rpcd sub_info | jget hwid)"
-rm -f "$T/curl.hdrs"
-out="$(HWID_SYSNET_FIXTURE="$T/sys-nomac" rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
-check "и заголовок тогда не уходит" "no" \
-      "$([ -f "$T/curl.hdrs" ] && echo yes || echo no)"
-check "но об этом сказано" "yes" \
-      "$(printf '%s' "$out" | jget warn | grep -q 'не ушёл' && echo yes || echo no)"
-
-# Вставленные руками ссылки vless:// никуда не ходят, значит и устройство называть некому.
-rm -f "$T/curl.hdrs"
-out="$(rpcd sub_set '{"url":"vless://key@host:443#node"}')"
-check "для ссылок vless:// запроса нет вовсе" "links;no" \
-      "$(printf '%s' "$out" | jget kind);$([ -f "$T/curl.hdrs" ] && echo yes || echo no)"
-
-# ---- остаток трафика подписки (Andromeda: карточка «Подписка» на обзоре) ----------
-# Панель говорит остаток ЗАГОЛОВКОМ ответа, и больше нигде: в теле подписки этих чисел нет.
-# Значит запомнить их можно только в момент запроса — и вся проверка про это.
-USERINFO='subscription-userinfo: upload=1288490188; download=139458183168; total=214748364800; expire=1789200000'
+# ---- остаток трафика: файл как контракт между движком и объектом ------------------
+#
+# Панель говорит остаток ЗАГОЛОВКОМ ответа, и больше нигде. Спрашивает его и разбирает
+# ДВИЖОК (steer sub-fetch / sub-quota), он же считает точку отсчёта периода и решает, когда
+# период начался заново; всё это проверяется в steer/tests/subfetchmatch.c.
+#
+# Между движком и объектом остаётся ФАЙЛ — `<подписка>.userinfo`, «ключ=значение» по строке.
+# Он и есть контракт: объект читает его, собирая ответы sub_info и sub_list, и не ходит за
+# числами наружу. Здесь проверяется именно эта половина.
+USERINFO='upload=1288490188
+download=139458183168
+total=214748364800
+expire=1789200000
+at=1789000000
+at0=1788000000
+used0=1073741824'
 rm -f "$T/etc/sub.userinfo"
-out="$(CURL_RESP_HDRS="$USERINFO" rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
+out="$(STEER_SUB_INFO="$USERINFO" rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
 check "остаток приезжает в ответе на «Обновить»" "214748364800" \
       "$(printf '%s' "$out" | jqget quota total)"
 check "разобраны обе половины расхода" "1288490188;139458183168" \
       "$(printf '%s' "$out" | jqget quota up);$(printf '%s' "$out" | jqget quota down)"
 check "срок подписки разобран" "1789200000" "$(printf '%s' "$out" | jqget quota expire)"
-# Байты — СТРОКАМИ: 200 ГБ не влезают в int32, и обрезанное число выглядело бы законным
-# остатком. Проверяется именно тип, а не значение: значение сверено выше.
+# Точка отсчёта периода доезжает как есть: делить и предсказывать — работа интерфейса, а
+# второе место, где тот же темп считается иначе, разойдётся с первым.
+check "точка отсчёта периода отдана вместе с числами" "1788000000;1073741824" \
+      "$(printf '%s' "$out" | jqget quota since);$(printf '%s' "$out" | jqget quota since_used)"
+# Байты — СТРОКАМИ: 200 ГБ не влезают в int32 у jshn, и обрезанное число выглядело бы
+# законным остатком. Проверяется именно тип, а не значение: значение сверено выше.
 check "объёмы отданы строками, а не числами" "yes" \
       "$(printf '%s' "$out" | python3 -c 'import json,sys; print("yes" if isinstance(json.load(sys.stdin)["quota"]["total"], str) else "no")')"
 check "sub_info отдаёт запомненный остаток без запроса наружу" "214748364800" \
       "$(rpcd sub_info | jqget quota total)"
-rm -f "$T/curl.log"
+rm -f "$T/subfetch.log" "$T/subquota.log"
 rpcd sub_info > /dev/null
-check "и правда не ходит к панели" "no" \
-      "$([ -f "$T/curl.log" ] && echo yes || echo no)"
+check "и правда не спрашивает движок" "no" \
+      "$([ -f "$T/subfetch.log" ] || [ -f "$T/subquota.log" ] && echo yes || echo no)"
+check "sub_list отдаёт тот же остаток" "214748364800" \
+      "$(rpcd sub_list | python3 -c 'import json,sys
+for d in json.load(sys.stdin)["subs"]:
+    if d["name"] == "main": print(d["quota"]["total"])')"
 
-# Панель промолчала — прежние числа СНИМАЮТСЯ. «Осталось 68 ГБ» от прежней подписки
-# выглядит свежим и ничем не отличимо от правды; честное «остатка нет» дешевле.
-out="$(CURL_RESP_HDRS='x-hwid-active: true' rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
+# Пустое значение в файле значит «панель этого не сообщала» и НЕ равно нулю: подписка без
+# ограничения объёма не должна выглядеть исчерпанной.
+out="$(STEER_SUB_INFO='upload=5
+download=5
+total=
+expire=1789200000
+at=1789000000
+at0=1789000000
+used0=10' rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
+check "неназванный объём отдан пустой строкой, а не нулём" "" \
+      "$(printf '%s' "$out" | jqget quota total)"
+
+# Файла нет — поля `quota` нет вовсе. Пустая полоса «осталось 0 из 0» была бы выдумкой
+# интерфейса, а не ответом панели.
+out="$(STEER_SUB_INFO='' rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
 check "молчание панели не оставляет прежних чисел" ";" \
       "$(printf '%s' "$out" | jget quota);$(rpcd sub_info | jget quota)"
 
-# Заголовок есть, а чисел в нём нет — то же молчание: полоса «осталось 0 из 0» была бы
-# выдумкой интерфейса, а не ответом панели.
-out="$(CURL_RESP_HDRS='subscription-userinfo: upload=; download=' rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
-check "заголовок без чисел считается молчанием" "" "$(printf '%s' "$out" | jget quota)"
-
-# sub_quota — обновление остатка БЕЗ подмены подписки. Спрашиваются одни заголовки, файл
-# подписки не трогается: метод зовут при открытии обзора, и подменять там узлы нельзя.
-out="$(CURL_RESP_HDRS="$USERINFO" rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
+# sub_quota — обновление остатка БЕЗ подмены подписки. Метод зовут при открытии обзора, и
+# подменять там узлы нельзя: движку поэтому даётся только путь остатка, а не путь подписки.
+out="$(STEER_SUB_INFO="$USERINFO" rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
 sub_before="$(cat "$T/etc/sub.txt")"
-rm -f "$T/curl.log" "$T/curl.head.log" "$T/var/vless-dirty"
-out="$(CURL_HEAD_HDRS='subscription-userinfo: upload=0; download=214748364800; total=214748364800; expire=1789200000' rpcd sub_quota)"
-check "остаток обновлён" "true;true;214748364800" \
+rm -f "$T/subfetch.log" "$T/subquota.log" "$T/var/vless-dirty"
+out="$(STEER_SUB_INFO="$USERINFO" rpcd sub_quota)"
+check "остаток обновлён" "true;true;139458183168" \
       "$(printf '%s' "$out" | jget ok);$(printf '%s' "$out" | jget asked);$(printf '%s' "$out" | jqget quota down)"
-check "спрошены одни заголовки, а не подписка целиком" "1;1" \
-      "$(wc -l < "$T/curl.head.log" | tr -d ' ');$(wc -l < "$T/curl.log" | tr -d ' ')"
+check "движок спрошен про остаток, а не про подписку" "no" \
+      "$([ -f "$T/subfetch.log" ] && echo yes || echo no)"
+check "и путь остатка ему назван" "https://panel.invalid/sub/abc $T/etc/sub.userinfo" \
+      "$(tail -1 "$T/subquota.log")"
 check "файл подписки не подменён" "$sub_before" "$(cat "$T/etc/sub.txt")"
 check "клиента перечитывать не просят" "no" \
       "$([ -f "$T/var/vless-dirty" ] && echo yes || echo no)"
 
-# Панель на HEAD ответила отказом (так делают не все, но делают) — тогда обычная загрузка,
-# и она обязана уйти в ВЫБРОСНЫЙ файл, а не поверх подписки.
-rm -f "$T/curl.log" "$T/curl.head.log"
-# Расход в этом состоянии заведомо МЕНЬШЕ того, что приедет ниже: иначе уменьшение расхода
-# само по себе означало бы новый период, и проверка смотрела бы не на то.
-out="$(CURL_RESP_HDRS='subscription-userinfo: upload=0; download=1073741824; total=214748364800; expire=1789200000' rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
-since0="$(printf '%s' "$out" | jqget quota since)"
-rm -f "$T/curl.log" "$T/curl.head.log"
-out="$(CURL_HEAD_RC=22 CURL_HEAD_HDRS='' CURL_RESP_HDRS="$USERINFO" CURL_BODY='vless://other@host:443#new' rpcd sub_quota)"
-check "отказ на HEAD не оставляет остаток непрочитанным" "214748364800" \
-      "$(printf '%s' "$out" | jqget quota total)"
-check "и подписку это не подменяет" "$sub_before" "$(cat "$T/etc/sub.txt")"
-# Найдено на живом роутере: панель отвечала на HEAD отказом, проба снимала файл остатка, а
-# загрузка вслед записывала его заново — и точка отсчёта периода переезжала на каждый вызов.
-# Вместе с ней терялся измеренный темп расхода, который набирается сутками, поэтому «в среднем
-# в сутки» на обзоре не появлялось никогда.
-check "отказ на HEAD не сдвигает точку отсчёта периода" "$since0" \
-      "$(printf '%s' "$out" | jqget quota since)"
-# То же и для ответа БЕЗ чисел: проба прошла, но сказать ей нечего — решает загрузка.
-rm -f "$T/curl.log" "$T/curl.head.log"
-out="$(CURL_HEAD_HDRS='x-hwid-active: true' CURL_RESP_HDRS="$USERINFO" rpcd sub_quota)"
-check "проба без чисел не сдвигает точку отсчёта" "$since0" \
-      "$(printf '%s' "$out" | jqget quota since)"
+# Движок отказал — это не отказ метода: человек ничего не сделал не так, и красная ошибка на
+# исправной настройке хуже честного «панель не сообщает остаток».
+out="$(STEER_QUOTA_RC=1 rpcd sub_quota)"
+check "отказ движка не делает метод отказом" "true;true" \
+      "$(printf '%s' "$out" | jget ok);$(printf '%s' "$out" | jget asked)"
+check "и причина названа словами" "yes" \
+      "$(printf '%s' "$out" | jget why | grep -q 'не сообщила остаток' && echo yes || echo no)"
 
-# Узлы вставлены ссылками vless:// — спрашивать некого, и это не отказ: человек ничего не
-# сделал не так, а кнопка «Обновить» у ссылки лишена смысла ровно по той же причине.
+# Узлы вставлены ссылками vless:// — спрашивать некого, и движок не зовётся вовсе: у ссылки
+# нет панели, а значит и заголовков.
 out="$(rpcd sub_set '{"url":"vless://key@host:443#node"}')"
-rm -f "$T/curl.log"
+rm -f "$T/subquota.log"
 out="$(rpcd sub_quota)"
 check "для ссылок vless:// остаток не выдумывается" "true;false;no" \
-      "$(printf '%s' "$out" | jget ok);$(printf '%s' "$out" | jget asked);$([ -f "$T/curl.log" ] && echo yes || echo no)"
+      "$(printf '%s' "$out" | jget ok);$(printf '%s' "$out" | jget asked);$([ -f "$T/subquota.log" ] && echo yes || echo no)"
 check "и сказано, почему" "yes" \
       "$(printf '%s' "$out" | jget why | grep -q 'сообщает панель' && echo yes || echo no)"
-
-# Начало периода панель не сообщает, а без него средний расход в сутки не посчитать. Оно
-# запоминается ПЕРВЫМ наблюдением и переносится дальше как есть — иначе темп считался бы от
-# каждого нового опроса и был бы тем меньше, чем чаще смотрят.
-rm -f "$T/etc/sub.userinfo"
-out="$(CURL_RESP_HDRS='subscription-userinfo: upload=0; download=1073741824; total=214748364800; expire=1789200000' rpcd sub_set '{"url":"https://panel.invalid/sub/abc"}')"
-since1="$(printf '%s' "$out" | jqget quota since)"
-check "первое наблюдение периода запомнено" "yes;1073741824" \
-      "$([ "$since1" -gt 0 ] 2>/dev/null && echo yes || echo no);$(printf '%s' "$out" | jqget quota since_used)"
-out="$(CURL_HEAD_HDRS='subscription-userinfo: upload=0; download=3221225472; total=214748364800; expire=1789200000' rpcd sub_quota)"
-check "точка отсчёта не переносится на каждый опрос" "$since1;1073741824" \
-      "$(printf '%s' "$out" | jqget quota since);$(printf '%s' "$out" | jqget quota since_used)"
-# Сменился срок — период новый, и точка отсчёта обязана переехать: иначе темп считался бы
-# по расходу, которого в этом периоде не было.
-out="$(CURL_HEAD_HDRS='subscription-userinfo: upload=0; download=104857600; total=214748364800; expire=1791792000' rpcd sub_quota)"
-check "смена срока начинает период заново" "104857600" \
-      "$(printf '%s' "$out" | jqget quota since_used)"
-# Панель обнулила расход, не меняя срок, — это тоже новый период.
-out="$(CURL_HEAD_HDRS='subscription-userinfo: upload=0; download=1048576; total=214748364800; expire=1791792000' rpcd sub_quota)"
-check "обнуление расхода начинает период заново" "1048576" \
-      "$(printf '%s' "$out" | jqget quota since_used)"
 
 # Метод обязан быть объявлен и в перечне, и в ACL — иначе rpcd его не отдаст, а сборка
 # splify2 упадёт на своей же проверке.
@@ -1738,33 +1866,20 @@ check "установка идёт через обёртку, а не через
 check "имена файлов пакетов зависят от менеджера" "yes" \
       "$(grep -q 'pkg_ext)' "$SCRIPT" && grep -q 'pkg_noarch)' "$SCRIPT" && echo yes || echo no)"
 
-# ---- заголовки об устройстве чистятся ПОД BUSYBOX, а не под coreutils ------------
+# ---- заголовки об устройстве чистит ДВИЖОК ---------------------------------------
 #
-# Проверка запускается busybox явно, и это единственный способ её осмыслить: у coreutils
-# `tr -cd '[:print:]'` работает, у busybox — НЕТ, он классов не знает и разбирает их как
-# обычный набор символов. Стенд на машине разработчика поэтому и не заметил, как
-# «TP-Link Archer C6U v1» уезжал в панель строкой «inrr», а «OpenWrt 25.12.5» — строкой
-# «pnrt»: на GNU tr обе строки проходят целиком.
+# Раньше здесь стояла проверка под busybox: `tr -cd '[:print:]'` у coreutils работает, а у
+# busybox НЕТ — он классов не знает и разбирает их как обычный набор символов, из-за чего
+# «TP-Link Archer C6U v1» уезжал в панель строкой «inrr». Проверка на машине разработчика
+# этого не видела: на GNU tr обе строки проходят целиком.
 #
-# Функция берётся ИЗ САМОГО СКРИПТА, а не переписывается здесь: копия проверяла бы копию.
-if command -v busybox >/dev/null 2>&1; then
-    sed -n '/^hdr_clean()/,/^}/p' "$SCRIPT" > "$T/hdr_clean.sh"
-    printf '%s\n' 'hdr_clean "$1"' >> "$T/hdr_clean.sh"
-    check "модель роутера не искажается чисткой (busybox)" "TP-Link Archer C6U v1" \
-          "$(busybox sh "$T/hdr_clean.sh" 'TP-Link Archer C6U v1')"
-    check "версия системы не искажается чисткой (busybox)" "OpenWrt 25.12.5" \
-          "$(busybox sh "$T/hdr_clean.sh" 'OpenWrt 25.12.5')"
-    # Кириллица выбрасывается намеренно: в заголовке HTTP она приезжает панели байтами
-    # UTF-8 и показывается там мусором, поэтому лучше её отсутствие.
-    check "кириллица в модели выбрасывается (busybox)" "AX3000T" \
-          "$(busybox sh "$T/hdr_clean.sh" 'тестAX3000T')"
-    # И то, ради чего чистка вообще существует: перевод строки внутри значения — это
-    # вставка чужого заголовка в запрос.
-    check "перевод строки не проходит в заголовок (busybox)" "aaaX-Evil: 1" \
-          "$(busybox sh "$T/hdr_clean.sh" "$(printf 'aaa\nX-Evil: 1')")"
-else
-    printf 'busybox нет — чистку заголовков проверить нечем, пропускаю\n'
-fi
+# Теперь чистка живёт в C (steer/src/ext/subfetch.c, hdr_clean) и проверяется в
+# steer/tests/subfetchmatch.c, где этой ловушки нет по построению — байты сравниваются
+# напрямую, а не через чужую реализацию `tr`. Здесь остаётся убедиться, что своей чистки в
+# объекте не осталось: вторая реализация вернула бы и ловушку.
+check "чистки заголовков в объекте больше нет" "0" "$(grep -c '^hdr_clean()' "$SCRIPT")"
+check "и заголовков устройства объект не собирает" "0" \
+      "$(grep -c 'x-device-model\|x-ver-os' "$SCRIPT")"
 
 # ---- откуда качать списки и обновления (splify2#15) --------------------------------
 # Обход по хостам самого GitHub спасает установку, но списки решает не лучшим образом:

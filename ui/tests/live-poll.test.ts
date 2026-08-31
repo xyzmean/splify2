@@ -48,7 +48,11 @@ describe('круг опроса: один вызов вместо пяти', () 
         const { result } = renderHook(() => useLive())
         await waitFor(() => expect(result.current.status).not.toBeNull())
 
-        expect(live).toHaveBeenCalledTimes(1)
+        // ОДИН МЕТОД вместо пяти — вот что здесь проверяется. Кругов при открытии два
+        // (быстрый по памяти движка и догоняющий за свежим), но оба спрашивают один `live`, а
+        // не пять отдельных вызовов, каждый из которых заново разбирает 250-килобайтный
+        // скрипт объекта.
+        expect(live.mock.calls.length).toBeLessThanOrEqual(2)
         for (const gone of [status, devStats, netInfo, diag]) expect(gone).not.toHaveBeenCalled()
         // Журнал движка круга больше не касается вовсе: его читает экран диагностики, пока
         // открыт. На стенде это 350 мс каждые пять секунд ради строк, которых на экране нет.
@@ -74,8 +78,14 @@ describe('круг опроса: один вызов вместо пяти', () 
         vi.useFakeTimers()
         renderHook(() => useLive())
         await act(async () => { await Promise.resolve() })
-        expect(live).toHaveBeenLastCalledWith(true, true)
+        // Первый круг — быстрый, и проверок он НЕ просит: память движка отдаётся мгновенно, а
+        // `steer diag` считается заново (201 мс против 91 мс на стенде), то есть вместе они
+        // вернули бы то ожидание, ради снятия которого память и заведена. Приговор на экране
+        // при этом есть — из снимка прошлого открытия, помеченный как прошлое.
+        expect(live.mock.calls[0]).toEqual([false, true])
 
+        // Догоняющий круг за быстрым спрашивает их сразу же.
+        expect(live.mock.calls[1]).toEqual([true, false])
         // Три круга подряд идут без проверок: приговор меняется, когда что-то применили или
         // туннель упал, — про первое интерфейс знает сам, второе видно по полю `up` выхода.
         for (const round of [1, 2, 3]) {
@@ -125,6 +135,8 @@ describe('круг опроса: один вызов вместо пяти', () 
         // экране на пять секунд значило бы показывать прошлое там, где до сих пор стояло
         // «Загрузка…».
         await waitFor(() => expect(live).toHaveBeenCalledTimes(2))
+        // И проверки просит он: на быстром круге их не спрашивали, а приговор нужен экрану.
+        expect(live).toHaveBeenLastCalledWith(true, false)
         await waitFor(() => expect(result.current.stale).toBe(false))
         expect(result.current.status?.cached).toBeUndefined()
     })
@@ -148,15 +160,17 @@ describe('круг опроса: один вызов вместо пяти', () 
         expect(result.current.speed.ch.ru).toBeUndefined()
     })
 
-    it('движок старее ключа: ответ приходит живым, и второго круга не нужно', async () => {
+    it('движок старее ключа: состояние живое сразу, а проверки — догоняющим кругом', async () => {
         // Бэкенд, спросив память у движка, который её не умеет, молча спрашивает состояние
-        // по-старому — и отвечает БЕЗ `cached`. Тогда догоняющий круг был бы лишней работой
-        // роутера: свежее уже на экране.
+        // по-старому — и отвечает БЕЗ `cached`. Прошлого на экране тогда нет вовсе, и это
+        // видно сразу. А вот проверок быстрый круг не просил, поэтому догоняющий круг нужен и
+        // здесь: без него исправный роутер остался бы без приговора до двадцатой секунды.
         const live = mockLive()
         const { result } = renderHook(() => useLive())
-        await waitFor(() => expect(result.current.status).not.toBeNull())
-        expect(live).toHaveBeenCalledTimes(1)
+        await waitFor(() => expect(result.current.diag).not.toBeNull())
         expect(result.current.stale).toBe(false)
+        expect(live.mock.calls.map((c) => c[1])).toEqual([true, false])
+        expect(live).toHaveBeenLastCalledWith(true, false)
     })
 
     it('объект старее интерфейса: круг идёт прежними вызовами, а экран не пустеет', async () => {

@@ -105,6 +105,11 @@ export default function VlessScreen() {
             const r = await rpc.subSet(src, n, name.trim())
             if (!r.ok) { notify(r.error || 'подписка не сохранилась', 'error'); return }
             if (r.warn) notify(r.warn, 'warning')
+            /* «Пригодных узлов нет» говорится СРАЗУ, а не выясняется потом по туннелю, который
+             * «настроен и не работает»: подписка скачалась, файл на месте, а поднимется он
+             * никогда. Число считает движок тем же кодом, которым читает подписку при подъёме,
+             * поэтому это обещание, а не оценка. */
+            else if (r.usable === 0) notify('Подписка скачалась, но пригодных узлов в ней нет', 'warning')
             setName('')
             setUrl('')
             await load()
@@ -121,6 +126,8 @@ export default function VlessScreen() {
         try {
             const r = await rpc.subSet(s.url, s.name, s.title || '')
             if (!r.ok) notify(r.error || 'подписка не скачалась', 'error')
+            else if (r.warn) notify(r.warn, 'warning')
+            else if (r.usable === 0) notify('Подписка обновилась, но пригодных узлов в ней нет', 'warning')
             await load()
         } catch (e) {
             notify(String(e instanceof Error ? e.message : e), 'error')
