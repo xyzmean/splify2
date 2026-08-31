@@ -47,6 +47,12 @@ proto_xsteer_init_config() {
 	# (провайдер режет сырые сокеты, нет прав на nft) или где хаб слушает только его.
 	proto_config_add_boolean stream
 	proto_config_add_int stream_port
+	# Разгрузка сегментации. По умолчанию ВКЛЮЧЕНА и ключа не требует — она даёт самую крупную
+	# прибавку к скорости из всего, что есть в туннеле (3920 нс на пакет в устройство против 269
+	# в склеенном кадре). Ключ существует ради одного: возможности вернуться на прежний путь
+	# одним переключателем, когда «стало медленнее/странно после обновления». Без него проверить
+	# это на своём железе человек может только сборкой из исходников.
+	proto_config_add_boolean offload
 }
 
 # Одна секция пира в файл. Пиры живут в секциях `config xsteer_<интерфейс>` — то же
@@ -84,10 +90,10 @@ xsteer_peer() {
 
 proto_xsteer_setup() {
 	local config="$1"
-	local private_key sni mtu device_name stream stream_port
+	local private_key sni mtu device_name stream stream_port offload
 	local addresses
 
-	json_get_vars private_key sni mtu device_name stream stream_port
+	json_get_vars private_key sni mtu device_name stream stream_port offload
 	json_get_values addresses addresses
 
 	[ -n "$private_key" ] || {
@@ -206,8 +212,23 @@ proto_xsteer_setup() {
 	[ "$stream" = 1 ] && xs_args="--stream"
 	[ "$stream" = 1 ] && [ -n "$stream_port" ] && xs_args="$xs_args --stream-port $stream_port"
 
+	# Выключение разгрузки идёт ОКРУЖЕНИЕМ, а не ключом, и это не небрежность: у движка это три
+	# переменные (STEER_TUN_NOGSO, NOGRO, NORXGSO), заведённые именно как «вернуться на прежний
+	# путь и померить», а не как настройка. Заводить под них ключ командной строки значило бы
+	# объявить настройкой то, что задумано измерительным рычагом. Здесь они сведены в один
+	# переключатель, потому что человеку в интерфейсе нужен один вопрос, а не три.
+	#
+	# `= 0` строго: отсутствие ключа означает «оставь как есть», то есть включено. Проверять на
+	# «не 1» было бы неверно — интерфейс, не знающий про этот ключ, выключил бы разгрузку молча.
+	local xs_env=""
+	[ "$offload" = 0 ] && xs_env="STEER_TUN_NOGSO=1 STEER_TUN_NOGRO=1 STEER_TUN_NORXGSO=1"
+
+	# env стоит здесь ВСЕГДА, а не в одной из двух ветвей, и это не лишний процесс: env
+	# подменяет себя вызываемой программой, а пустой список переменных ничего не меняет. Две
+	# ветви с двумя одинаковыми командными строками — это два места, где однажды окажется разный
+	# набор ключей.
 	# shellcheck disable=SC2086
-	proto_run_command "$config" "$STEER_BIN" xsteer \
+	proto_run_command "$config" env $xs_env "$STEER_BIN" xsteer \
 		--config "$XSTEER_CONF" --device "$dev" $xs_args
 
 	proto_init_update "$dev" 1

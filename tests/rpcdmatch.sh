@@ -203,6 +203,14 @@ printf '#!/bin/sh\nexit 0\n' > "$T/bin/logger"
 # проверка была бы зелёной при любом поведении.
 cat > "$T/bin/uci" <<'EOF'
 #!/bin/sh
+# Заглушка uci: плоское хранилище «ключ=значение» построчно.
+#
+# СРАВНЕНИЕ ИДЁТ `case`, А НЕ `grep`, и это не стилистика. Настоящий uci называет безымянную
+# секцию «@xsteer_home[0]» — проверено на живом роутере, — а в шаблоне grep квадратные скобки
+# означают класс символов: «^network.@xsteer_home[0]=» совпадает с «network.@xsteer_home0=» и не
+# совпадает с тем, что искали. Заглушка на grep поэтому «не находила» секцию, которую настоящий
+# uci находит, и скрывала бы обратную ошибку — код, который ищет секцию по имени вместо типа.
+# В `case` подстановка в кавычках сравнивается буквально.
 S="$SANDBOX/uci.store"
 [ -f "$S" ] || : > "$S"
 while [ $# -gt 0 ]; do
@@ -210,20 +218,74 @@ while [ $# -gt 0 ]; do
 done
 case "${1:-}" in
     get)
-        line="$(grep "^${2:-}=" "$S" | tail -1)" || exit 1
-        [ -n "$line" ] || exit 1
-        printf '%s\n' "${line#*=}"
+        v=""; found=0
+        while IFS= read -r line; do
+            case "$line" in "${2:-}="*) v="${line#*=}"; found=1 ;; esac
+        done < "$S"
+        [ "$found" = 1 ] || exit 1
+        printf '%s\n' "$v"
         ;;
     set)
         k="${2%%=*}"; v="${2#*=}"
-        grep -v "^$k=" "$S" > "$S.t" 2>/dev/null
-        mv "$S.t" "$S" 2>/dev/null || : > "$S"
-        printf '%s=%s\n' "$k" "$v" >> "$S"
+        : > "$S.t"
+        while IFS= read -r line; do
+            case "$line" in "$k="*) continue ;; esac
+            printf '%s\n' "$line" >> "$S.t"
+        done < "$S"
+        printf '%s=%s\n' "$k" "$v" >> "$S.t"
+        mv "$S.t" "$S"
         ;;
     delete)
-        grep -v "^${2:-}=" "$S" > "$S.t" 2>/dev/null
-        mv "$S.t" "$S" 2>/dev/null || : > "$S"
+        # Удаление СЕКЦИИ уносит и её опции: «network.cfg1» это и строка типа, и все
+        # «network.cfg1.*». Без этого удалённый пир оставлял бы за собой свои поля, и
+        # следующий `show` находил бы половину секции.
+        : > "$S.t"
+        while IFS= read -r line; do
+            case "$line" in "${2:-}="*|"${2:-}".*) continue ;; esac
+            printf '%s\n' "$line" >> "$S.t"
+        done < "$S"
+        mv "$S.t" "$S"
         ;;
+    show)
+        # Формат тот же, что у настоящего uci: значение опции в кавычках, тип секции без них.
+        # Разница значима — по ней метод отличает секцию от её полей.
+        pfx="${2:-}"
+        while IFS= read -r line; do
+            k="${line%%=*}"; v="${line#*=}"
+            case "$k" in "$pfx"|"$pfx".*) ;; *) continue ;; esac
+            case "$k" in
+                *.*.*) printf "%s='%s'\n" "$k" "$v" ;;
+                *) printf '%s=%s\n' "$k" "$v" ;;
+            esac
+        done < "$S"
+        ;;
+    add)
+        # Имя безымянной секции — то, что печатает настоящий uci: @<тип>[<номер>].
+        i=0
+        while IFS= read -r line; do
+            case "$line" in "${2:-}.@${3:-}["*) i=$((i + 1)) ;; esac
+        done < "$S"
+        n="@${3:-}[$i]"
+        printf '%s.%s=%s\n' "${2:-}" "$n" "${3:-}" >> "$S"
+        printf '%s\n' "$n"
+        ;;
+    add_list)
+        # Список хранится ОДНОЙ строкой через пробел — ровно так его отдаёт `uci get`.
+        k="${2%%=*}"; v="${2#*=}"
+        old=""
+        while IFS= read -r line; do
+            case "$line" in "$k="*) old="${line#*=}" ;; esac
+        done < "$S"
+        : > "$S.t"
+        while IFS= read -r line; do
+            case "$line" in "$k="*) continue ;; esac
+            printf '%s\n' "$line" >> "$S.t"
+        done < "$S"
+        if [ -n "$old" ]; then printf '%s=%s %s\n' "$k" "$old" "$v" >> "$S.t"
+        else printf '%s=%s\n' "$k" "$v" >> "$S.t"; fi
+        mv "$S.t" "$S"
+        ;;
+    commit) : ;;
 esac
 exit 0
 EOF
@@ -233,6 +295,12 @@ EOF
 # Проверять фикс Zapret Manager иначе нечем: таблица собирается heredoc-ом.
 # opkg: воспроизводит беду свежей прошивки — списков пакетов нет, и зависимость локального
 # файла не находится. После `opkg update` установка проходит.
+cat > "$T/bin/ifup" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$SANDBOX/ifup.log"
+exit 0
+EOF
+chmod +x "$T/bin/ifup"
 cat > "$T/bin/opkg" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$SANDBOX/opkg.log"
@@ -329,6 +397,37 @@ case "${1:-}" in
     # проверялась бы заглушка, а не код. Она делает ровно то, что важно этому стенду:
     # протоколирует аргументы (по ним видно, ЧТО именно спросил объект rpcd), кладёт файлы туда,
     # куда просили, и отдаёт заданный ответ.
+    # ССЫЛКА xs://. Заглушка НЕ разбирает формат и не должна: разбор живёт в движке и проверяется
+    # его собственным стендом (steer/tests/xslinkmatch.c) плюс побайтовой сверкой с половиной на
+    # Go. Здесь важно другое — что метод rpcd зовёт движок правильно (ссылка приходит стандартным
+    # ВВОДОМ, а не аргументом: аргументы видны в списке процессов) и что он делает с ответом.
+    xsteer-link)
+        shift
+        _src="${1:-}"
+        if [ "$_src" = "-" ]; then
+            _in="$(cat)"
+            echo "stdin=$_in" >> "$SANDBOX/steer.log"
+            case "${XS_LINK_RC:-0}" in
+                0) printf '%s\n' "${XS_CONF_OUT:-[Interface]
+PrivateKey = 6Gtidge6FqhO/0LhrAWpRiyYaKdLZF/gib/HePLC9GU=
+Address = 10.77.0.5/24
+SNI = www.microsoft.com
+
+[Peer]
+PublicKey = QYkH5bWOsEOCgIMldHPATSG7yvNyJ8st7o/HMelWKxs=
+AllowedIPs = 10.77.0.0/24, 192.168.9.0/24
+Endpoint = 198.51.100.9:8443
+PersistentKeepalive = 25}" ;;
+                *) echo "${XS_LINK_ERR:-приватный ключ в ссылке негоден}" >&2 ;;
+            esac
+            exit "${XS_LINK_RC:-0}"
+        fi
+        case "${XS_LINK_RC:-0}" in
+            0) printf '%s\n' "${XS_LINK_OUT:-xs://PRIV@198.51.100.9:8443?pk=PUB&ip=10.77.0.5/24}" ;;
+            *) echo "${XS_LINK_ERR:-файл не разобрался}" >&2 ;;
+        esac
+        exit "${XS_LINK_RC:-0}"
+        ;;
     sub-hwid)
         printf '{"hwid":"%s","os":"OpenWrt 25.12.5","model":"Xiaomi AX3000T"}\n' \
                "${STEER_HWID-splify2-9c53221f0abc9c53}"
@@ -577,6 +676,8 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         SYSNET="${SYSNET_FIXTURE:-$T/sysnet}" \
         OUT_SYSNET="${OUT_SYSNET_FIXTURE:-$T/outnet}" \
         UCI_SPLIFY2="${UCI_SPLIFY2_FIXTURE:-$T/etc/config/splify2}" \
+        XS_STATE_DIR="$T/var/lib/steer" \
+        XS_RUN="$T/var/run/xsteer" \
         SYSINFO_MODEL="$T/etc/sysinfo-model" \
         STEER_HWID="${STEER_HWID-splify2-9c53221f0abc9c53}" \
         STEER_SUB_JSON="${STEER_SUB_JSON-}" \
@@ -616,13 +717,21 @@ rpcd_list() {
 # Значение uci из хранилища заглушки. Прямо файлом, а не через `$T/bin/uci`: тот работает
 # только с SANDBOX в окружении, а проверкам удобнее спрашивать снаружи вызова.
 uci_get() {  # КЛЮЧ
-    line="$(grep "^$1=" "$T/uci.store" 2>/dev/null | tail -1)"
-    printf '%s' "${line#*=}"
+    # `case`, а не grep: в имени безымянной секции есть квадратные скобки — см. шапку заглушки uci.
+    _v=""
+    while IFS= read -r _l; do
+        case "$_l" in "$1="*) _v="${_l#*=}" ;; esac
+    done < "$T/uci.store"
+    printf '%s' "$_v"
 }
 uci_set() {  # КЛЮЧ ЗНАЧЕНИЕ
-    grep -v "^$1=" "$T/uci.store" > "$T/uci.store.t" 2>/dev/null
-    mv "$T/uci.store.t" "$T/uci.store" 2>/dev/null || : > "$T/uci.store"
-    printf '%s=%s\n' "$1" "$2" >> "$T/uci.store"
+    : > "$T/uci.store.t"
+    while IFS= read -r _l; do
+        case "$_l" in "$1="*) continue ;; esac
+        printf '%s\n' "$_l" >> "$T/uci.store.t"
+    done < "$T/uci.store" 2>/dev/null
+    printf '%s=%s\n' "$1" "$2" >> "$T/uci.store.t"
+    mv "$T/uci.store.t" "$T/uci.store"
 }
 
 jget() {  # ПОЛЕ < JSON
@@ -2253,6 +2362,138 @@ check "круг: молчание движка — это ошибка, а не 
 printf '{"schema":1,"outputs":{},"channels":[]}\n' > "$T/etc/spec.json"
 
 check "метод объявлен в списке ubus" "yes" "$(rpcd_list | grep -q '"live"' && echo yes || echo no)"
+
+
+# ---- xsteer: состояние туннелей и ссылка xs:// ---------------------------------
+#
+# Три метода, и у каждого своя цена ошибки.
+#
+# xsteer_state отвечает на вопрос, который иначе не задать: встала ли разгрузка, сколько раз
+# соединение переподнималось, отвечает ли вообще процесс. Здесь важно, что «файла нет» и «файл
+# лежит» РАЗЛИЧАЮТСЯ в ответе: первое означает «туннель не поднимался», второе — состояние, и
+# показать одно вместо другого значит соврать про настройку роутера.
+#
+# xsteer_link ходит к движку в обе стороны и НЕ РАЗБИРАЕТ формат сам. Проверяется именно это: что
+# ссылка уходит движку стандартным ВВОДОМ (аргументы видны в списке процессов, а в ссылке лежит
+# приватный ключ) и что отказ движка доезжает до человека его словами.
+#
+# xsteer_link_put пишет настройку сети — единственный метод в этом файле, который это делает.
+# Проверяется, что он не создаёт интерфейсов, замещает пира целиком и не трогает чужие поля.
+mkdir -p "$T/var/lib/steer" "$T/var/run/xsteer"
+uci_set "network.home.proto" "xsteer"
+uci_set "network.home.private_key" "OLDKEY"
+uci_set "network.lan.proto" "static"
+
+check "xsteer_state: туннель из настройки виден и без файла состояния" "xs-home" \
+      "$(rpcd xsteer_state | python3 -c 'import json,sys; print(json.load(sys.stdin)["tunnels"]["home"]["device"])')"
+check "xsteer_state: без файла состояние ПУСТОЕ, а не выдуманное" "null" \
+      "$(rpcd xsteer_state | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["tunnels"]["home"]["state"]))')"
+check "xsteer_state: чужой протокол в перечень не попал" "" \
+      "$(rpcd xsteer_state | python3 -c 'import json,sys; print(",".join(k for k in json.load(sys.stdin)["tunnels"] if k=="lan"))')"
+
+cat > "$T/var/lib/steer/xsteer-xs-home.json" <<'JEOF'
+{"schema":1,"out":"xs-home","up":true,"mtu":1420,"conns":2,"hub":"198.51.100.9:8443",
+ "hub_key":"QYkH5bWO","handshake_age":37,"stream":false,
+ "offload":{"gso":true,"gro":true,"rx":false},"mtu_confirmed":1420,"resets":3,
+ "tx_packets":10,"tx_bytes":2048,"rx_packets":12,"rx_bytes":4096,"dropped":0,
+ "last_down":"путь молчит"}
+JEOF
+check "xsteer_state: состояние движка отдано КАК ЕСТЬ, без пересборки схемы" "198.51.100.9:8443" \
+      "$(rpcd xsteer_state | python3 -c 'import json,sys; print(json.load(sys.stdin)["tunnels"]["home"]["state"]["hub"])')"
+check "xsteer_state: разгрузка доезжает по частям, а не одним словом" "false" \
+      "$(rpcd xsteer_state | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["tunnels"]["home"]["state"]["offload"]["rx"]))')"
+check "xsteer_state: возраст файла назван — по нему видно убитый процесс" "yes" \
+      "$(rpcd xsteer_state | python3 -c 'import json,sys; print("yes" if "age" in json.load(sys.stdin)["tunnels"]["home"] else "no")')"
+
+# Имя устройства из настройки, а не выведенное: файл состояния лежит под ИМЕНЕМ УСТРОЙСТВА, и
+# перепутать их значит показать пустое состояние работающему туннелю.
+uci_set "network.home.device_name" "xs-dom"
+mv "$T/var/lib/steer/xsteer-xs-home.json" "$T/var/lib/steer/xsteer-xs-dom.json"
+check "xsteer_state: заданное имя устройства уважается" "198.51.100.9:8443" \
+      "$(rpcd xsteer_state | python3 -c 'import json,sys; print(json.load(sys.stdin)["tunnels"]["home"]["state"]["hub"])')"
+uci "-q" delete "network.home.device_name" 2>/dev/null || :
+grep -v '^network.home.device_name=' "$T/uci.store" > "$T/uci.store.t"; mv "$T/uci.store.t" "$T/uci.store"
+mv "$T/var/lib/steer/xsteer-xs-dom.json" "$T/var/lib/steer/xsteer-xs-home.json"
+
+# ---- ссылка наружу ----
+check "xsteer_link: у выключенного интерфейса причина названа, а не пустая ссылка" "yes" \
+      "$(rpcd xsteer_link '{"iface":"home"}' | jget error | grep -q 'выключен' && echo yes || echo no)"
+printf '[Interface]\n' > "$T/var/run/xsteer/home.conf"
+: > "$T/steer.log"
+out="$(rpcd xsteer_link '{"iface":"home"}')"
+check "xsteer_link: ссылка отдана" "xs://PRIV@198.51.100.9:8443?pk=PUB&ip=10.77.0.5/24" \
+      "$(printf '%s' "$out" | jget link)"
+check "xsteer_link: печатает её ДВИЖОК, из готового файла настройки" "yes" \
+      "$(grep -q "xsteer-link $T/var/run/xsteer/home.conf --name home" "$T/steer.log" && echo yes || echo no)"
+check "xsteer_link: чужой интерфейс не обслуживается" "yes" \
+      "$(rpcd xsteer_link '{"iface":"lan"}' | jget error | grep -q 'не xsteer' && echo yes || echo no)"
+check "xsteer_link: негодное имя отвергнуто до всякого запуска движка" "yes" \
+      "$(rpcd xsteer_link '{"iface":"../etc/passwd"}' | jget error | grep -qi 'негодное' && echo yes || echo no)"
+XS_LINK_RC=2 XS_LINK_ERR="это конфигурация хаба" out="$(XS_LINK_RC=2 XS_LINK_ERR="это конфигурация хаба" rpcd xsteer_link '{"iface":"home"}')"
+check "xsteer_link: отказ движка доезжает его словами" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'конфигурация хаба' && echo yes || echo no)"
+
+# ---- ссылка внутрь: разбор ----
+: > "$T/steer.log"
+out="$(rpcd xsteer_link '{"link":"xs://k@198.51.100.9:8443?pk=p&ip=10.77.0.5/24"}')"
+check "xsteer_link: ссылка превращается в текст настройки" "yes" \
+      "$(printf '%s' "$out" | jget conf | grep -q 'PrivateKey' && echo yes || echo no)"
+check "xsteer_link: ссылка уходит движку СТАНДАРТНЫМ ВВОДОМ, не аргументом" "yes" \
+      "$(grep -q '^stdin=xs://k@198.51.100.9:8443' "$T/steer.log" && echo yes || echo no)"
+check "xsteer_link: ссылки в аргументах движка нет вовсе" "no" \
+      "$(grep '^xsteer-link' "$T/steer.log" | grep -q 'xs://' && echo yes || echo no)"
+check "xsteer_link: не ссылка отвергнута до движка" "yes" \
+      "$(rpcd xsteer_link '{"link":"vless://x@h:443"}' | jget error | grep -q 'не ссылка' && echo yes || echo no)"
+
+# ---- ссылка внутрь: запись в настройку ----
+: > "$T/ifup.log"
+out="$(rpcd xsteer_link_put '{"iface":"home","link":"xs://k@198.51.100.9:8443?pk=p&ip=10.77.0.5/24"}')"
+check "xsteer_link_put: принято" "true" "$(printf '%s' "$out" | jget ok)"
+check "xsteer_link_put: хаб назван в ответе" "198.51.100.9:8443" "$(printf '%s' "$out" | jget hub)"
+check "xsteer_link_put: приватный ключ взят из разбора движка" \
+      "6Gtidge6FqhO/0LhrAWpRiyYaKdLZF/gib/HePLC9GU=" "$(uci_get network.home.private_key)"
+check "xsteer_link_put: адрес взят оттуда же" "10.77.0.5/24" "$(uci_get network.home.addresses)"
+check "xsteer_link_put: SNI перенесён" "www.microsoft.com" "$(uci_get network.home.sni)"
+_peer="$(sed -n 's/^network\.\(@*[^.=]*\)=xsteer_home$/\1/p' "$T/uci.store" | head -1)"
+check "xsteer_link_put: секция пира создана" "yes" "$([ -n "$_peer" ] && echo yes || echo no)"
+check "xsteer_link_put: ключ хаба записан" \
+      "QYkH5bWOsEOCgIMldHPATSG7yvNyJ8st7o/HMelWKxs=" "$(uci_get "network.$_peer.public_key")"
+check "xsteer_link_put: хост и порт разделены" "198.51.100.9" "$(uci_get "network.$_peer.endpoint_host")"
+check "xsteer_link_put: порт отдельно" "8443" "$(uci_get "network.$_peer.endpoint_port")"
+check "xsteer_link_put: список AllowedIPs разобран по запятым" "10.77.0.0/24 192.168.9.0/24" \
+      "$(uci_get "network.$_peer.allowed_ips")"
+check "xsteer_link_put: keepalive перенесён" "25" "$(uci_get "network.$_peer.persistent_keepalive")"
+check "xsteer_link_put: интерфейс поднят заново — иначе запись без действия" "yes" \
+      "$(grep -q '^home$' "$T/ifup.log" && echo yes || echo no)"
+
+# Повторный приём НЕ ПЛОДИТ пиров: пиру нужен ровно один хаб, и оставленный второй означал бы
+# туннель к двум хабам сразу — состояния, которого в звезде не бывает.
+rpcd xsteer_link_put '{"iface":"home","link":"xs://k@198.51.100.9:8443?pk=p&ip=10.77.0.5/24"}' >/dev/null
+check "xsteer_link_put: повторный приём оставляет ровно одного пира" "1" \
+      "$(grep -c '=xsteer_home$' "$T/uci.store" | tr -d ' ')"
+
+# Интерфейса нет — метод его НЕ СОЗДАЁТ и говорит, где создать. Созданный здесь туннель остался бы
+# без зоны фаервола: выглядел бы настроенным и не вёз бы трафик.
+out="$(rpcd xsteer_link_put '{"iface":"newone","link":"xs://k@1.2.3.4:443?pk=p&ip=10.0.0.1/24"}')"
+check "xsteer_link_put: несуществующий интерфейс не создаётся" "false" "$(printf '%s' "$out" | jget ok)"
+check "xsteer_link_put: сказано, где его создать" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'настройках сети' && echo yes || echo no)"
+check "xsteer_link_put: и в настройке его не появилось" "" "$(uci_get network.newone.proto)"
+
+out="$(XS_LINK_RC=2 XS_LINK_ERR="неизвестный параметр snii" rpcd xsteer_link_put \
+       '{"iface":"home","link":"xs://k@1.2.3.4:443?snii=a"}')"
+check "xsteer_link_put: негодная ссылка не портит настройку" \
+      "6Gtidge6FqhO/0LhrAWpRiyYaKdLZF/gib/HePLC9GU=" "$(uci_get network.home.private_key)"
+check "xsteer_link_put: отказ движка доезжает его словами" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'snii' && echo yes || echo no)"
+
+for m in xsteer_state xsteer_link xsteer_link_put; do
+    check "метод $m объявлен в списке ubus" "yes" \
+          "$(rpcd_list | grep -q "\"$m\"" && echo yes || echo no)"
+    check "метод $m назван в ACL" "yes" \
+          "$(grep -q "\"$m\"" "$ROOT/luci/root/usr/share/rpcd/acl.d/luci-app-splify2.json" \
+             && echo yes || echo no)"
+done
 
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo "ЕСТЬ ПРОВАЛЫ: $fails")"
 [ "$fails" -eq 0 ]

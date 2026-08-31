@@ -238,7 +238,52 @@ check "пир: Endpoint собран из хоста и порта" \
 check "пир: список AllowedIPs склеен запятыми" \
     "yes" "$(printf '%s' "$CONF" | grep -q '^AllowedIPs = 10.77.0.0/24, 0.0.0.0/0$' && echo yes || echo no)"
 
-# ── 8. Каждый код отказа обработчика назван на странице протокола ──
+# ── 8. Разгрузка сегментации: ключ выключает её ОКРУЖЕНИЕМ, отсутствие ключа не выключает ──
+#
+# Проверяется именно направление по умолчанию. Разгрузка даёт основную часть скорости туннеля, и
+# ошибка здесь молчалива: интерфейс, не знающий про ключ, не присылает его вовсе — и если читать
+# «не 1» как «выключить», быстрый путь пропал бы у всех, кто просто не обновил страницу.
+OPT_private_key="$KEY" OPT_addresses="10.77.0.2/24" run_setup wg0
+check "разгрузка: без ключа движок запущен без переменных выключения" \
+    "no" "$(echo "$NETIFD" | grep -q 'STEER_TUN_NOGSO' && echo yes || echo no)"
+OPT_private_key="$KEY" OPT_addresses="10.77.0.2/24" OPT_offload=1 run_setup wg0
+check "разгрузка: offload=1 тоже ничего не выключает" \
+    "no" "$(echo "$NETIFD" | grep -q 'STEER_TUN_NOGSO' && echo yes || echo no)"
+OPT_private_key="$KEY" OPT_addresses="10.77.0.2/24" OPT_offload=0 run_setup wg0
+check "разгрузка: offload=0 выключает все три переменные" \
+    "yes" "$(echo "$NETIFD" | grep -q 'STEER_TUN_NOGSO=1 STEER_TUN_NOGRO=1 STEER_TUN_NORXGSO=1' \
+             && echo yes || echo no)"
+check "разгрузка: offload=0 не мешает движку получить своё имя устройства" \
+    "yes" "$(echo "$NETIFD" | grep -q -- '--device xs-wg0' && echo yes || echo no)"
+# Имена переменных — не свободный текст: их читает движок (steer, src/ext/tun.c). Опечатка здесь
+# выглядела бы как «ключ не работает», а не как ошибка.
+check "разгрузка: имена переменных те, что читает движок" \
+    "3" "$(grep -o 'STEER_TUN_NOGSO=1\|STEER_TUN_NOGRO=1\|STEER_TUN_NORXGSO=1' "$HANDLER" \
+           | sort -u | wc -l | tr -d ' ')"
+
+# ── 9. Ключ разгрузки есть и на странице протокола ──
+# Иначе он остаётся только в uci: человек, у которого туннель «стал медленнее», не найдёт
+# переключателя, которым это проверяется.
+check "страница протокола: ключ offload объявлен" \
+    "yes" "$(grep -q "form.Flag, 'offload'" "$PAGE" && echo yes || echo no)"
+check "страница протокола: ключ offload включён по умолчанию" \
+    "yes" "$(grep -A6 "form.Flag, 'offload'" "$PAGE" | grep -q "o.default = '1'" && echo yes || echo no)"
+check "обработчик протокола: ключ offload объявлен netifd" \
+    "yes" "$(grep -q 'proto_config_add_boolean offload' "$HANDLER" && echo yes || echo no)"
+
+# ── 10. Ссылку xs:// страница протокола разбирает НЕ САМА ──
+# Формат ссылки описан в движке и сверяется побайтово с половиной на Go. Свой разбор на странице
+# был бы третьей реализацией — и первой, у которой нет стенда. Проверяется отсутствие признаков
+# такого разбора: страница обязана звать бэкенд.
+check "страница протокола: ссылка уходит на роутер, а не разбирается в браузере" \
+    "yes" "$(grep -q "method: 'xsteer_link'" "$PAGE" && echo yes || echo no)"
+# Признаки своего разбора — работа со строкой запроса: URLSearchParams, new URL(), ручное
+# деление по '&'. Подсказка в поле ввода (там ссылка стоит примером) под них не попадает.
+check "страница протокола: своего разбора параметров ссылки нет" \
+    "no" "$(grep -qE "searchParams|new URL\(|split\('&'\)|split\(\"&\"\)" "$PAGE" \
+            && echo yes || echo no)"
+
+# ── 11. Каждый код отказа обработчика назван на странице протокола ──
 # Иначе LuCI покажет человеку сырой код вместо причины: коды приезжают в интерфейс через
 # ubus, и переводит их только network.registerErrorCode на странице.
 codes="$(grep -o 'proto_notify_error "\$config" [A-Z_]*' "$HANDLER" | awk '{print $3}' | sort -u)"

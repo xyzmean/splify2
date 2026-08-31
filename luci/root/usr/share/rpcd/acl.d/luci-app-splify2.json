@@ -36,7 +36,9 @@
           "splify2_versions",
           "fetch_mode",
           "outbound_geo",
-          "zm_fix"
+          "zm_fix",
+          "xsteer_state",
+          "xsteer_link"
         ]
       }
     },
@@ -63,7 +65,8 @@
           "splify2_install",
           "list_put",
           "fetch_mode_set",
-          "zm_fix_set"
+          "zm_fix_set",
+          "xsteer_link_put"
         ]
       }
     }

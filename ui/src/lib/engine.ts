@@ -126,3 +126,18 @@ export function poolsSupported(status: Status | null): boolean {
     const outs = Object.values(status.outputs || {})
     return outs.some((o) => o.kind === 'vless' && Array.isArray(o.nodes))
 }
+
+/** Умеет ли установленный движок ссылки xs://.
+ *
+ *  Спрашивается У СОСТОЯНИЯ, а не у версии, по той же причине, что и `poolsSupported`: номер
+ *  версии движку проставляет релизный workflow, а не коммит, и сборка из main через два коммита
+ *  после релиза называет то же число, что релиз.
+ *
+ *  Ответ «не умеет» на отсутствующем перечне — не осторожность, а честность: до steer 1.3.0
+ *  перечня умений нет вовсе, и спросить про ссылки нечем. Цена ошибки здесь несимметрична.
+ *  Сказав «умеет» зря, мы дадим человеку вставить ссылку и получить отказ от rpcd, в котором он
+ *  будет искать опечатку в ссылке; сказав «не умеет» зря — всего лишь не покажем кнопку и
+ *  назовём версию, с которой она появляется. */
+export function xsLinkSupported(status: Status | null): boolean {
+    return Array.isArray(status?.features) && status.features.includes('xslink')
+}

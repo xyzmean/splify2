@@ -142,9 +142,15 @@ def load_parser():
     src = open(PAGE, encoding="utf-8").read()
     start = src.index("var REFUSED")
     end = src.index("network.registerPatternVirtual")
-    # Заглушки того, что даёт LuCI: перевод строк и String.prototype.format.
+    # Заглушки того, что даёт LuCI: перевод строк, String.prototype.format и rpc.
+    #
+    # rpc понадобился, когда страница научилась принимать ссылку xs://: разбирает её ДВИЖОК, а
+    # страница только зовёт бэкенд (см. callXsteerLink). Заглушка нужна ровно чтобы объявление
+    # вызова не падало здесь — сам вызов в этом стенде не проверяется: он про разбор ФАЙЛА,
+    # который страница делает сама.
     stub = (
         "var _ = function(s){ return s; };"
+        "var rpc = { declare: function(){ return function(){}; } };"
         "String.prototype.format = function(){"
         "  var a = arguments, i = 0;"
         "  return this.replace(/%[sd]/g, function(){ return a[i++]; });"
