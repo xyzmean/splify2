@@ -38,7 +38,12 @@
           "outbound_geo",
           "zm_fix",
           "xsteer_state",
-          "xsteer_link"
+          "xsteer_link",
+          "doh_state",
+          "zapret_state",
+          "zapret_strategies",
+          "zapret_test",
+          "zapret_results"
         ]
       }
     },
@@ -66,7 +71,16 @@
           "list_put",
           "fetch_mode_set",
           "zm_fix_set",
-          "xsteer_link_put"
+          "xsteer_link_put",
+          "doh_set",
+          "doh_off",
+          "doh_tunnel_set",
+          "zapret_install",
+          "zapret_remove",
+          "zapret_sync",
+          "zapret_apply",
+          "zapret_test_start",
+          "zapret_test_stop"
         ]
       }
     }

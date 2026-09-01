@@ -267,6 +267,17 @@ FETCH_TIMEOUT=${FETCH_TIMEOUT:-60}
 # у fetch.sh: на машине разработчика его нет, стенд подставляет свой.
 UPDATE_LISTS=${UPDATE_LISTS:-/usr/sbin/splify2-update-lists}
 
+# Обход DPI и DNS over HTTPS — тоже отдельными файлами, и по тому же доводу, что fetch.sh:
+# каталог стратегий читают трое (объект, ночное обновление, фоновая проверка), а настройку
+# резолвера — объект и та же ночная работа. Копия в каждом означала бы, что «активная
+# стратегия» в одном месте значит одно, а в другом другое, и разошлись бы они молча.
+. "${ZAPRET_SH:-/usr/lib/splify2/zapret.sh}"
+. "${DOH_SH:-/usr/lib/splify2/doh.sh}"
+# Фоновая проверка стратегий — отдельный процесс, а не работа внутри вызова ubus: у вызова
+# свой срок жизни (две минуты), а проверка идёт десятки минут, и человек должен иметь право
+# закрыть окно. Путь швом по той же причине, что у остальных.
+ZAPRET_TEST=${ZAPRET_TEST:-/usr/sbin/splify2-zapret-test}
+
 # ---- идентификатор устройства для панели подписки (HWID) ----------------------------
 #
 # Считает его ДВИЖОК (`steer sub-hwid`), а не этот файл. Почему так — в
@@ -580,6 +591,140 @@ table inet $ZM_TABLE {
     }
 }
 NFT
+}
+
+# ---- DoH через туннель --------------------------------------------------------------
+#
+# ЗАЧЕМ. DoH прячет имена сайтов от провайдера, но сам запрос к резолверу провайдер видит и
+# может закрыть — и закрывает: cloudflare-dns.com и dns.google у части аудитории не
+# отвечают вовсе. Тогда DoH не поднимается, dnsmasq остаётся без серверов, и «интернет
+# пропал» — при исправном туннеле рядом.
+#
+# КАК. Тем же приёмом, что фикс Zapret Manager выше, и это не совпадение: вопрос один — как
+# увести СОБСТВЕННЫЙ трафик роутера в туннель, которым движок метит только транзит. Метка в
+# цепочке `type route hook output`, маска движка, чужие биты не тронуты.
+#
+# ЧЕМ УЗНАЁТСЯ ТРАФИК ПРОКСИ. По владельцу сокета: https-dns-proxy мы сами записываем с
+# `option user 'nobody'` (см. doh_write), и других процессов под nobody на стоковом роутере
+# нет — dnsmasq, ntp, logd и ubus ходят под своими. Плюс порт назначения 443: DoH это HTTPS
+# и ничего кроме. Адрес назначения для отбора не годится в принципе — имя резолвера
+# разрешается по bootstrap, и в какой адрес оно разойдётся, заранее не известно.
+#
+# ЦЕНА, И О НЕЙ НАДО ЗНАТЬ. Если под nobody на роутере появится что-то ещё, ходящее в 443,
+# его трафик тоже уйдёт в туннель. Последствие безобидное — это собственный трафик роутера
+# через работающий выход, — но назвать его надо, потому что через год этот отбор будет
+# читать другой человек.
+# ОТБОР ИДЁТ ПРАВИЛОМ МАРШРУТИЗАЦИИ ПО ВЛАДЕЛЬЦУ СОКЕТА, а не меткой в nftables, и это второй
+# урок, снятый с живого роутера.
+#
+# Сначала здесь стояла метка в цепочке `type route hook output` — тем же приёмом работает фикс
+# Zapret Manager рядом. Для транзитного трафика приём верен, а для СОБСТВЕННОГО трафика
+# роутера — нет: адрес источника ядро выбирает в момент connect(), то есть по таблице main, и
+# только потом наша цепочка ставит метку и просит пересмотреть маршрут. Маршрут меняется,
+# адрес источника — уже нет. Пакет уходит в туннель с адресом WAN, ответ на этот адрес через
+# туннель не возвращается, и снаружи это выглядит как «DoH включён, DNS не работает».
+# Проверено счётчиками: правило срабатывало (27 пакетов), ответов не было ни одного.
+#
+# `ip rule ... uidrange` применяется В САМОМ ПЕРВОМ поиске маршрута, поэтому адрес источника
+# выбирается уже из таблицы туннеля. Заодно исчезает вся таблица nftables: одно правило
+# вместо цепочки, метки и маски.
+#
+# ЦЕНА ОТБОРА, и о ней надо знать: через туннель пойдёт ВЕСЬ трафик пользователя nobody, а не
+# только HTTPS. На стоковом роутере под nobody ходит только https-dns-proxy (dnsmasq, ntp,
+# logd и ubus — под своими), так что это ровно то, что нужно; но если под nobody появится
+# что-то ещё, оно тоже уйдёт в туннель.
+#
+# ТАБЛИЦА СВОЯ, а не таблица выхода, и это первый урок того же дня. Таблица выхода при
+# `on_fail: drop` (умолчание) содержит запрет: туннель умер — трафик остановлен. Для трафика
+# КЛИЕНТОВ это ровно то, что обещано. Но для собственного DNS роутера получается замкнутый
+# круг, и вот он целиком, как он воспроизвёлся на 10.8.1.87:
+#
+#   клиент vless перезапустился → ему надо разрешить имя своего узла (ru.riotvpn.eu)
+#   → запрос идёт в dnsmasq → dnsmasq пересылает его в https-dns-proxy → тот идёт к
+#   резолверу по HTTPS → правило уводит это в таблицу выхода → выход ещё не поднят, в
+#   таблице запрет → DoH молчит → имя не разрешается → клиент не поднимается никогда.
+#
+#   В журнале это выглядело как «steer[warn] tunnel: поток к ru.riotvpn.eu не открылся: имя
+#   не разрешилось», а снаружи — как «роутер потерял интернет после включения галочки».
+#
+# Своя таблица содержит РОВНО ОДИН маршрут — default через устройство выхода. Когда
+# устройство падает, ядро само убирает из таблицы маршруты через него; таблица пустеет,
+# поиск в ней не находит ничего, и ядро ПЕРЕХОДИТ К СЛЕДУЮЩЕМУ правилу, то есть к main. DoH
+# идёт напрямую, DNS оживает, туннель разрешает своё имя и поднимается — а правило снова
+# начинает работать само. Проверено на роутере: `ip link set vless down` → таблица 290
+# пустеет → DNS отвечает.
+#
+# Отказ здесь ОТКРЫТЫЙ, и это не поблажка: `on_fail: drop` — обещание про трафик КЛИЕНТОВ
+# («не утечёт мимо туннеля»), а собственный DNS роутера — другой трафик и другое обещание.
+#
+# Номер таблицы 290 — ниже 300, с которой движок раздаёт свои; приоритет правила 29000 — выше
+# (то есть раньше) его правил, чтобы наш выбор не перебивался меткой выхода.
+DOH_RT="${DOH_RT:-290}"
+DOH_RULE_PREF="${DOH_RULE_PREF:-29000}"
+
+# uid пользователя nobody. Читается из /etc/passwd, а не зашивается: 65534 — соглашение, а
+# не стандарт, и на роутере с чужой прошивкой оно может быть другим. Под этим же именем мы
+# сами записываем `option user` в настройку прокси (см. doh_write), так что связь не
+# случайная.
+doh_uid() {
+    _du="$(awk -F: '$1 == "nobody" { print $3; exit }' /etc/passwd 2>/dev/null)"
+    case "${_du:-}" in ''|*[!0-9]*) printf '65534' ;; *) printf '%s' "$_du" ;; esac
+}
+
+doh_tunnel_on() {
+    case "$(uci -q get splify2.main.doh_via_tunnel 2>/dev/null)" in
+        1|on|yes|true|always) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Устройство первого ПОДНЯТОГО выхода с устройством. Печатает «имя устройство».
+#
+# Именно поднятого, в отличие от zm_mark: маршрут через мёртвое устройство ядро не примет, а
+# имя выхода мы показываем человеку — и назвать мёртвый выход значило бы обещать то, чего нет.
+doh_out() {
+    _do_st="$("$STEER" status --spec "$SPEC" 2>/dev/null)"
+    [ -n "$_do_st" ] || return 1
+    for _do_o in $("$STEER" outputs --spec "$SPEC" 2>/dev/null); do
+        [ "$_do_o" = direct ] && continue
+        case "$_do_o" in *[!a-zA-Z0-9_-]*) continue ;; esac
+        [ "$(printf '%s' "$_do_st" | jsonfilter -e "@.outputs.$_do_o.up" 2>/dev/null)" = true ] ||
+            continue
+        _do_d="$(printf '%s' "$_do_st" | jsonfilter -e "@.outputs.$_do_o.device" 2>/dev/null)"
+        [ -n "$_do_d" ] || continue
+        printf '%s %s' "$_do_o" "$_do_d"
+        return 0
+    done
+    return 1
+}
+
+# Снять всё своё: правило (сколько бы копий ни накопилось — `ip rule add` дубликаты не
+# проверяет) и таблицу. Прежние версии ставили ещё и таблицу nftables — снимаем и её, иначе
+# после обновления пакета она осталась бы висеть и метила бы трафик в никуда.
+doh_rules_down() {
+    _dd_n=0
+    while [ "$_dd_n" -lt 32 ] && ip rule del pref "$DOH_RULE_PREF" 2>/dev/null; do
+        _dd_n=$((_dd_n + 1))
+    done
+    ip route flush table "$DOH_RT" 2>/dev/null
+    nft delete table inet splify2_doh 2>/dev/null
+    return 0
+}
+
+doh_rules_sync() {
+    if ! doh_tunnel_on || ! doh_installed; then
+        doh_rules_down
+        return 0
+    fi
+    _dr_pair="$(doh_out)" || { doh_rules_down; return 0; }
+    _dr_dev="${_dr_pair#* }"
+    doh_rules_down
+    ip route replace default dev "$_dr_dev" table "$DOH_RT" 2>/dev/null ||
+        { doh_rules_down; return 0; }
+    _dr_uid="$(doh_uid)"
+    ip rule add uidrange "$_dr_uid-$_dr_uid" table "$DOH_RT" pref "$DOH_RULE_PREF" 2>/dev/null ||
+        { doh_rules_down; return 0; }
+    return 0
 }
 
 # Зона фаервола для устройств, которые движок создаёт сам (выходы kind=vless).
@@ -1143,6 +1288,26 @@ pkg_add_file() {  # ФАЙЛ
 pkg_del() {  # ИМЯ
     if [ "$PM" = apk ]; then apk del "$1" >/dev/null 2>&1
     else opkg remove "$1" >/dev/null 2>&1
+    fi
+}
+
+# Поставить пакет ПО ИМЕНИ, из репозитория. Не то же, что pkg_install: тот ставит СКАЧАННЫЙ
+# ФАЙЛ (движок и интерфейс приезжают из GitHub Releases), а здесь речь про обычные пакеты
+# OpenWrt — unzip и curl, без которых половина работы с обходом DPI невозможна.
+#
+# Списки пакетов обновляются при неудаче и ровно один раз. Причина та же, что у pkg_add_file:
+# на свежей прошивке списков нет — они не переживают перезагрузку, — и установка падает не
+# потому, что пакета нет, а потому, что о нём нечего знать. У apk это ровно так же, как у
+# opkg, хотя беда с зависимостями локального файла у него не воспроизводится.
+pkg_add_name() {  # ИМЯ
+    if [ "$PM" = apk ]; then
+        apk add "$1" >/dev/null 2>&1 && return 0
+        apk update >/dev/null 2>&1
+        apk add "$1" >/dev/null 2>&1
+    else
+        opkg install "$1" >/dev/null 2>&1 && return 0
+        opkg update >/dev/null 2>&1
+        opkg install "$1" >/dev/null 2>&1
     fi
 }
 
@@ -1736,6 +1901,31 @@ list)
     json_close_object
     json_add_object zm_fix; json_close_object
     json_add_object zm_fix_set; json_add_boolean on; json_close_object
+    # ---- DNS over HTTPS ----
+    json_add_object doh_state; json_close_object
+    json_add_object doh_set; json_add_string provider; json_close_object
+    json_add_object doh_off; json_close_object
+    json_add_object doh_tunnel_set; json_add_boolean on; json_close_object
+    # ---- обход DPI ----
+    json_add_object zapret_state; json_close_object
+    json_add_object zapret_install; json_close_object
+    json_add_object zapret_remove; json_close_object
+    json_add_object zapret_sync; json_close_object
+    json_add_object zapret_strategies; json_close_object
+    # `out` — какому выходу kind=zapret. Пусто означает «всему роутеру», то есть
+    # /etc/config/zapret: это два разных места применения одной и той же стратегии, и
+    # различать их полем дешевле, чем двумя методами с одинаковым телом.
+    json_add_object zapret_apply; json_add_string name; json_add_string out; json_close_object
+    json_add_object zapret_test_start; json_add_string scope; json_close_object
+    json_add_object zapret_test_stop; json_close_object
+    # Ход проверки отдельным методом, а не полем zapret_state: состояние спрашивает пакетный
+    # менеджер про версию (это десятки миллисекунд), а ход опрашивают раз в две секунды,
+    # пока проверка идёт. Один метод на оба означал бы плату за версию на каждом опросе.
+    json_add_object zapret_test; json_close_object
+    # Результаты отдаются ДОСЛОВНО тем файлом, который написала проверка. Пересобирать их
+    # здесь через jshn значило бы разбирать и собирать пятьдесят объектов на каждый запрос
+    # ради того же самого JSON — тот же довод, по которому `status` движка отдаётся как есть.
+    json_add_object zapret_results; json_close_object
     json_add_object fetch_mode; json_close_object
     json_add_object fetch_mode_set; json_add_string mode; json_close_object
     json_add_object vless_nodes; json_add_string output; json_close_object
@@ -1865,9 +2055,18 @@ call)
         # Снимок — только на успехе: неудавшийся apply ничего не изменил в ядре, и счётчик
         # обязан продолжать это показывать.
         [ "$rc" -eq 0 ] && cp "$SPEC" "$APPLIED" 2>/dev/null
-        # Своя таблица собирается ПОСЛЕ движка: тот сносит и ставит свою заново, а наша
-        # ссылается на его метку — до его применения ссылаться было бы не на что.
+        # Свои таблицы собираются ПОСЛЕ движка: тот сносит и ставит свою заново, а наши
+        # ссылаются на его метку — до его применения ссылаться было бы не на что. Обе рядом
+        # потому, что делают одно и то же для двух разных поводов (фикс GitHub и DoH), и
+        # забыть одну из них при правке apply — самый простой способ выкатить настройку,
+        # которая включена в интерфейсе и не действует.
         zm_rules_sync
+        doh_rules_sync
+        # И третье, из той же семьи: force_dns у https-dns-proxy обязан согласиться с тем,
+        # нужен ли движку свой резолвер. Ровно здесь, потому что ровно здесь доменные каналы
+        # появляются и исчезают, а два перенаправления порта 53 в одной точке дают гонку, из
+        # которой проигравший выходит молча (см. doh_force_sync).
+        doh_force_sync
         [ -n "$fetch_warn" ] && out="$fetch_warn
 $out"
         [ -n "$zone_msg" ] && out="$zone_msg
@@ -3492,7 +3691,7 @@ splify2: набор обфускаторов изменился — экземп
         ;;
 
     dev_stats)
-        # Счёт устройств живёт в /usr/lib/splify2/live.sh — там же, откуда его берёт круг
+        # Счёт устройств живёт в /usr/lib/splify2/fast.sh — там же, откуда его берёт круг
         # опроса. Одна реализация на два входа: копия здесь означала бы два места, где
         # считаются одни и те же числа, и они разошлись бы молча.
         #
@@ -3518,7 +3717,7 @@ splify2: набор обфускаторов изменился — экземп
         ;;
 
     net_info)
-        # Сведения о сети считает /usr/lib/splify2/live.sh — тот же довод, что у dev_stats:
+        # Сведения о сети считает /usr/lib/splify2/fast.sh — тот же довод, что у dev_stats:
         # одна реализация на два входа. Там же записано, почему внешнего адреса здесь нет.
         . "${FAST_SH:-/usr/lib/splify2/fast.sh}"
         printf '{%s}\n' "$(fast_net)"
@@ -3763,6 +3962,380 @@ splify2: набор обфускаторов изменился — экземп
         out="$(json_tail "$raw")"
         [ -n "$out" ] || fail "${raw:-движок не ответил}"
         printf '%s\n' "$out"
+        ;;
+
+    # ================ DNS over HTTPS ==========================================
+    doh_state)
+        # Всё, что нужно вкладке, одним вызовом: без этого она делала бы четыре — за
+        # состоянием службы, за каталогом, за выбранным и за туннелем, — а каждый вызов
+        # это запуск скрипта объекта (см. шапку файла про 126 мс платы).
+        json_init
+        doh_installed && json_add_boolean installed 1 || json_add_boolean installed 0
+        doh_running   && json_add_boolean running 1   || json_add_boolean running 0
+        doh_enabled   && json_add_boolean enabled 1   || json_add_boolean enabled 0
+        # Выбранный пункт каталога. Пусто — законное состояние: либо ничего не настроено,
+        # либо в конфигурации стоит чужая ссылка (вписана руками, взята из версии менеджера
+        # новее нашей). Второй случай отличается от первого непустым urls.
+        json_add_string active "$(doh_active 2>/dev/null)"
+        # БЕЗ КОНВЕЙЕРА, и это не стиль. `... | while read` исполняет тело в ПОДОБОЛОЧКЕ, а
+        # jshn накапливает ответ в переменных оболочки: из подоболочки они не возвращаются
+        # никуда. Массив выходил ПУСТЫМ при полностью исправном на вид коде — то есть вкладка
+        # DoH открывалась без единого резолвера в списке, и выбрать было нечего. Поймано
+        # стендом rpcdmatch. Поэтому строки перебираются подстановкой с IFS по переводу
+        # строки: сама подстановка происходит в этой же оболочке.
+        _dl_ifs="$IFS"
+        json_add_array urls
+        IFS='
+'
+        for u in $(doh_urls 2>/dev/null); do
+            IFS="$_dl_ifs"
+            [ -n "$u" ] && json_add_string "" "$u"
+            IFS='
+'
+        done
+        IFS="$_dl_ifs"
+        json_close_array
+        json_add_array providers
+        IFS='
+'
+        for row in $(doh_items 2>/dev/null); do
+            IFS="$_dl_ifs"
+            pid="${row%%|*}"; ptitle="${row#*|}"
+            if [ -n "$pid" ]; then
+                json_add_object
+                json_add_string id "$pid"
+                json_add_string title "$ptitle"
+                json_close_object
+            fi
+            IFS='
+'
+        done
+        IFS="$_dl_ifs"
+        json_close_array
+        doh_tunnel_on && json_add_boolean via_tunnel 1 || json_add_boolean via_tunnel 0
+        # Через какой выход пойдёт (или уже идёт) DoH. Называется он здесь ровно затем,
+        # чтобы человек не думал, будто есть отдельный выбор: выбора нет, это первый
+        # ПОДНЯТЫЙ выход с устройством. Считает его та же функция, что ставит маршрут, —
+        # иначе интерфейс обещал бы один выход, а трафик шёл бы через другой.
+        json_add_string out "$(doh_out 2>/dev/null | cut -d' ' -f1)"
+        # force_dns — ключ, который заворачивает весь DNS сети на роутер. Мы его выключаем,
+        # когда движку нужен свой резолвер доменных каналов: два перенаправления на порт 53
+        # в одной точке дают гонку, и проиграв, наш резолвер молча перестаёт видеть запросы
+        # (доменные правила действуют «через раз»). Показывается, потому что иначе это
+        # выглядит как «включил force_dns в файле, а splify2 его сбросил».
+        doh_needs_dnsd && json_add_boolean needs_dnsd 1 || json_add_boolean needs_dnsd 0
+        json_add_string force_dns "$(doh_force_dns)"
+        json_dump
+        ;;
+
+    doh_set)
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var provider provider
+        [ -n "$provider" ] || fail "не выбран резолвер"
+        doh_installed || fail "https-dns-proxy не установлен"
+        doh_has "$provider" || fail "нет такого резолвера в каталоге: $provider"
+        doh_write "$provider" || fail "не удалось записать $DOH_CONF — кончилось место?"
+        doh_apply || fail "настройка записана, но служба не перезапустилась"
+        # Правила «через туннель» пересобираются здесь же: пользователь службы задаётся той
+        # же записью настройки, и правило ссылается на него. Порядок обратный оставил бы
+        # правило, отбирающее трафик пользователя, которого в настройке уже нет.
+        doh_rules_sync
+        json_init
+        json_add_boolean ok 1
+        json_add_string active "$(doh_active 2>/dev/null)"
+        json_add_string force_dns "$(doh_force_dns)"
+        json_dump
+        ;;
+
+    doh_off)
+        doh_installed || fail "https-dns-proxy не установлен"
+        doh_off
+        doh_rules_sync
+        json_init; json_add_boolean ok 1; json_dump
+        ;;
+
+    doh_tunnel_set)
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var on on
+        uci_file || fail "не удалось создать $UCI_SPLIFY2 — кончилось место?"
+        uci -q get splify2.main >/dev/null 2>&1 || uci -q set splify2.main=splify2
+        case "$on" in
+            1|true) uci -q set splify2.main.doh_via_tunnel=1 ;;
+            0|false) uci -q set splify2.main.doh_via_tunnel=0 ;;
+            *) fail "нужно true или false" ;;
+        esac
+        uci -q commit splify2
+        doh_rules_sync
+        json_init
+        json_add_boolean ok 1
+        doh_tunnel_on && json_add_boolean on 1 || json_add_boolean on 0
+        json_add_string out "$(doh_out 2>/dev/null | cut -d' ' -f1)"
+        json_dump
+        ;;
+
+    # ================ обход DPI (zapret) ======================================
+    zapret_state)
+        json_init
+        zp_installed && json_add_boolean installed 1 || json_add_boolean installed 0
+        zp_running   && json_add_boolean running 1   || json_add_boolean running 0
+        json_add_string version "$(zp_version 2>/dev/null)"
+        # Чем проверять стратегии. Без curl проверка невозможна, и сказать об этом надо ДО
+        # того, как человек нажмёт кнопку: ключи, которыми меряет Zapret Manager (сроки,
+        # предел скорости, диапазон байт), у uclient-fetch выразить нечем, а мерить другим
+        # инструментом значило бы получить числа, несравнимые с его числами.
+        command -v curl >/dev/null 2>&1 && json_add_boolean curl 1 || json_add_boolean curl 0
+        json_add_int strategies "$(zp_count)"
+        json_add_int updated "$(cat "$ZP_STAMP" 2>/dev/null || echo 0)"
+        json_add_string active "$(zp_active_global 2>/dev/null)"
+        # Разошлась ли активная стратегия с тем, что теперь в каталоге. Ночное обновление
+        # активную НЕ трогает (требование владельца), поэтому расхождение — законное
+        # состояние, и единственный способ узнать о нём — спросить.
+        _za="$(zp_active_global 2>/dev/null)"
+        if [ -n "$_za" ] && zp_drifted "$_za" /dev/null 2>/dev/null; then
+            json_add_boolean drifted 1
+        else
+            json_add_boolean drifted 0
+        fi
+        json_dump
+        ;;
+
+    zapret_install)
+        # Ставится ОТСЮДА, а не зависимостью пакета, и это решение: обход нужен не всем, а
+        # архив релиза весит под полмегабайта на архитектуру и приезжает не из репозитория
+        # OpenWrt, а из GitHub Releases — жёсткая зависимость сделала бы splify2
+        # неустанавливаемым у тех, кто ставит интерфейс первым. Тот же довод, по которому в
+        # depends нет самого движка (см. шапку build.sh).
+        zp_installed && { json_init; json_add_boolean ok 1
+                          json_add_string note "обход DPI уже установлен"; json_dump; exit 0; }
+        arch="$(awk -F\' '/DISTRIB_ARCH/ { print $2 }' /etc/openwrt_release 2>/dev/null)"
+        [ -n "$arch" ] || fail "не определилась архитектура роутера"
+        ver="${ZAPRET_VERSION:-72.20260307}"
+        url="https://github.com/remittor/zapret-openwrt/releases/download/v$ver/zapret_v${ver}_${arch}.zip"
+        tmpd="$(mktemp -d /tmp/splify2-zapret-pkg.XXXXXX)" || fail "нет места в /tmp"
+        if ! download "$url" "$tmpd/z.zip"; then
+            rm -rf "$tmpd"
+            fail "не удалось скачать $url${FETCH_NOTE:+ ($FETCH_NOTE)}"
+        fi
+        command -v unzip >/dev/null 2>&1 || pkg_add_name unzip
+        command -v unzip >/dev/null 2>&1 || { rm -rf "$tmpd"; fail "нужен unzip, поставить не удалось"; }
+        unzip -oq "$tmpd/z.zip" -d "$tmpd" 2>/dev/null || { rm -rf "$tmpd"; fail "архив не распаковался"; }
+        # apk на 24.10+ и opkg на 23.05 и старше: в архиве лежат оба формата, и брать нужно
+        # тот, который понимает менеджер этого роутера.
+        # Порядок важен: сам обход первым, страница LuCI второй — она от него зависит.
+        # Ставится через pkg_add_file, а не своим вызовом менеджера: там уже разобрано и
+        # различие ключей у apk и opkg, и повтор после `opkg update` на свежей прошивке,
+        # где списков пакетов нет вовсе.
+        err=""
+        if [ "$PM" = apk ]; then zglob="$tmpd/apk/zapret-*.apk $tmpd/apk/luci-app-zapret-*.apk"
+        else zglob="$tmpd/zapret_*.ipk $tmpd/luci-app-zapret_*.ipk"
+        fi
+        for f in $zglob; do
+            [ -f "$f" ] || continue
+            pkg_add_file "$f" >/dev/null 2>&1 || err="$err $(basename "$f")"
+        done
+        rm -rf "$tmpd"
+        zp_installed || fail "пакеты не встали:${err:- неизвестно почему}"
+        # curl нужен проверке стратегий, и ставится он ЗДЕСЬ, а не при нажатии «Проверить»:
+        # там человек ждёт результата, а не установки пакета. Неудача не отменяет установки
+        # обхода — она только лишает проверки, о чём скажет zapret_state.
+        command -v curl >/dev/null 2>&1 || pkg_add_name curl
+        # Каталог стратегий сразу: без него вкладка открывается пустой, и человек не понимает,
+        # установилось ли что-нибудь.
+        zp_sync >/dev/null 2>&1
+        json_init
+        json_add_boolean ok 1
+        json_add_string version "$(zp_version 2>/dev/null)"
+        json_add_int strategies "$(zp_count)"
+        command -v curl >/dev/null 2>&1 && json_add_boolean curl 1 || json_add_boolean curl 0
+        json_dump
+        ;;
+
+    zapret_remove)
+        zp_installed || { json_init; json_add_boolean ok 1; json_dump; exit 0; }
+        # Проверка снимается первой: она держит своё правило nftables и свой обработчик, и
+        # снести пакет под ними значило бы оставить очередь, в которую никто не смотрит.
+        start-stop-daemon -K -p "$ZP_PIDFILE" >/dev/null 2>&1
+        "$ZP_INIT" stop >/dev/null 2>&1
+        # Через pkg_del, а не своим вызовом менеджера: различие ключей у apk и opkg
+        # разобрано там, и второй его разбор здесь разошёлся бы с первым. Порядок обратный
+        # установке — страница LuCI первой, обход вторым: она от него зависит.
+        pkg_del luci-app-zapret
+        pkg_del zapret
+        # Каталог и результаты остаются: они ничего не занимают, а поставить обход заново —
+        # обычное дело, и терять из-за этого результаты часовой проверки незачем.
+        json_init
+        zp_installed && json_add_boolean ok 0 || json_add_boolean ok 1
+        json_dump
+        ;;
+
+    zapret_sync)
+        zp_installed || fail "обход DPI не установлен"
+        zp_sync || fail "каталог стратегий обновить не удалось${FETCH_NOTE:+: $FETCH_NOTE}"
+        json_init
+        json_add_boolean ok 1
+        json_add_int strategies "$(zp_count)"
+        json_add_int updated "$(cat "$ZP_STAMP" 2>/dev/null || echo 0)"
+        [ -n "$FETCH_NOTE" ] && json_add_string note "$FETCH_NOTE"
+        json_dump
+        ;;
+
+    zapret_strategies)
+        # Имена и семейства — здесь; числа проверки — отдельным методом (zapret_results),
+        # дословным файлом. Соединяет их интерфейс: разбирать пятьдесят объектов JSON в
+        # shell ради того же самого JSON — работа ради работы.
+        #
+        # Семейство печатается, а не выводится в интерфейсе из имени: правило «начинается
+        # с Yv» — это знание о чужом каталоге, и держать его на двух сторонах значило бы
+        # переименование у автора ломает разбор молча.
+        json_init
+        json_add_string active "$(zp_active_global 2>/dev/null)"
+        json_add_int updated "$(cat "$ZP_STAMP" 2>/dev/null || echo 0)"
+        # Без конвейера — по той же причине, что в doh_state выше: тело конвейера идёт в
+        # подоболочке, и накопленный jshn из неё не возвращается. Массив выходил пустым, то
+        # есть каталог в интерфейсе был пуст при полном каталоге на диске.
+        _zs_ifs="$IFS"
+        json_add_array strategies
+        IFS='
+'
+        for n in $(zp_names 2>/dev/null); do
+            IFS="$_zs_ifs"
+            if [ -n "$n" ]; then
+                json_add_object
+                json_add_string name "$n"
+                case "$n" in
+                    general*) json_add_string family flowseal ;;
+                    Yv*)      json_add_string family yv ;;
+                    v[0-9]*)  json_add_string family v ;;
+                    *)        json_add_string family other ;;
+                esac
+                json_close_object
+            fi
+            IFS='
+'
+        done
+        IFS="$_zs_ifs"
+        json_close_array
+        # Какие выходы kind=zapret есть и что у каждого применено. Спрашивается у движка
+        # (`steer status`), а не у файлов: имя выхода и его вид знает он, а мы знаем только
+        # содержимое файла ключей — и файл, оставшийся от удалённого выхода, выглядел бы
+        # как живой выход.
+        json_add_array outputs
+        st="$("$STEER" status --spec "$SPEC" 2>/dev/null)"
+        for o in $("$STEER" outputs --kind zapret --spec "$SPEC" 2>/dev/null); do
+            json_add_object
+            json_add_string name "$o"
+            json_add_string strategy "$(zp_active_out "$o" 2>/dev/null)"
+            json_add_int queue "$(printf '%s' "$st" | jsonfilter -e "@.outputs.$o.queue" 2>/dev/null || echo 0)"
+            case "$(printf '%s' "$st" | jsonfilter -e "@.outputs.$o.up" 2>/dev/null)" in
+                true) json_add_boolean up 1 ;;
+                *)    json_add_boolean up 0 ;;
+            esac
+            json_close_object
+        done
+        json_close_array
+        json_dump
+        ;;
+
+    zapret_apply)
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var name name
+        json_get_var out out
+        [ -n "$name" ] || fail "не выбрана стратегия"
+        zp_installed || fail "обход DPI не установлен"
+        zp_has "$name" || fail "нет такой стратегии в каталоге: $name"
+        if [ -n "$out" ]; then
+            # Выход обязан существовать И быть нужного вида: файл ключей, положенный для
+            # выхода kind=interface, никто никогда не прочитает, а в интерфейсе стратегия
+            # будет выглядеть применённой.
+            "$STEER" outputs --kind zapret --spec "$SPEC" 2>/dev/null |
+                grep -qxF "$out" || fail "нет выхода kind=zapret с именем $out"
+            zp_apply_out "$out" "$name" || fail "стратегия $name не записалась (её не принял nfqws?)"
+            # Сигнал, а не перезапуск движка: перезапуск снял бы правила и уронил туннели,
+            # то есть каждая проба другой стратегии стоила бы секунд без интернета.
+            /etc/init.d/steer reload_zapret >/dev/null 2>&1
+        else
+            zp_apply_global "$name" || fail "стратегия $name не записалась в $ZP_CONF"
+            zp_restart || fail "стратегия записана, но обход не перезапустился"
+        fi
+        json_init
+        json_add_boolean ok 1
+        json_add_string name "$name"
+        [ -n "$out" ] && json_add_string out "$out"
+        json_dump
+        ;;
+
+    zapret_test_start)
+        read -r input 2>/dev/null || input='{}'
+        json_load "${input:-{\}}" 2>/dev/null
+        json_get_var scope scope 2>/dev/null
+        case "${scope:-all}" in
+            all|flowseal|v|yv) ;;
+            *) fail "набор бывает all, flowseal, v или yv" ;;
+        esac
+        zp_installed || fail "обход DPI не установлен"
+        [ -s "$ZP_CATALOG" ] || fail "каталог стратегий пуст — обновите его"
+        command -v curl >/dev/null 2>&1 || fail "нужен curl: без него проверять нечем"
+        [ -x "$ZAPRET_TEST" ] || fail "нет $ZAPRET_TEST"
+        # Уже идёт — не запускаем вторую: две проверки поделили бы одну очередь и один
+        # диапазон портов, и числа обеих оказались бы неверны, ни разу об этом не сказав.
+        if start-stop-daemon -K -t -p "$ZP_PIDFILE" >/dev/null 2>&1; then
+            fail "проверка уже идёт"
+        fi
+        # ФОНОМ, и в этом весь смысл: у вызова ubus свой срок жизни, а проверка идёт
+        # десятки минут, и человек имеет право закрыть окно роутера. Ход и результат
+        # проверка пишет в файлы, страница их читает.
+        start-stop-daemon -S -b -m -p "$ZP_PIDFILE" -x "$ZAPRET_TEST" -- \
+            --scope "${scope:-all}" >/dev/null 2>&1 || fail "проверку не удалось запустить"
+        json_init; json_add_boolean ok 1; json_add_string scope "${scope:-all}"; json_dump
+        ;;
+
+    zapret_test_stop)
+        start-stop-daemon -K -p "$ZP_PIDFILE" >/dev/null 2>&1
+        # Правила изоляции и обработчик проверка снимает сама (trap на выходе). Но если её
+        # убили жёстко, снять их некому — поэтому убираем и здесь: оставленная таблица
+        # уводила бы в мёртвую очередь всё, что сядет на её диапазон портов.
+        nft delete table inet "${ZT_TABLE:-splify2_ztest}" 2>/dev/null
+        rm -f "$ZP_PROGRESS"
+        json_init; json_add_boolean ok 1; json_dump
+        ;;
+
+    zapret_test)
+        # Ход проверки. Дёшево нарочно: этот метод опрашивают раз в две секунды, пока
+        # проверка идёт, поэтому здесь только чтение одного файла в /var — ни пакетного
+        # менеджера, ни движка, ни каталога.
+        json_init
+        if [ -s "$ZP_PROGRESS" ]; then
+            while IFS='=' read -r k v; do
+                case "$k" in
+                    state|scope|current) json_add_string "$k" "$v" ;;
+                    started|total|done|targets) json_add_int "$k" "${v:-0}" ;;
+                    error) json_add_string error_text "$v" ;;
+                esac
+            done < "$ZP_PROGRESS"
+        else
+            json_add_string state idle
+        fi
+        # Жив ли процесс НА САМОМ ДЕЛЕ. Файл хода мог остаться от проверки, которую убили
+        # (снятие питания, OOM): без этой проверки страница показывала бы «идёт» вечно и не
+        # давала запустить новую.
+        start-stop-daemon -K -t -p "$ZP_PIDFILE" >/dev/null 2>&1 &&
+            json_add_boolean running 1 || json_add_boolean running 0
+        json_add_int results_at "$(sed -n 's/.*"at":\([0-9]*\).*/\1/p' "$ZP_RESULTS" 2>/dev/null | head -1 || echo 0)"
+        json_dump
+        ;;
+
+    zapret_results)
+        # ДОСЛОВНО тем файлом, который написала проверка. Файл — уже JSON нашего формата, и
+        # пересборка его через jshn означала бы разбор и сборку пятидесяти объектов ради того
+        # же самого текста. Тот же приём, что с `status` движка.
+        if [ -s "$ZP_RESULTS" ]; then
+            cat "$ZP_RESULTS"
+        else
+            printf '{"at":0,"targets":0,"baseline":0,"results":[]}\n'
+        fi
         ;;
 
     *) fail "неизвестный метод" ;;

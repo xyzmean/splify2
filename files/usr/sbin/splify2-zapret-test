@@ -1,0 +1,339 @@
+#!/bin/sh
+# Проверка стратегий обхода DPI — В ФОНЕ И В ИЗОЛЯЦИИ.
+#
+# ЗАЧЕМ ЭТО НАПИСАНО ЗАНОВО, А НЕ ПЕРЕНЕСЕНО ИЗ ZAPRET MANAGER. У менеджера проверка
+# устроена так: он переписывает /etc/config/zapret стратегией номер N, перезапускает обход,
+# гоняет запросы, переписывает следующей — и так полсотни раз. Это работает и стоит дорого:
+# час-полтора, в течение которых ВСЕЙ СЕТИ достаётся то одна случайная стратегия, то другая,
+# а обход при каждом шаге перезапускается. Человек, который просто смотрит кино, видит
+# полтора часа обрывов. Плюс всё это привязано к открытому терминалу: закрыл ssh — проверка
+# кончилась на середине и результатов не оставила.
+#
+# Владелец потребовал двух вещей: чтобы окно роутера можно было закрыть, и чтобы проверка не
+# трогала пользовательский трафик. Отсюда всё устройство этого файла.
+#
+# ФОН. Скрипт запускается через start-stop-daemon -b из объекта rpcd и живёт сам по себе. Ход
+# он пишет в /var/run (строка «стратегия 7 из 49» живёт минуты), результат — один раз, в
+# конце, в /etc/splify2/zapret/results.json. Браузер тут ни при чём: он читает файлы.
+#
+# ИЗОЛЯЦИЯ. Ни /etc/config/zapret, ни файлы стратегий выходов, ни сам обход не трогаются
+# вовсе — стратегия, которая работает у человека, продолжает работать всю проверку. Вместо
+# этого поднимается СВОЙ экземпляр nfqws на СВОЕЙ очереди, а в очередь отдаётся только наш
+# собственный трафик.
+#
+# КАК УЗНАЁТСЯ «НАШ СОБСТВЕННЫЙ». По диапазону исходящих портов: curl умеет --local-port, а
+# nftables умеет `tcp sport`. Диапазон 20000-20999 выбран НИЖЕ эфемерного диапазона ядра
+# (net.ipv4.ip_local_port_range, по умолчанию 32768-60999), поэтому сам ядро в него не
+# попадает никогда, а служба, севшая туда нарочно, — редкость. Скрипт этот диапазон
+# проверяет и отказывается работать, если он перекрыт.
+#
+#   Почему не по владельцу сокета (`meta skuid`), что было бы точнее. Для этого нужен свой
+#   непривилегированный пользователь: root не годится (это весь остальной роутер), а nobody
+#   занят — под ним ходит https-dns-proxy, то есть DoH-запросы попадали бы в проверку.
+#   Заводить пользователя в /etc/passwd из пакета можно, но цена ошибки там выше цены
+#   промаха по порту: наш промах — это одно чужое соединение, случайно разобранное тестовой
+#   стратегией за те секунды, что она стоит.
+#
+# ЧТОБЫ ДВА ОБХОДА НЕ ДРАЛИСЬ ЗА ОДИН ПАКЕТ, на наши пакеты ставится метка 0x40000000 — по
+# ней цепочка системного zapret говорит «не мой» и пропускает. Свой экземпляр поднимается с
+# --dpi-desync-fwmark=0x60000000: старший бит уводит порождённые им пакеты от системного
+# обхода и в его же цепочку predefrag (там их снимают с учёта conntrack, без чего ядро
+# отбрасывает их как INVALID), младший — выводит их из НАШЕЙ очереди. Всё это ровно те же
+# биты и по тем же причинам, что у выхода kind=zapret в движке (см. steer/src/spec.h).
+set -u
+
+ZAPRET_SH=${ZAPRET_SH:-/usr/lib/splify2/zapret.sh}
+FETCH_SH=${FETCH_SH:-/usr/lib/splify2/fetch.sh}
+[ -r "$ZAPRET_SH" ] || { echo "нет $ZAPRET_SH"; exit 2; }
+. "$ZAPRET_SH"
+[ -r "$FETCH_SH" ] && . "$FETCH_SH"
+
+# Своя очередь и своя таблица — подальше от чужих. Номер выбран за пределами того, что
+# раздаёт движок выходам kind=zapret (ZAPRET_QUEUE_BASE = 8300 плюс восемь), и подальше от
+# самого zapret (он начинает с 200).
+ZT_QUEUE=${ZT_QUEUE:-8399}
+ZT_TABLE=${ZT_TABLE:-splify2_ztest}
+ZT_PORT_LO=${ZT_PORT_LO:-20000}
+ZT_PORT_HI=${ZT_PORT_HI:-20999}
+# Сколько запросов разом. Четыре, а не двадцать: на 880 МГц двадцать параллельных TLS —
+# это замер загрузки процессора, а не стратегии.
+ZT_PARALLEL=${ZT_PARALLEL:-4}
+ZT_DPI_SUITE=${ZT_DPI_SUITE:-https://raw.githubusercontent.com/hyperion-cs/dpi-checkers/refs/heads/main/ru/tcp-16-20/suite.v2.json}
+ZT_CURL=${ZT_CURL:-curl}
+
+log() { logger -t splify2-zapret-test "$*"; [ -t 1 ] && echo "$*"; return 0; }
+
+scope=all
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --scope) scope="${2:-all}"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+
+# ---- условия, без которых проверка бессмысленна --------------------------------------
+command -v "$ZT_CURL" >/dev/null 2>&1 || {
+    log "нет curl — проверять нечем"
+    printf 'state=error\nerror=%s\n' "нет curl: opkg install curl" > "$ZP_PROGRESS"
+    exit 2
+}
+zp_installed || {
+    log "обход DPI не установлен"
+    printf 'state=error\nerror=%s\n' "zapret не установлен" > "$ZP_PROGRESS"
+    exit 2
+}
+[ -s "$ZP_CATALOG" ] || {
+    log "каталога стратегий нет"
+    printf 'state=error\nerror=%s\n' "каталог стратегий пуст" > "$ZP_PROGRESS"
+    exit 2
+}
+# Диапазон портов не должен пересекаться с эфемерным: иначе в нашу очередь попадёт чужое
+# соединение, и мы измерим не то. Отказ, а не молчаливая работа: результат при пересечении
+# выглядит как обычный результат.
+eph_lo="$(awk '{print $1}' /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null)"
+case "${eph_lo:-32768}" in
+    ''|*[!0-9]*) eph_lo=32768 ;;
+esac
+if [ "$ZT_PORT_HI" -ge "$eph_lo" ]; then
+    log "диапазон портов проверки перекрыт эфемерным ($eph_lo+)"
+    printf 'state=error\nerror=%s\n' "диапазон портов занят ядром" > "$ZP_PROGRESS"
+    exit 2
+fi
+
+# ---- уборка: она обязана случиться при ЛЮБОМ выходе ----------------------------------
+# Оставленная таблица уводила бы в мёртвую очередь всё, что сядет на эти порты, а
+# оставленный nfqws — разбирал бы это стратегией, которую никто не выбирал. Поэтому trap
+# ставится ДО того, как что-либо создано.
+zt_nfqws_pid=""
+cleanup() {
+    [ -n "$zt_nfqws_pid" ] && kill "$zt_nfqws_pid" 2>/dev/null
+    nft delete table inet "$ZT_TABLE" 2>/dev/null
+    rm -rf "$zt_tmp" 2>/dev/null
+    return 0
+}
+zt_tmp="$(mktemp -d /tmp/splify2-ztest.XXXXXX)" || exit 2
+trap 'cleanup; exit 143' INT TERM
+trap 'cleanup' EXIT
+
+# ---- цели проверки -------------------------------------------------------------------
+# Постоянная часть — тот же список, что у менеджера (prepare_urls): государственные услуги,
+# торренты, соцсети, видео, игры. Он не про «любимые сайты», а про разные способы блокировки:
+# одни закрыты по SNI, другие по адресу, третьи только по QUIC.
+zt_targets() {
+    printf '%s\n' \
+        "gosuslugi.ru|https://www.gosuslugi.ru" \
+        "esia.gosuslugi.ru|https://esia.gosuslugi.ru" \
+        "nalog.ru|https://nalog.ru" \
+        "lkfl2.nalog.ru|https://lkfl2.nalog.ru" \
+        "rutube.ru|https://rutube.ru" \
+        "ntc.party|https://ntc.party/" \
+        "instagram.com|https://instagram.com" \
+        "facebook.com|https://facebook.com" \
+        "rutor.info|https://rutor.info" \
+        "rutracker.org|https://rutracker.org" \
+        "nnmclub.to|https://nnmclub.to" \
+        "openwrt.org|https://openwrt.org" \
+        "discord.com|https://discord.com" \
+        "x.com|https://x.com" \
+        "flightradar24.com|https://flightradar24.com" \
+        "play.google.com|https://play.google.com" \
+        "youtube.com|https://www.youtube.com" \
+        "cub.red|https://cub.red"
+    # Переменная часть — набор dpi-checkers, тот же, что берёт менеджер. Не приезжает —
+    # работаем на постоянной части: половина целей лучше отказа от проверки.
+    if command -v download >/dev/null 2>&1 &&
+       download "$ZT_DPI_SUITE" "$zt_tmp/suite.json" 2>/dev/null; then
+        sed -n 's/.*"id":[[:space:]]*"\([^"]*\)".*"host":[[:space:]]*"\([^"]*\)".*/\1|https:\/\/\2/p' \
+            "$zt_tmp/suite.json"
+    fi
+}
+
+# Одна цель. Ключи curl — те же, что у менеджера, чтобы «открылось» значило у нас и у него
+# одно и то же: срок соединения 4 с, весь запрос не дольше 6 с, и обрыв, если за 3 с не
+# пришло ни байта. Первые 64 КБ, а не страница целиком: нам нужен факт, что соединение
+# состоялось и данные пошли, а не содержимое.
+#
+# --local-port — то, чем наш трафик отличается от всего остального на роутере. Без него
+# правило в наборе не найдёт ничего, и проверка измерит жизнь БЕЗ обхода на всех стратегиях
+# подряд, ни разу об этом не сказав.
+zt_check() {  # МЕТКА|ССЫЛКА ФАЙЛ_ОТМЕТОК
+    _zc_l="${1%%|*}"; _zc_u="${1#*|}"
+    if "$ZT_CURL" -sL --local-port "$ZT_PORT_LO-$ZT_PORT_HI" \
+            --connect-timeout 4 --max-time 6 --speed-time 3 --speed-limit 1 \
+            --range 0-65535 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) curl/8.0" \
+            -o /dev/null "$_zc_u" >/dev/null 2>&1; then
+        printf '%s\n' "$_zc_l" >> "$2"
+    fi
+}
+
+# Все цели, по ZT_PARALLEL за раз. Счёт удач — по строкам в файле: складывать числа из
+# фоновых процессов нечем, у каждого своя копия переменных.
+#
+# ЖДЁМ ПО PID, А НЕ `wait` БЕЗ АРГУМЕНТОВ, и это не педантизм — это ошибка, найденная на
+# живом прогоне. Голый `wait` ждёт ВСЕХ детей оболочки, а среди них есть обработчик nfqws:
+# он поднят на всё время проверки стратегии и не завершается никогда. Проверка вставала
+# насмерть после первой же стратегии — ход показывал «1 из 10» часами, процессы жили, в
+# журнале ни строчки. Единственный внешний признак был именно такой: счётчик не двигается.
+zt_check_all() {  # ФАЙЛ_ЦЕЛЕЙ -> печатает число удач
+    _za_ok="$zt_tmp/ok"
+    : > "$_za_ok"
+    _za_pids=""
+    _za_n=0
+    while IFS= read -r _za_t; do
+        [ -n "$_za_t" ] || continue
+        zt_check "$_za_t" "$_za_ok" &
+        _za_pids="$_za_pids $!"
+        _za_n=$((_za_n + 1))
+        if [ "$_za_n" -ge "$ZT_PARALLEL" ]; then
+            for _za_p in $_za_pids; do wait "$_za_p" 2>/dev/null; done
+            _za_pids=""
+            _za_n=0
+        fi
+    done < "$1"
+    for _za_p in $_za_pids; do wait "$_za_p" 2>/dev/null; done
+    wc -l < "$_za_ok" | tr -d ' '
+}
+
+# ---- правила изоляции ------------------------------------------------------------------
+# Одна цепочка и два правила. Первое выводит из очереди пакеты, которые породил наш же
+# обработчик, — без него первое соединение даёт круг. Второе ставит метку «не для системного
+# обхода» И отдаёт пакет в нашу очередь: порядок действий внутри правила именно такой, и он
+# важен — метка должна быть на пакете до того, как тот дойдёт до цепочек zapret в
+# postrouting.
+#
+# Хук output, а не postrouting: трафик наш собственный, а output проходится раньше — то есть
+# метка встанет заведомо раньше чужих цепочек. Трансляции адресов у трафика роутера нет
+# (адрес источника уже внешний), поэтому довод в пользу post-NAT, из-за которого выход
+# kind=zapret висит на srcnat + 2, здесь не действует.
+#
+# Порты назначения — те же, что у zapret: стратегии писались под них, и разбирать что-то
+# ещё значило бы мерить не то, что человек потом получит.
+zt_rules_up() {
+    nft delete table inet "$ZT_TABLE" 2>/dev/null
+    nft -f - <<NFT
+table inet $ZT_TABLE {
+    chain out {
+        type filter hook output priority mangle + 5; policy accept;
+        meta mark and 0x20000000 == 0x20000000 counter return
+        tcp sport $ZT_PORT_LO-$ZT_PORT_HI tcp dport { 80, 443, 2053, 2083, 2087, 2096, 8443 } \
+            ct original packets 1-9 meta mark set mark or 0x40000000 \
+            counter queue num $ZT_QUEUE bypass
+    }
+}
+NFT
+}
+
+# Контрольный проход идёт БЕЗ очереди вовсе: у правила есть bypass, поэтому пока нашего
+# обработчика нет, пакеты просто идут дальше — но уже с меткой «не для системного обхода».
+# Это и есть честный ноль: «что открывается вообще без обхода». Тот же смысл, что у
+# check_zpr_off у менеджера, только без остановки обхода всей сети.
+
+# ---- прогон одной стратегии -------------------------------------------------------------
+zt_run_one() {  # ИМЯ ФАЙЛ_ЦЕЛЕЙ -> печатает число удач
+    # Аргументы запоминаются СРАЗУ: ниже стоит `set --`, который собирает ключи стратегии в
+    # позиционные параметры и тем самым затирает $1 и $2. Без этого файл целей читался бы из
+    # пустого имени, и каждая стратегия давала бы ноль удач.
+    _zr_name="$1"
+    _zr_targets="$2"
+    zp_block "$_zr_name" > "$zt_tmp/opts" 2>/dev/null
+    [ -s "$zt_tmp/opts" ] || { echo -1; return; }
+    set --
+    while IFS= read -r _zr_l; do
+        case "$_zr_l" in ''|\#*) continue ;; esac
+        set -- "$@" "$_zr_l"
+    done < "$zt_tmp/opts"
+    [ "$#" -gt 0 ] || { echo -1; return; }
+    # Ключи проверяются ДО запуска: негодная стратегия иначе даёт мгновенно умерший процесс
+    # и результат «ноль из тридцати», неотличимый от «стратегия не работает».
+    "$ZP_NFQWS" --dry-run --qnum="$ZT_QUEUE" "$@" >/dev/null 2>&1 || { echo -1; return; }
+    "$ZP_NFQWS" --qnum="$ZT_QUEUE" --dpi-desync-fwmark=0x60000000 "$@" >/dev/null 2>&1 &
+    zt_nfqws_pid=$!
+    # Обработчику нужно успеть сесть на очередь. Полсекунды хватает (замерено), но проверяем
+    # факт, а не время: мёртвый процесс тут значит, что мерить нечего.
+    sleep 1
+    if ! kill -0 "$zt_nfqws_pid" 2>/dev/null; then
+        zt_nfqws_pid=""
+        echo -1
+        return
+    fi
+    zt_check_all "$_zr_targets"
+    kill "$zt_nfqws_pid" 2>/dev/null
+    wait "$zt_nfqws_pid" 2>/dev/null
+    zt_nfqws_pid=""
+}
+
+# ---- сам прогон --------------------------------------------------------------------------
+mkdir -p "$(dirname "$ZP_PROGRESS")" "$ZP_DIR" 2>/dev/null
+
+# Отметка «начали» ставится ДО сбора целей, и это не мелочь: сбор идёт в сеть за набором
+# dpi-checkers и занимает на роутере до полуминуты. Пока файла хода нет, страница видит
+# ровно то же, что при не запустившейся проверке, — то есть человек жмёт кнопку второй раз.
+printf 'state=starting
+started=%s
+scope=%s
+' "$(date +%s)" "$scope" > "$ZP_PROGRESS"
+
+zt_targets > "$zt_tmp/targets"
+total_t="$(grep -c '|' "$zt_tmp/targets")"
+[ "$total_t" -gt 0 ] || { log "целей нет"; exit 2; }
+
+case "$scope" in
+    flowseal) zp_names | grep '^general' > "$zt_tmp/names" ;;
+    v)        zp_names | grep '^v[0-9]'  > "$zt_tmp/names" ;;
+    yv)       zp_names | grep '^Yv'      > "$zt_tmp/names" ;;
+    *)        zp_names                   > "$zt_tmp/names" ;;
+esac
+total_s="$(grep -c . "$zt_tmp/names")"
+[ "$total_s" -gt 0 ] || { log "стратегий для проверки нет"; exit 2; }
+
+started="$(date +%s)"
+progress() {  # СДЕЛАНО ТЕКУЩАЯ
+    printf 'state=running\nstarted=%s\nscope=%s\ntotal=%s\ndone=%s\ntargets=%s\ncurrent=%s\n' \
+        "$started" "$scope" "$total_s" "$1" "$total_t" "$2" > "$ZP_PROGRESS"
+}
+progress 0 ''
+log "проверка стратегий: $total_s стратегий, $total_t целей"
+
+zt_rules_up || { log "не удалось поставить правила изоляции"; exit 2; }
+
+base="$(zt_check_all "$zt_tmp/targets")"
+log "без обхода: $base из $total_t"
+
+: > "$zt_tmp/results"
+done_n=0
+while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    done_n=$((done_n + 1))
+    progress "$done_n" "$name"
+    ok="$(zt_run_one "$name" "$zt_tmp/targets")"
+    printf '%s\t%s\n' "$ok" "$name" >> "$zt_tmp/results"
+    log "$name: $ok из $total_t"
+done < "$zt_tmp/names"
+
+# ---- результат ---------------------------------------------------------------------------
+# Пишется ОДИН раз и целиком, через временный файл: файл лежит во флеш-разделе, и запись по
+# ходу дела означала бы полсотни записей за прогон. Порядок — по убыванию числа удач: первым
+# идёт то, что человек и ищет.
+#
+# Стратегии, которые не удалось даже запустить (ok = -1), в список тоже попадают: «эта
+# стратегия у вас не поднимается» — такой же ответ, как «открылось 3 из 30», и молча
+# выбросить её значило бы оставить человека гадать, почему в списке дырка.
+{
+    printf '{"at":%s,"scope":"%s","targets":%s,"baseline":%s,"results":[' \
+        "$(date +%s)" "$scope" "$total_t" "$base"
+    sort -rn "$zt_tmp/results" | awk -F'\t' '
+        BEGIN { first = 1 }
+        {
+            name = $2
+            gsub(/\\/, "\\\\", name)
+            gsub(/"/, "\\\"", name)
+            printf "%s{\"name\":\"%s\",\"ok\":%d}", (first ? "" : ","), name, $1
+            first = 0
+        }'
+    printf ']}\n'
+} > "$ZP_RESULTS.tmp" && mv "$ZP_RESULTS.tmp" "$ZP_RESULTS"
+
+printf 'state=done\nstarted=%s\nscope=%s\ntotal=%s\ndone=%s\ntargets=%s\n' \
+    "$started" "$scope" "$total_s" "$done_n" "$total_t" > "$ZP_PROGRESS"
+log "проверка стратегий закончена: $done_n из $total_s"
+exit 0

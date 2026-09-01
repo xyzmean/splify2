@@ -738,6 +738,119 @@ export const rpc = {
         'vless_probe',
         ['output', 'node'],
     ),
+
+    /** ---- DNS over HTTPS ------------------------------------------------------------
+     *
+     *  Всё состояние вкладки одним вызовом: служба, каталог резолверов, выбранный, туннель.
+     *  Четырьмя вызовами это стоило бы четырёх запусков скрипта объекта, а плата за запуск —
+     *  126 мс (замер в шапке бэкенда). */
+    dohState: declare<{
+        installed: boolean
+        running: boolean
+        enabled: boolean
+        /** id выбранного пункта каталога. ПУСТО — законное состояние, и означает оно одно из
+         *  двух, различимых по `urls`: настройки нет вовсе (urls пуст) или в конфигурации
+         *  стоит чужая ссылка, которой в каталоге нет (urls непуст). */
+        active: string
+        urls: string[]
+        providers: { id: string; title: string }[]
+        via_tunnel: boolean
+        /** Через какой выход пойдёт DoH. Выбора здесь нет: это первый поднятый выход со
+         *  своей меткой, тот же, что у фикса Zapret Manager. */
+        out: string
+        /** Нужен ли движку свой резолвер доменных каналов. От этого зависит force_dns. */
+        needs_dnsd: boolean
+        /** Что записано в force_dns. Показывается потому, что иначе это выглядит как
+         *  «поставил 1 руками, а splify2 сбросил»: два перенаправления порта 53 в одной
+         *  точке дают гонку, и проигравший наш резолвер молча перестаёт видеть запросы. */
+        force_dns: string
+    }>('doh_state'),
+
+    dohSet: declare<{ ok: boolean; error?: string; active?: string; force_dns?: string }>(
+        'doh_set', ['provider'],
+    ),
+    dohOff: declare<{ ok: boolean; error?: string }>('doh_off'),
+    dohTunnelSet: declare<{ ok: boolean; error?: string; on?: boolean; out?: string }>(
+        'doh_tunnel_set', ['on'],
+    ),
+
+    /** ---- обход DPI ------------------------------------------------------------------ */
+    zapretState: declare<{
+        installed: boolean
+        running: boolean
+        version: string
+        /** Есть ли curl. Без него проверка стратегий невозможна, и сказать это надо ДО
+         *  нажатия кнопки: ключи, которыми меряет Zapret Manager, у uclient-fetch выразить
+         *  нечем, а мерить другим инструментом — получить числа, несравнимые с его. */
+        curl: boolean
+        strategies: number
+        /** Когда каталог обновлялся последний раз (unix-время). 0 — ни разу. */
+        updated: number
+        /** Имя активной стратегии всего роутера, как её отмечает Zapret Manager. Пусто —
+         *  отметки нет: так выглядит свежий пакет zapret со своей стандартной стратегией. */
+        active: string
+        drifted: boolean
+    }>('zapret_state'),
+
+    zapretInstall: declare<{
+        ok: boolean; error?: string; note?: string
+        version?: string; strategies?: number; curl?: boolean
+    }>('zapret_install'),
+    zapretRemove: declare<{ ok: boolean; error?: string }>('zapret_remove'),
+    zapretSync: declare<{ ok: boolean; error?: string; strategies?: number; updated?: number; note?: string }>(
+        'zapret_sync',
+    ),
+
+    /** Каталог стратегий и выходы kind=zapret. Числа проверки приходят ОТДЕЛЬНО
+     *  (zapretResults) и соединяются здесь, в интерфейсе: разбирать полсотни объектов JSON
+     *  в shell ради того же самого JSON — работа ради работы. */
+    zapretStrategies: declare<{
+        active: string
+        updated: number
+        strategies: { name: string; family: 'flowseal' | 'v' | 'yv' | 'other' }[]
+        outputs: { name: string; strategy: string; queue: number; up: boolean }[]
+    }>('zapret_strategies'),
+
+    /** Применить стратегию. `out` пуст — всему роутеру (/etc/config/zapret), иначе выходу
+     *  kind=zapret. Два места применения одной и той же стратегии. */
+    zapretApply: declare<{ ok: boolean; error?: string; name?: string; out?: string }>(
+        'zapret_apply', ['name', 'out'],
+    ),
+
+    zapretTestStart: declare<{ ok: boolean; error?: string; scope?: string }>(
+        'zapret_test_start', ['scope'],
+    ),
+    zapretTestStop: declare<{ ok: boolean; error?: string }>('zapret_test_stop'),
+
+    /** Ход проверки. Дёшев нарочно — его опрашивают раз в две секунды, пока проверка идёт.
+     *
+     *  `running` спрашивается У ПРОЦЕССА, а не берётся из файла хода: файл мог остаться от
+     *  проверки, которую убили (снятие питания, OOM), и страница показывала бы «идёт» вечно,
+     *  не давая запустить новую. */
+    zapretTest: declare<{
+        state: 'idle' | 'starting' | 'running' | 'done' | 'error'
+        running: boolean
+        started?: number
+        scope?: string
+        total?: number
+        done?: number
+        targets?: number
+        current?: string
+        error_text?: string
+        results_at: number
+    }>('zapret_test'),
+
+    /** Результаты последней проверки — дословно тем файлом, который она написала.
+     *  Отсортированы по убыванию числа удач; ok = -1 значит «стратегия не поднялась». */
+    zapretResults: declare<{
+        at: number
+        targets: number
+        /** Сколько целей открылось БЕЗ обхода вовсе. Без этого числа «30 из 54» не значит
+         *  ничего: может, у этого провайдера и без обхода открывается тридцать. */
+        baseline: number
+        scope?: string
+        results: { name: string; ok: number }[]
+    }>('zapret_results'),
 }
 
 export type Rpc = typeof rpc

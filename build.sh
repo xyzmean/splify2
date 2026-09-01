@@ -145,6 +145,15 @@ cp -r luci/htdocs/luci-static/resources/view "$PKG/www/luci-static/resources/"
 cp -r luci/root/usr/share "$PKG/usr/"
 cp files/usr/libexec/rpcd/splify2 "$PKG/usr/libexec/rpcd/splify2"
 cp files/usr/sbin/splify2-update-lists "$PKG/usr/sbin/splify2-update-lists"
+# Фоновая проверка стратегий обхода. Отдельным файлом, а не работой внутри объекта rpcd: у
+# вызова ubus свой срок жизни (две минуты), а проверка идёт десятки минут, и человек имеет
+# право закрыть окно роутера.
+cp files/usr/sbin/splify2-zapret-test "$PKG/usr/sbin/splify2-zapret-test"
+# Каталог резолверов DoH, перенесённый из Zapret Manager. Едет ФАЙЛОМ, а не таблицей внутри
+# скрипта: список меняется чаще, чем код вокруг него — резолверы появляются, переезжают и
+# умирают, — и правка файла не должна быть правкой программы.
+mkdir -p "$PKG/usr/share/splify2"
+cp files/usr/share/splify2/doh-providers.conf "$PKG/usr/share/splify2/doh-providers.conf"
 # Общие куски обеих половин: скачивание (fetch.sh) и быстрый путь опроса (fast.sh). Каждый
 # подключается строкой `. /usr/lib/splify2/…`, и забыть любой — значит выкатить пакет, где
 # соответствующая половина не запускается вовсе. Копируется КАТАЛОГ ЦЕЛИКОМ, а не файлы по
@@ -160,7 +169,9 @@ cp files/etc/steer/lists/zm-github.lst "$PKG/etc/steer/lists/zm-github.lst"
 mkdir -p "$PKG/etc/uci-defaults"
 cp files/etc/uci-defaults/99-splify2 "$PKG/etc/uci-defaults/99-splify2"
 chmod 0755 "$PKG/etc/uci-defaults/99-splify2"
-chmod 0755 "$PKG/usr/libexec/rpcd/splify2" "$PKG/usr/sbin/splify2-update-lists"
+chmod 0755 "$PKG/usr/libexec/rpcd/splify2" "$PKG/usr/sbin/splify2-update-lists" \
+           "$PKG/usr/sbin/splify2-zapret-test"
+chmod 0644 "$PKG/usr/share/splify2/doh-providers.conf"
 chmod 0644 "$PKG"/usr/lib/splify2/*.sh
 
 # Протокол xsteer: обработчик netifd и страница LuCI.
@@ -213,6 +224,20 @@ if ! grep -q splify2-update-lists /etc/crontabs/root 2>/dev/null; then
     /etc/init.d/cron enable 2>/dev/null
     /etc/init.d/cron restart 2>/dev/null
 fi
+# force_dns у https-dns-proxy обязан согласиться с тем, нужен ли движку свой резолвер.
+#
+# Пакет приезжает зависимостью, включённым и с force_dns = 1 — то есть он заворачивает весь
+# DNS сети на роутер своим правилом. Ровно то же делает перенаправление движка (порт 53 →
+# резолвер доменных каналов), и два правила в одной точке (nat prerouting, приоритет dstnat)
+# разрешаются порядком регистрации служб, а не замыслом. Проигравший наш резолвер молча
+# остаётся без запросов: сайты открываются, доменные правила не действуют, счётчик канала
+# стоит на нуле.
+#
+# Здесь это делается ОДИН раз, при установке. Дальше тот же вызов стоит в `apply` — потому что
+# доменные правила заводят и убирают позже, а не в момент установки пакета.
+if [ -r /usr/lib/splify2/doh.sh ]; then
+    ( . /usr/lib/splify2/doh.sh && doh_force_sync ) >/dev/null 2>&1
+fi
 # Кеш LuCI обязателен к сбросу: иначе меню и view остаются прежними до перезагрузки.
 rm -f /tmp/luci-indexcache.* 2>/dev/null
 rm -rf /tmp/luci-modulecache/ 2>/dev/null
@@ -251,10 +276,31 @@ exit 0
 EOF
 chmod +x build/scripts/post-install
 
-# Движок в depends НЕ объявлен, хотя без него интерфейс бесполезен. Причина практическая:
-# steer лежит в GitHub Releases, а не в репозитории apk, и жёсткая зависимость делает пакет
-# неустанавливаемым — «ERROR: steer (no such package)» у любого, кто ставит интерфейс
-# первым. А первым его ставят как раз новички.
+# ЧТО ОБЪЯВЛЕНО ЗАВИСИМОСТЬЮ, А ЧТО НЕТ, И ПОЧЕМУ ЭТО РАЗНЫЕ ОТВЕТЫ.
+#
+# https-dns-proxy — объявлен. Он лежит в репозитории OpenWrt, то есть менеджер его найдёт и
+# поставит сам; а нужен он не «для полноты», а потому, что DNS идёт открытым текстом и по
+# нему же и блокируют, подменяя ответ. Обход по SNI и маршрутизация по адресу до подменённого
+# ответа не доходят вовсе — то есть без DoH половина остальной работы пакета лечит симптом.
+# Цена объявления одна, и о ней надо знать: пакет приезжает включённым, со своей стандартной
+# настройкой (Cloudflare и Google) и с force_dns = 1. Последнее спорит с перенаправлением DNS
+# движка, поэтому скрипт установки ниже согласовывает этот ключ, а дальше это делает `apply`
+# при каждом изменении спеки (doh_force_sync в usr/lib/splify2/doh.sh).
+#
+# ip-full — объявлен. Отбор трафика прокси DoH идёт правилом `ip rule ... uidrange`, а
+# busybox-овский `ip` про uidrange не знает вовсе: без пакета переключатель «DoH через
+# туннель» встал бы молча (правило не добавилось, ответ «ok»). Пакет тянет и движок, но
+# полагаться на чужую зависимость для СВОЕЙ команды — способ однажды остаться без неё.
+#
+# zapret — НЕ объявлен, хотя вкладка Zapret без него пуста. Он ставится из GitHub Releases
+# (remittor/zapret-openwrt), а не из репозитория, и весит около полумегабайта на архитектуру:
+# жёсткая зависимость сделала бы пакет неустанавливаемым, а обход нужен не всем. Ставится он
+# кнопкой во вкладке, где рядом и объяснено, что это такое.
+#
+# Движок в depends НЕ объявлен по той же причине, что zapret, хотя без него интерфейс
+# бесполезен: steer лежит в GitHub Releases, а не в репозитории apk, и жёсткая зависимость
+# делает пакет неустанавливаемым — «ERROR: steer (no such package)» у любого, кто ставит
+# интерфейс первым. А первым его ставят как раз новички.
 #
 # Вместо зависимости движок ставится двумя путями, и оба, в отличие от apk, объясняют выбор
 # варианта: install.sh при установке одной строкой и карточка в самом интерфейсе, если
@@ -269,7 +315,8 @@ chmod +x build/scripts/post-install
 # (fetch.sh), про второй такой файл он промолчал бы, а второй появился (fast.sh, быстрый путь
 # опроса). Теперь добавить подключение и забыть укладку нельзя.
 for _need in $(grep -ho '/usr/lib/splify2/[a-z0-9_-]*\.sh' \
-                    files/usr/libexec/rpcd/splify2 files/usr/sbin/splify2-update-lists |
+                    files/usr/libexec/rpcd/splify2 files/usr/sbin/splify2-update-lists \
+                    files/usr/sbin/splify2-zapret-test |
                sort -u); do
     test -s "$PKG$_need" || {
         echo "в пакете нет ${_need#/} — подключающая его половина не запустится"; exit 1; }
@@ -278,6 +325,17 @@ done
 # GitHub идут напрямую, и человек упирается ровно в то, ради чего фикс и сделан.
 test -s "$PKG/etc/steer/lists/zm-github.lst" || {
     echo "в пакете нет etc/steer/lists/zm-github.lst — фикс Zapret Manager не сработает"; exit 1; }
+# Без каталога резолверов вкладка DoH открывается пустым списком: выбрать нечего, а причина
+# не названа ничем — doh_providers просто возвращает пустоту. Тот же класс тихого сбоя, что
+# у списка выше.
+test -s "$PKG/usr/share/splify2/doh-providers.conf" || {
+    echo "в пакете нет usr/share/splify2/doh-providers.conf — во вкладке DoH нечего выбирать"
+    exit 1; }
+# Проверка стратегий запускается объектом rpcd по имени файла. Нет файла — кнопка «Проверить»
+# отвечает отказом, и отказ этот выглядит как поломка бэкенда, а не как недособранный пакет.
+test -x "$PKG/usr/sbin/splify2-zapret-test" || {
+    echo "в пакете нет usr/sbin/splify2-zapret-test — проверка стратегий не запустится"
+    exit 1; }
 
 mkdir -p "$OUT"
 # `&&` после установки apk-tools, а не `;`. С точкой с запятой провал установки игнорировался
@@ -288,7 +346,7 @@ docker run --rm -v "$PWD":/w -w /w alpine:latest sh -c \
     "apk add --no-cache apk-tools >/dev/null 2>&1 && apk mkpkg \
        --info name:luci-app-splify2 --info version:$VERSION-r1 \
        --info description:'splify2: каналы, выходы и списки поверх движка steer' \
-       --info arch:noarch --info depends:'luci-base' \
+       --info arch:noarch --info depends:'luci-base https-dns-proxy ip-full' \
        --script post-install:build/scripts/post-install \
        -F $PKG -o $OUT/luci-app-splify2-$VERSION-1_noarch.apk" > "$BUILD_LOG" 2>&1 \
     || { echo "упаковка apk провалилась:"; cat "$BUILD_LOG"; exit 1; }
@@ -329,7 +387,7 @@ mkdir -p "$PKG/CONTROL"
 cat > "$PKG/CONTROL/control" <<EOF
 Package: luci-app-splify2
 Version: $VERSION-1
-Depends: luci-base
+Depends: luci-base, https-dns-proxy, ip-full
 Architecture: all
 Maintainer: xyzmean
 Section: luci

@@ -659,6 +659,17 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         PATH="$T/bin:$PATH" \
         JSHN_SH="$ROOT/tests/stub/jshn.sh" FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
         FAST_SH="$ROOT/files/usr/lib/splify2/fast.sh" \
+        ZAPRET_SH="$ROOT/files/usr/lib/splify2/zapret.sh" \
+        DOH_SH="$ROOT/files/usr/lib/splify2/doh.sh" \
+        ZAPRET_TEST="$T/bin/zapret-test" \
+        ZP_DIR="$T/zapret" ZP_CATALOG="$T/zapret/strategies.txt" \
+        ZP_RESULTS="$T/zapret/results.json" ZP_STAMP="$T/zapret/updated" \
+        ZP_PROGRESS="$T/zapret/progress" ZP_PIDFILE="$T/zapret/pid" \
+        ZP_OPTS_DIR="$T/etc/steer-zapret" ZP_CONF="$T/etc/config-zapret" \
+        ZP_NFQWS="${ZP_NFQWS_FIXTURE:-$T/bin/nfqws-missing}" ZP_INIT="$T/bin/initd-zapret" \
+        DOH_CONF="$T/etc/config-doh" DOH_INIT="$T/bin/initd-doh" \
+        DOH_LIST="$ROOT/files/usr/share/splify2/doh-providers.conf" \
+        DOH_STEER="$T/bin/steer" DOH_SPEC="$T/etc/spec.json" \
         SYSNET_STATS="${SYSNET_STATS_FIXTURE:-$T/statnet}" \
         CONNTRACK="${CONNTRACK_FIXTURE:-$T/nf_conntrack}" \
         STEER="$T/bin/steer" \
@@ -709,6 +720,8 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
 
 rpcd_list() {
     env SANDBOX="$T" PATH="$T/bin:$PATH" JSHN_SH="$ROOT/tests/stub/jshn.sh" FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
+        ZAPRET_SH="$ROOT/files/usr/lib/splify2/zapret.sh" \
+        DOH_SH="$ROOT/files/usr/lib/splify2/doh.sh" \
         sh "$SCRIPT" list 2>"$T/stderr"
 }
 
@@ -1124,6 +1137,8 @@ out="$( { printf '%s\n' '{"name":"bytes","kind":"prefixes","offset":0}'; } | env
     SANDBOX="$T" PATH="$T/bin:$PATH" \
     JSHN_SH="$ROOT/tests/stub/jshn.sh" FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
     FAST_SH="$ROOT/files/usr/lib/splify2/fast.sh" \
+        ZAPRET_SH="$ROOT/files/usr/lib/splify2/zapret.sh" \
+        DOH_SH="$ROOT/files/usr/lib/splify2/doh.sh" \
     STEER="$T/bin/steer" SPEC="$T/etc/spec.json" LISTS="$T/lists" \
     SUB="$T/etc/sub.txt" MANIFEST="$T/etc/manifest.json" \
     LIST_CHUNK=11 sh "$SCRIPT" call list_get 2>/dev/null)"
@@ -1406,11 +1421,11 @@ check "путь файла настройки — шов, а не литерал
       "$(grep -c '^UCI_SPLIFY2=' "$SCRIPT")"
 check "прямых путей /etc/config/splify2 в коде не осталось" "1" \
       "$(grep -c '/etc/config/splify2' "$SCRIPT")"
-# Шесть мест: sub_set, sub_put (ключи подписок), ветка настроек, ui_get|ui_set,
-# fetch_mode|fetch_mode_set и zm_fix|zm_fix_set. Число растёт вместе с методами, которые
-# пишут в uci, — и это ровно тот случай, когда барьер должен ломаться: новый метод обязан
-# заводить файл той же функцией.
-check "файл заводится одной функцией на все места" "6" \
+# Семь мест: sub_set, sub_put (ключи подписок), ветка настроек, ui_get|ui_set,
+# fetch_mode|fetch_mode_set, zm_fix|zm_fix_set и doh_tunnel_set. Число растёт вместе с
+# методами, которые пишут в uci, — и это ровно тот случай, когда барьер должен ломаться:
+# новый метод обязан заводить файл той же функцией.
+check "файл заводится одной функцией на все места" "7" \
       "$(grep -c '^ *uci_file ||' "$SCRIPT")"
 check "перенаправлением файл больше не заводится" "0" \
       "$(grep -c ': > "\?/etc/config' "$SCRIPT")"
@@ -2125,6 +2140,75 @@ check "по умолчанию фикс включён" "true" "$(rpcd zm_fix | 
 check "имя правила названо — интерфейсу есть что показать" "zm_github" "$(rpcd zm_fix | jget channel)"
 out="$(rpcd zm_fix_set '{"on":"мусор"}')"
 check "чужое значение отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+# ---- DNS over HTTPS -----------------------------------------------------------------
+#
+# Каталог резолверов и запись настройки проверены отдельно (tests/dohmatch.sh); здесь — то,
+# что принадлежит объекту: отдаётся ли вкладке всё нужное ОДНИМ вызовом и собирается ли
+# правило «через туннель».
+mkdir -p "$T/etc" "$T/zapret"
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/initd-doh"; chmod +x "$T/bin/initd-doh"
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/initd-zapret"; chmod +x "$T/bin/initd-zapret"
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/zapret-test"; chmod +x "$T/bin/zapret-test"
+printf "config https-dns-proxy\n\toption resolver_url 'https://dns.comss.one/dns-query'\n" \
+    > "$T/etc/config-doh"
+
+out="$(rpcd doh_state)"
+check "состояние DoH — один вызов на всё" "true" "$(printf '%s' "$out" | jget installed)"
+check "выбранный резолвер узнан по ссылке" "comss" "$(printf '%s' "$out" | jget active)"
+check "каталог резолверов отдан вместе с состоянием" "yes" \
+      "$(printf '%s' "$out" | grep -q '"providers"' && echo yes || echo no)"
+# Пункт «по умолчанию» несёт ДВЕ ссылки, и активным он считается только по обеим сразу:
+# сравнение по одной сделало бы его неотличимым от «Cloudflare».
+check "пункт с двумя резолверами есть в каталоге" "yes" \
+      "$(printf '%s' "$out" | grep -q 'Cloudflare + Google' && echo yes || echo no)"
+
+out="$(rpcd doh_set '{"provider":"нет такого"}')"
+check "неизвестный резолвер отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+
+: > "$T/nft.log"
+out="$(rpcd doh_tunnel_set '{"on":"мусор"}')"
+check "чужое значение переключателя отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+
+# ---- обход DPI ------------------------------------------------------------------------
+# Отсутствие пакета — не поломка, а состояние, и объект обязан отвечать им, а не отказом:
+# вкладка на это состояние показывает кнопку установки.
+out="$(rpcd zapret_state)"
+check "обход не установлен — это ответ, а не ошибка" "false" \
+      "$(printf '%s' "$out" | jget installed)"
+check "и число стратегий при этом ноль" "0" "$(printf '%s' "$out" | jget strategies)"
+
+out="$(rpcd zapret_test_start '{"scope":"all"}')"
+check "проверка без обхода не запускается" "false" "$(printf '%s' "$out" | jget ok)"
+
+out="$(rpcd zapret_test_start '{"scope":"чужой"}')"
+check "чужой набор отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+
+# Результатов ещё нет — метод обязан отдать РАЗБИРАЕМЫЙ JSON, а не пустоту: интерфейс на
+# пустом ответе показал бы «нет данных» вместо «проверка не запускалась».
+out="$(rpcd zapret_results)"
+check "пустые результаты — всё равно JSON" "0" "$(printf '%s' "$out" | jget at)"
+check "и с пустым списком" "yes" \
+      "$(printf '%s' "$out" | grep -q '"results":\[\]' && echo yes || echo no)"
+
+# Ход проверки, когда её не было. Тот же довод: idle — это ответ.
+out="$(rpcd zapret_test)"
+check "ход проверки без проверки — idle" "idle" "$(printf '%s' "$out" | jget state)"
+check "и процесс не считается живым" "false" "$(printf '%s' "$out" | jget running)"
+
+# Стратегии: каталог есть, обход не установлен. Список обязан отдаваться всё равно — человек
+# должен видеть, что будет доступно после установки.
+mkdir -p "$T/zapret"
+printf '#v1\n--filter-tcp=443\n#Yv01\n--filter-tcp=443\n' > "$T/zapret/strategies.txt"
+out="$(rpcd zapret_strategies)"
+check "стратегии перечисляются" "yes" \
+      "$(printf '%s' "$out" | grep -q '"name":"Yv01"' && echo yes || echo no)"
+check "семейство считает бэкенд, а не интерфейс" "yes" \
+      "$(printf '%s' "$out" | grep -q '"family":"yv"' && echo yes || echo no)"
+
+out="$(rpcd zapret_apply '{"name":"v1"}')"
+check "применение без установленного обхода отвергается" "false" \
+      "$(printf '%s' "$out" | jget ok)"
+
 # ---- opkg: пустые списки пакетов не должны валить установку -------------------------
 # С живого роутера: «cannot find dependency ip-full for steer», хотя пакет скачан и лежит
 # рядом. У opkg зависимости локального файла ищутся в СПИСКАХ ПАКЕТОВ, а на свежей прошивке
