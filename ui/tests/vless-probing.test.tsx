@@ -62,6 +62,33 @@ describe('подъём выхода vless виден словами (I-100)', ()
         expect(await screen.findByText('в подписке нет узлов')).toBeInTheDocument()
     })
 
+    it('номер узла вне подписки — своя строка с двумя числами', async () => {
+        // Снято с живого роутера: у выхода стоял `node: 31`, а в подписке было 29 узлов.
+        // Движок писал «failed, total 0», и интерфейс говорил «в подписке нет узлов» — то
+        // есть отправлял перекачивать подписку и менять поставщика там, где надо поправить
+        // одно число. Оба числа обязаны быть на экране: порознь они ничего не значат.
+        render(<OutboundsTab live={live({ status: status({ state: 'no_such_node', node: 31, total: 29 }) })} />)
+        expect(await screen.findByText('узла 31 нет: их 29')).toBeInTheDocument()
+        expect(screen.queryByText('в подписке нет узлов')).toBeNull()
+        expect(screen.queryByText('ни один узел не ответил')).toBeNull()
+    })
+
+    it('и отклик у него не спрашивают: устройства нет', async () => {
+        render(<OutboundsTab live={live({ status: status({ state: 'no_such_node', node: 31, total: 29 }) })} />)
+        await screen.findByText('узла 31 нет: их 29')
+        await waitFor(() => expect(rpc.engine).toHaveBeenCalled())
+        expect(rpc.outboundGeo).not.toHaveBeenCalled()
+    })
+
+    it('и у «ни один не ответил» тоже не спрашивают, пока устройства нет', async () => {
+        // Тот же довод: приговор вынесен, устройства нет, а запрос идёт ЧЕРЕЗ устройство —
+        // значит он может только истечь по таймауту, отняв время у остальных выходов.
+        render(<OutboundsTab live={live({ status: status({ state: 'failed', total: 26 }) })} />)
+        await screen.findByText('ни один узел не ответил')
+        await waitFor(() => expect(rpc.engine).toHaveBeenCalled())
+        expect(rpc.outboundGeo).not.toHaveBeenCalled()
+    })
+
     it('поля нет — прежний вид, а не догадка', async () => {
         // Движок старее интерфейса, состояние устарело, писавший процесс мёртв — всё это
         // «не знаем», и менять из-за этого приговор нельзя.

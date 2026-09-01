@@ -466,6 +466,28 @@ function Trouble({ st, name }: { st?: OutputStatus; name: string }) {
             </>
         )
     }
+    /* Номер узла вне подписки — СВОЯ строка, и это не оттенок формулировки.
+     *
+     *  Пока движок писал здесь `failed` с `total: 0`, тут стояло «в подписке нет пригодных
+     *  узлов» — на подписке из двадцати девяти живых узлов, где человек написал номер 31.
+     *  По такому объяснению идут перекачивать подписку и менять поставщика, а поправить надо
+     *  одно число, и оно у нас есть. Снято с живого роутера. */
+    if (st?.probe?.state === 'no_such_node') {
+        const n = st.probe.node
+        const total = st.probe.total
+        return (
+            <>
+                <div className="text-[13px] font-medium text-destructive">Узла нет в подписке</div>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                    {n !== undefined && total !== undefined
+                        ? `выбран узел ${n}, а пригодных в подписке ${total}`
+                        : 'выбранного узла в подписке нет'}
+                    . Подписка обновилась и узлов стало меньше — выберите локацию заново или
+                    поставьте «первый рабочий».
+                </p>
+            </>
+        )
+    }
     const failed = st?.probe?.state === 'failed'
     return (
         <>

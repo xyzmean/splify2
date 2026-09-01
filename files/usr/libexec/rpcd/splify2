@@ -4244,7 +4244,12 @@ splify2: набор выходов обхода DPI изменился — об�
 
     zapret_sync)
         zp_installed || fail "обход DPI не установлен"
-        zp_sync || fail "каталог стратегий обновить не удалось${FETCH_NOTE:+: $FETCH_NOTE}"
+        # ZP_NOTE — «скачалось, но не всё, прежний список цел», и рядом с ним FETCH_NOTE
+        # лишний: тот рассказывает про удавшуюся половину и делает строку противоречивой.
+        if ! zp_sync; then
+            [ -n "$ZP_NOTE" ] && fail "$ZP_NOTE"
+            fail "каталог стратегий обновить не удалось${FETCH_NOTE:+: $FETCH_NOTE}"
+        fi
         json_init
         json_add_boolean ok 1
         json_add_int strategies "$(zp_count)"

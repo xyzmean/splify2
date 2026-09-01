@@ -171,9 +171,16 @@ export default function OutboundsTab({ live }: { live: Live }) {
         try {
             for (const n of list) {
                 if (kinds[n] === 'direct') continue
-                /* Выход, который прямо сейчас перебирает узлы, не спрашиваем: устройства ещё
-                 * нет, мерить нечего, а шесть секунд таймаута он отнимет у остальных. */
-                if (live.status?.outputs?.[n]?.probe?.state === 'probing') continue
+                /* Выход, у которого устройства НЕТ и приговор уже вынесен, не спрашиваем:
+                 * мерить нечего, а таймаут он отнимет у остальных.
+                 *
+                 * Три случая, и все три — не «может быть, ответит»: перебор идёт (устройства
+                 * ещё нет), перебор кончился ничем, номер узла вне подписки. Последний вообще
+                 * не исправится сам никогда, и ждать от него отклика — это шесть секунд
+                 * тишины на каждое открытие раздела. Раньше пропускался только первый. */
+                const npr = live.status?.outputs?.[n]?.probe?.state
+                if (npr === 'probing' || npr === 'no_such_node') continue
+                if (npr === 'failed' && live.status?.outputs?.[n]?.up === false) continue
                 try {
                     /* Тот же вызов, что и на главной: запрос через устройство выхода приносит
                      * и адрес, и страну, и своё время ответа. Прежняя проверка отклика
@@ -340,7 +347,8 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                             className={
                                                 pr?.state === 'probing'
                                                     ? 'text-primary'
-                                                    : pr?.state === 'failed'
+                                                    : pr?.state === 'failed' ||
+                                                        pr?.state === 'no_such_node'
                                                       ? 'text-destructive'
                                                       : p && p.ms < 0
                                                         ? 'text-destructive'
@@ -364,6 +372,12 @@ export default function OutboundsTab({ live }: { live: Live }) {
                                                        нечего. Номер узла отвечает на «сколько
                                                        ещё ждать» лучше любого числа мс. */
                                                     `проверяю узлы: ${pr.node ?? 1} из ${pr.total ?? 0}`
+                                                  /* Номер вне подписки — своя строка:
+                                                     «в подписке нет узлов» отправляло бы
+                                                     менять поставщика там, где надо
+                                                     поправить одно число. */
+                                                  : pr?.state === 'no_such_node'
+                                                    ? `узла ${pr.node ?? '?'} нет: их ${pr.total ?? 0}`
                                                   : pr?.state === 'failed'
                                                     ? pr.total
                                                       ? 'ни один узел не ответил'
