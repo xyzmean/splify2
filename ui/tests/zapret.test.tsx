@@ -2,6 +2,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/preact'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import Zapret from '@/components/sections/Zapret'
 import { rpc } from '@/lib/rpc'
+import { pending } from '@/lib/pending'
 
 // Вкладка обхода DPI. Сторожатся ровно те свойства, ради которых она и написана иначе, чем
 // меню Zapret Manager:
@@ -119,8 +120,10 @@ describe('вкладка Zapret', () => {
         mockAll()
         const ap = vi.spyOn(rpc, 'zapretApply').mockResolvedValue({ ok: true, name: 'v5', out: 'yt' })
         render(<Zapret />)
-        await waitFor(() => expect(screen.getByText(/выход/)).toBeInTheDocument())
-        fireEvent.click(screen.getByText(/выход/))
+        // Строка выхода, а не любое слово «выход»: рядом теперь есть и поле «имя нового
+        // выхода», и кнопка «Завести выход», и подсказка про то, что такое выход.
+        await waitFor(() => expect(screen.getByText('выход yt')).toBeInTheDocument())
+        fireEvent.click(screen.getByText('выход yt'))
         // Теперь у выхода применена Yv01, значит отмечена должна быть она, а «Применить» у
         // v5 стать доступной.
         await waitFor(() => expect(screen.getByText(/для выхода/)).toBeInTheDocument())
@@ -177,6 +180,40 @@ describe('вкладка Zapret', () => {
         render(<Zapret />)
         await waitFor(() => expect(screen.getByText(/нет curl/)).toBeInTheDocument())
         expect(screen.getByText('Проверить')).toBeDisabled()
+    })
+
+    it('выход обхода заводится здесь и уходит в ЧЕРНОВИК, а не применяется сам', async () => {
+        // Здесь, а не в общем редакторе выходов: тот знает два вида выхода (локация подписки
+        // и свои туннели), а у выхода обхода устройства нет вовсе. И в черновик: это правка
+        // МАРШРУТИЗАЦИИ, применяет её та же плавающая пилюля, что и остальные правки спеки —
+        // второй способ применять спеку означал бы два места, которые могут разойтись.
+        mockAll()
+        const spec = { outputs: { direct: { name: 'direct', kind: 'direct' as const } }, channels: [] }
+        vi.spyOn(pending, 'load').mockResolvedValue(spec as never)
+        const edit = vi.spyOn(pending, 'edit').mockImplementation(() => undefined)
+        render(<Zapret />)
+        await waitFor(() => expect(screen.getByLabelText('имя нового выхода')).toBeInTheDocument())
+        fireEvent.input(screen.getByLabelText('имя нового выхода'), { target: { value: 'yt2' } })
+        fireEvent.click(screen.getByText('Завести выход'))
+        await waitFor(() => expect(edit).toHaveBeenCalled())
+        const next = edit.mock.calls[0][0] as { outputs: Record<string, { kind: string; on_fail: string }> }
+        expect(next.outputs.yt2.kind).toBe('zapret')
+        // Умолчание общее для всех выходов — «остановить трафик»: канал заводят ради обхода,
+        // и молча вернуть трафик на открытый путь в момент, когда обход умер, — значит
+        // нарушить единственное обещание выхода ровно тогда, когда это важнее всего.
+        expect(next.outputs.yt2.on_fail).toBe('drop')
+        expect(next.outputs.direct).toBeTruthy()
+    })
+
+    it('негодное имя выхода не заводится', async () => {
+        mockAll()
+        const edit = vi.spyOn(pending, 'edit').mockImplementation(() => undefined)
+        render(<Zapret />)
+        await waitFor(() => expect(screen.getByLabelText('имя нового выхода')).toBeInTheDocument())
+        fireEvent.input(screen.getByLabelText('имя нового выхода'), { target: { value: 'ютуб!' } })
+        fireEvent.click(screen.getByText('Завести выход'))
+        await waitFor(() => expect(screen.getByText(/латиница, цифры/)).toBeInTheDocument())
+        expect(edit).not.toHaveBeenCalled()
     })
 
     it('сказано, что проверка не трогает пользовательский трафик', async () => {

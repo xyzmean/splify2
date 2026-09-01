@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ArrowRight, Globe, Plus, ShieldCheck } from 'lucide-react'
+import { ArrowRight, Globe, Plus, ShieldCheck, Waves } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle } from '@/components/ui/card'
 import HubRow from '@/components/HubRow'
@@ -98,7 +98,15 @@ export default function PoolList({ live }: { live: Live }) {
                         const state =
                             o.kind === 'direct'
                                 ? 'напрямую, мимо туннеля'
-                                : [
+                                : o.kind === 'zapret'
+                                  /* У этого выхода нет ни устройства, ни страны: трафик
+                                     уходит обычным маршрутом, меняется только то, что с ним
+                                     по дороге сделает обход. Показывать ему «устройство не
+                                     выбрано» значило бы обещать устройство. */
+                                  ? ['обход DPI', rules ? `правил: ${rules}` : '']
+                                        .filter(Boolean)
+                                        .join(' · ')
+                                  : [
                                       country(g?.cc),
                                       o.kind === 'vless'
                                           ? 'подписка'
@@ -111,7 +119,15 @@ export default function PoolList({ live }: { live: Live }) {
                         return (
                             <HubRow
                                 key={name}
-                                icon={o.kind === 'direct' ? ArrowRight : o.kind === 'vless' ? Globe : ShieldCheck}
+                                icon={
+                                    o.kind === 'direct'
+                                        ? ArrowRight
+                                        : o.kind === 'vless'
+                                          ? Globe
+                                          : o.kind === 'zapret'
+                                            ? Waves
+                                            : ShieldCheck
+                                }
                                 title={name}
                                 state={state}
                                 alarm={o.kind !== 'direct' && st?.up === false}

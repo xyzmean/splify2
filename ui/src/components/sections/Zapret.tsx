@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button'
 import { rpc } from '@/lib/rpc'
 import { notify } from '@/lib/notify'
 import { t } from '@/lib/i18n'
+import { pending } from '@/lib/pending'
+import { type Output, type Spec } from '@/lib/model'
 
 /** Zapret: обход DPI своей стратегией — на весь роутер или на отдельное правило.
  *
@@ -58,6 +60,10 @@ export default function Zapret() {
     /** Куда применять выбранное: пусто — весь роутер, иначе имя выхода kind=zapret. */
     const [target, setTarget] = useState('')
     const [family, setFamily] = useState('')
+    /** Имя нового выхода. Заводится ЗДЕСЬ, а не в общем редакторе выходов, и это не про
+     *  удобство: тот знает два вида выхода (локация подписки и свои туннели), а выход обхода
+     *  не имеет устройства вовсе. Плюс выход без стратегии не значит ничего, а стратегии — тут. */
+    const [newOut, setNewOut] = useState('')
 
     const reloadState = useCallback(
         () => Promise.all([
@@ -102,6 +108,33 @@ export default function Zapret() {
             const r = await fn()
             if (!r.ok) throw new Error(r.error || t('не получилось'))
             notify(done)
+            await reloadState()
+        } catch (e) {
+            notify(String(e instanceof Error ? e.message : e), 'error')
+        } finally {
+            setBusy('')
+        }
+    }
+
+    /** Завести выход kind=zapret в спеке.
+     *
+     *  Правка уходит в черновик (lib/pending), а не применяется сама: это изменение
+     *  МАРШРУТИЗАЦИИ, и применяет его та же плавающая пилюля, что и остальные правки спеки.
+     *  Своё «Применить» здесь означало бы второй способ применять спеку. */
+    async function addOutput() {
+        const n = newOut.trim()
+        if (!/^[A-Za-z0-9_-]{1,24}$/.test(n)) {
+            notify(t('Имя: латиница, цифры, дефис или подчёркивание'), 'warning')
+            return
+        }
+        setBusy('newout')
+        try {
+            const spec: Spec = await pending.load()
+            if (spec.outputs[n]) throw new Error(`${t('Выход уже есть')}: ${n}`)
+            const out: Output = { name: n, kind: 'zapret', on_fail: 'drop' }
+            pending.edit({ ...spec, outputs: { ...spec.outputs, [n]: out } })
+            setNewOut('')
+            notify(`${t('Выход заведён')}: ${n}. ${t('Осталось применить')}`)
             await reloadState()
         } catch (e) {
             notify(String(e instanceof Error ? e.message : e), 'error')
@@ -290,52 +323,70 @@ export default function Zapret() {
             </Card>
 
             {/* ---- куда применять ------------------------------------------------------- */}
-            {outs.length > 0 && (
-                <Card>
-                    <CardHeader><CardTitle className="text-base">{t('Куда применить')}</CardTitle></CardHeader>
-                    <CardContent className="space-y-1.5">
+            <Card>
+                <CardHeader><CardTitle className="text-base">{t('Куда применить')}</CardTitle></CardHeader>
+                <CardContent className="space-y-1.5">
+                    <button
+                        type="button"
+                        onClick={() => setTarget('')}
+                        className={[
+                            'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm',
+                            target === '' ? 'bg-primary/10 font-medium text-primary' : 'hover:bg-accent',
+                        ].join(' ')}
+                    >
+                        <span className="min-w-0 flex-1">{t('Весь роутер')}</span>
+                        <span className="text-xs text-muted-foreground">
+                            {st.active || t('стратегия не отмечена')}
+                        </span>
+                    </button>
+                    {outs.map((o) => (
                         <button
+                            key={o.name}
                             type="button"
-                            onClick={() => setTarget('')}
+                            onClick={() => setTarget(o.name)}
                             className={[
                                 'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm',
-                                target === '' ? 'bg-primary/10 font-medium text-primary' : 'hover:bg-accent',
+                                target === o.name ? 'bg-primary/10 font-medium text-primary' : 'hover:bg-accent',
                             ].join(' ')}
                         >
-                            <span className="min-w-0 flex-1">{t('Весь роутер')}</span>
+                            <span className="min-w-0 flex-1 truncate">
+                                {t('выход')} {o.name}
+                                {!o.up && (
+                                    <span className="ml-2 text-xs text-warning-fg">
+                                        {t('обработчик не запущен')}
+                                    </span>
+                                )}
+                            </span>
                             <span className="text-xs text-muted-foreground">
-                                {st.active || t('стратегия не отмечена')}
+                                {o.strategy || t('нет стратегии')}
                             </span>
                         </button>
-                        {outs.map((o) => (
-                            <button
-                                key={o.name}
-                                type="button"
-                                onClick={() => setTarget(o.name)}
-                                className={[
-                                    'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm',
-                                    target === o.name ? 'bg-primary/10 font-medium text-primary' : 'hover:bg-accent',
-                                ].join(' ')}
-                            >
-                                <span className="min-w-0 flex-1 truncate">
-                                    {t('выход')} {o.name}
-                                    {!o.up && (
-                                        <span className="ml-2 text-xs text-warning-fg">
-                                            {t('обработчик не запущен')}
-                                        </span>
-                                    )}
-                                </span>
-                                <span className="text-xs text-muted-foreground">
-                                    {o.strategy || t('нет стратегии')}
-                                </span>
-                            </button>
-                        ))}
-                        <div className="pt-1 text-xs text-muted-foreground">
-                            {t('Выход kind=zapret заводится во вкладке VPN, а правило в него — во вкладке «Правила». Тогда стратегия действует только на трафик этого правила.')}
-                        </div>
-                    </CardContent>
-                </Card>
-            )}
+                    ))}
+                    {/* Завести выход — здесь же, потому что иначе «стратегия только для
+                        YouTube» остаётся недостижимой: выход есть куда применить, а завести
+                        его негде. Правило в него человек создаёт во вкладке «Правила». */}
+                    <div className="flex flex-wrap items-center gap-2 pt-2">
+                        <input
+                            value={newOut}
+                            onChange={(e) => setNewOut(e.currentTarget.value)}
+                            placeholder={t('имя нового выхода')}
+                            aria-label={t('имя нового выхода')}
+                            className="h-9 min-w-[10rem] flex-1 rounded-lg border border-border bg-background px-3 text-sm"
+                        />
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={busy !== '' || newOut.trim() === ''}
+                            onClick={() => void addOutput()}
+                        >
+                            {t('Завести выход')}
+                        </Button>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                        {t('Выход — это то, во что ведёт правило. Заведите его здесь, выберите ему стратегию ниже, а правило «эти домены — сюда» создайте во вкладке «Правила».')}
+                    </div>
+                </CardContent>
+            </Card>
 
             {/* ---- список стратегий ----------------------------------------------------- */}
             <Card>

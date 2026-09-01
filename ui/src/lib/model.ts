@@ -9,8 +9,14 @@
  *  normal path; `vless` is a VLESS/Reality client inside the engine that raises its own
  *  TUN — so as far as marks, tables and failover go it IS a device, and the only reason
  *  it is a separate kind is that the device has to be created and kept alive by a
- *  process. Needs the steer-extended package. */
-export type OutputKind = 'interface' | 'direct' | 'vless'
+ *  process. Needs the steer-extended package.
+ *
+ *  `zapret` — выход БЕЗ устройства и БЕЗ своей таблицы маршрутизации: трафик уходит обычным
+ *  маршрутом, а по дороге его разбирает отдельный экземпляр nfqws со своей стратегией обхода
+ *  DPI. Первый вид, у которого «нужна метка» и «есть устройство» разошлись, — и единственный,
+ *  который заводится не здесь, а во вкладке Zapret: выход без стратегии не значит ничего, а
+ *  стратегии живут там. */
+export type OutputKind = 'interface' | 'direct' | 'vless' | 'zapret'
 
 /** Что делать с трафиком выхода, когда ни одно устройство не отвечает.
  *
@@ -53,6 +59,11 @@ export interface Output {
      *  Не отдельный вид выхода — свойство существующего, потому что маршрутизация,
      *  метки и failover от этого не меняются. */
     obfs?: Obfs
+    /** kind=zapret: файл с ключами nfqws. ПУТЬ, а не сама стратегия: спека печатается целиком
+     *  в status, в diag и в резервную копию, а стратегия — это два десятка строк с путями к
+     *  файлам-подделкам. Поле необязательно и обычно опущено: движок выводит путь из имени
+     *  выхода, и два имени, которым позволено разойтись, пользы не приносят. */
+    opts_file?: string
 }
 
 export interface Obfs {

@@ -198,6 +198,74 @@ export default function PoolEditor({
         onSave({ ...spec, outputs })
     }
 
+    /* Выход kind=zapret правится НЕ ЗДЕСЬ, и открывать для него общий редактор нельзя: тот
+     * знает два вида выхода (локация подписки и свои туннели) и на «Сохранить» переписал бы
+     * его как kind=interface без единого устройства. То есть один клик по строке в списке
+     * молча превращал бы работающий обход в выход, который никуда не ведёт.
+     *
+     * Показываем то немногое, что здесь и правится (режим отказа и удаление), а за стратегией
+     * отправляем во вкладку Zapret — там она и живёт. */
+    if (existing?.kind === 'zapret') {
+        return (
+            <div className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="sp-title">{name}</div>
+                    <div className="flex gap-2">
+                        <Button variant="destructive" onClick={remove}>
+                            <Trash2 className="h-4 w-4" aria-hidden="true" /> Удалить
+                        </Button>
+                        <Button variant="secondary" onClick={onCancel}>
+                            <X className="h-4 w-4" aria-hidden="true" /> Закрыть
+                        </Button>
+                        <Button
+                            onClick={() => {
+                                const outputs = { ...spec.outputs, [name!]: { ...existing, on_fail: onFail } }
+                                onSave({ ...spec, outputs })
+                            }}
+                        >
+                            <Check className="h-4 w-4" aria-hidden="true" /> Сохранить выход
+                        </Button>
+                    </div>
+                </div>
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Обход DPI</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3 text-sm">
+                        <div className="text-muted-foreground">
+                            Устройства у этого выхода нет: трафик уходит обычным маршрутом, а по
+                            дороге его разбирает свой обработчик со своей стратегией. Стратегия
+                            выбирается во вкладке Zapret.
+                        </div>
+                        <div className="space-y-1.5">
+                            <div className="sp-label uppercase tracking-wide text-muted-foreground">
+                                Если обход не работает
+                            </div>
+                            {(['drop', 'direct'] as OnFail[]).map((v) => (
+                                <button
+                                    key={v}
+                                    type="button"
+                                    onClick={() => setOnFail(v)}
+                                    className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] ${
+                                        onFail === v ? 'bg-primary/10 text-primary' : 'hover:bg-accent'
+                                    }`}
+                                >
+                                    <span
+                                        className={`h-4 w-4 shrink-0 rounded-full border ${
+                                            onFail === v ? 'border-[5px] border-primary' : 'border-input'
+                                        }`}
+                                        aria-hidden="true"
+                                    />
+                                    <span className="min-w-0 flex-1">{ON_FAIL_TEXT[v]}</span>
+                                </button>
+                            ))}
+                        </div>
+                    </CardContent>
+                </Card>
+            </div>
+        )
+    }
+
     return (
         <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
