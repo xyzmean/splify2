@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDown, ArrowRight, ArrowUp, Pencil, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -112,9 +112,25 @@ export default function RulesTab({
         pending.edit(next)
     }
 
+    /** Уже исполненные просьбы извне.
+     *
+     *  ЗАЧЕМ ЭТО ВООБЩЕ НУЖНО. Оба эффекта ниже заканчиваются вызовом edit(), то есть
+     *  setSpec, а spec стоит у них в зависимостях: эффект просыпается ещё раз на своей же
+     *  записи. Единственное, что удерживало от второго правила, — гашение признака
+     *  ОБОЛОЧКОЙ (onWantedUsed / onAddUsed возвращают наверх, и признак снимают там). То
+     *  есть верность держалась на чужом и притом асинхронном шаге: попади перерисовка
+     *  оболочки после нашей, просьба исполнялась бы дважды и больше. Замерено стендом:
+     *  без гашения признака заводилось шесть одинаковых правил за пятьдесят миллисекунд.
+     *
+     *  Признак «исполнено» держится ЗДЕСЬ, потому что здесь и исполняется. */
+    const doneWanted = useRef<ServiceEntry | null>(null)
+    const doneAdd = useRef(false)
+
     /** Просьба из каталога: завести правило с этой записью и открыть его. */
     useEffect(() => {
         if (!wanted || !spec) return
+        if (doneWanted.current === wanted) return
+        doneWanted.current = wanted
         onWantedUsed?.()
         const out = Object.keys(spec.outputs)[0]
         if (!out) {
@@ -149,7 +165,9 @@ export default function RulesTab({
      *  передаёт просьбу. Признак гасится сразу, иначе следующий заход в раздел заводил бы
      *  ещё одно пустое правило. */
     useEffect(() => {
-        if (!addNow || !spec) return
+        if (!addNow) { doneAdd.current = false; return }
+        if (!spec || doneAdd.current) return
+        doneAdd.current = true
         onAddUsed?.()
         add()
         // eslint-disable-next-line react-hooks/exhaustive-deps
