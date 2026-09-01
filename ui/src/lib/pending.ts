@@ -137,7 +137,7 @@ class PendingStore {
         let n = 0
         const names = new Set([...Object.keys(a.outputs || {}), ...Object.keys(s.outputs || {})])
         for (const name of names)
-            if (JSON.stringify(a.outputs?.[name]) !== JSON.stringify(s.outputs?.[name])) n++
+            if (same(a.outputs?.[name], s.outputs?.[name]) === false) n++
         /* Каналов может не быть вовсе: спека приезжает от бэкенда и из архива, а поле
          * необязательное. Считать длину у отсутствующего массива значило бы уронить весь
          * экран на разборе чужого файла. */
@@ -145,7 +145,7 @@ class PendingStore {
         const sc = s.channels || []
         const len = Math.max(ac.length, sc.length)
         for (let i = 0; i < len; i++)
-            if (JSON.stringify(ac[i]) !== JSON.stringify(sc[i])) n++
+            if (same(ac[i], sc[i]) === false) n++
         return n
     }
 
@@ -217,4 +217,50 @@ export function usePending() {
         applied: pending.applied,
         apply: () => void pending.apply(),
     }
+}
+
+/** Поля, отсутствие которых значит РОВНО ТО ЖЕ, что записанное значение.
+ *
+ *  Взято из контракта движка (steer/docs/contract-v1.md): поля нет — действует умолчание.
+ *  Имена не пересекаются между каналом и выходом в этой схеме (`enabled` и `mode` бывают
+ *  только у канала, `on_fail` и `node` — только у выхода), поэтому таблица одна на оба.
+ *
+ *  ЗАЧЕМ. Интерфейс пишет умолчания ЯВНО, а движок и архивы — как получилось. Пока сравнение
+ *  шло по JSON.stringify, выключить правило и включить обратно означало вечное «Применить · 1»
+ *  на правке, которая ничего не меняет: в спеке появлялось `"enabled": true`, которого в
+ *  снимке применённого не было. Поймано живым проходом по интерфейсу — пилюля висела над
+ *  списком и перехватывала клики по строкам под собой. */
+const DEFAULTS: Record<string, unknown> = {
+    enabled: true,
+    on_fail: 'drop',
+    mode: 'fakeip',
+    /** −1 и пустой список означают одно: «первый рабочий среди всех пригодных». */
+    node: -1,
+}
+
+/** Канонический вид для СРАВНЕНИЯ (не для записи): ключи по алфавиту, поля с умолчанием и
+ *  пустые списки выброшены.
+ *
+ *  Порядок ключей тоже выброшен нарочно: он ничего не значит ни для движка, ни для человека,
+ *  а JSON.stringify считал его различием — то есть спека, пересобранная другим порядком
+ *  полей, показывала бы «не применено» на всех правилах сразу. */
+function canon(v: unknown): unknown {
+    if (Array.isArray(v)) return v.map(canon)
+    if (!v || typeof v !== 'object') return v
+    const src = v as Record<string, unknown>
+    const out: Record<string, unknown> = {}
+    for (const k of Object.keys(src).sort()) {
+        const val = src[k]
+        if (val === undefined) continue
+        if (k in DEFAULTS && val === DEFAULTS[k]) continue
+        if (Array.isArray(val) && val.length === 0) continue
+        out[k] = canon(val)
+    }
+    return out
+}
+
+/** Одно и то же ли это по смыслу. Отдельной функцией, чтобы сравнение стояло в одном месте:
+ *  каналы и выходы сравниваются по одному правилу, и разойтись они не должны. */
+function same(a: unknown, b: unknown): boolean {
+    return JSON.stringify(canon(a)) === JSON.stringify(canon(b))
 }
