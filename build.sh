@@ -154,6 +154,11 @@ cp files/usr/sbin/splify2-zapret-test "$PKG/usr/sbin/splify2-zapret-test"
 # умирают, — и правка файла не должна быть правкой программы.
 mkdir -p "$PKG/usr/share/splify2"
 cp files/usr/share/splify2/doh-providers.conf "$PKG/usr/share/splify2/doh-providers.conf"
+# Снимок набора целей dpi-checkers для проверки стратегий обхода. В пакете, а не только по
+# ссылке: набор лежит на githubusercontent, который у владельца закрыт целиком (проверено на
+# роутере — не отдал ни один из обходных путей), и без снимка целей оставалось 18 против шести
+# десятков у Zapret Manager. Свежий набор, если скачается, снимок перекрывает.
+cp files/usr/share/splify2/dpi-suite.json "$PKG/usr/share/splify2/dpi-suite.json"
 # Общие куски обеих половин: скачивание (fetch.sh) и быстрый путь опроса (fast.sh). Каждый
 # подключается строкой `. /usr/lib/splify2/…`, и забыть любой — значит выкатить пакет, где
 # соответствующая половина не запускается вовсе. Копируется КАТАЛОГ ЦЕЛИКОМ, а не файлы по
@@ -171,7 +176,7 @@ cp files/etc/uci-defaults/99-splify2 "$PKG/etc/uci-defaults/99-splify2"
 chmod 0755 "$PKG/etc/uci-defaults/99-splify2"
 chmod 0755 "$PKG/usr/libexec/rpcd/splify2" "$PKG/usr/sbin/splify2-update-lists" \
            "$PKG/usr/sbin/splify2-zapret-test"
-chmod 0644 "$PKG/usr/share/splify2/doh-providers.conf"
+chmod 0644 "$PKG/usr/share/splify2/doh-providers.conf" "$PKG/usr/share/splify2/dpi-suite.json"
 chmod 0644 "$PKG"/usr/lib/splify2/*.sh
 
 # Протокол xsteer: обработчик netifd и страница LuCI.
@@ -194,10 +199,23 @@ cp luci/htdocs/luci-static/resources/protocol/xsteer.js \
 # Идентификатор сборки: загрузчик читает его на каждой загрузке страницы и добавляет
 # к URL бандлов. Без него браузер держал бы старый интерфейс после обновления пакета —
 # ровно то, что в splify 1 переживало и обновления, и перезагрузки.
-printf '%s\n' "$VERSION" > "$RES/build-id.txt"
-# И версию нужно проштамповать в сами бандлы: npm build оставляет заглушку ?v=0.0.0,
+# Номер СБОРКИ, а не версии. На выпуске они совпадают; сборка из main между выпусками несёт
+# тот же VERSION, что и прошлый выпуск, — и браузер, помнящий `?v=1.2.5`, брал бандл из кеша,
+# то есть после установки свежей сборки на роутере интерфейс оставался прежним (поймано на
+# роутере владельца: пакет заменён, build-id.txt тот же, страница старая). Поэтому вне тега
+# выпуска к версии приписывается ревизия, а к несохранённому дереву — «dirty»: у каждой
+# сборки свой адрес, и загрузчик (view/splify2/home.js) видит разницу через build-id.txt.
+# Версию пакета это не трогает — она из VERSION, как и раньше.
+BUILD_ID="$VERSION"
+if ! git describe --tags --exact-match >/dev/null 2>&1; then
+    _rev="$(git rev-parse --short HEAD 2>/dev/null || true)"
+    [ -n "$_rev" ] && BUILD_ID="$VERSION-$_rev"
+    [ -n "$(git status --porcelain 2>/dev/null)" ] && BUILD_ID="$BUILD_ID-dirty"
+fi
+printf '%s\n' "$BUILD_ID" > "$RES/build-id.txt"
+# И номер сборки нужно проштамповать в сами бандлы: npm build оставляет заглушку ?v=0.0.0,
 # иначе один чанк оказывается доступен по двум URL и preact грузится дважды.
-sed -i -E "s/\?v=[0-9]+\.[0-9]+\.[0-9]+/?v=$VERSION/g" "$RES"/splify-*.js
+sed -i -E "s/\?v=[0-9]+\.[0-9]+\.[0-9]+/?v=$BUILD_ID/g" "$RES"/splify-*.js
 
 # ВНЕ каталога пакета: всё, что лежит внутри, попадает в пакет как файл, и такой
 # .post-install приезжает на роутер как /.post-install — где сталкивается с чужим,
@@ -331,6 +349,11 @@ test -s "$PKG/etc/steer/lists/zm-github.lst" || {
 test -s "$PKG/usr/share/splify2/doh-providers.conf" || {
     echo "в пакете нет usr/share/splify2/doh-providers.conf — во вкладке DoH нечего выбирать"
     exit 1; }
+# Без снимка проверка стратегий на роутере с закрытым GitHub меряет 23 цели вместо шести
+# десятков, и числа с числами менеджера сравнивать нельзя.
+python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$PKG/usr/share/splify2/dpi-suite.json" 2>/dev/null || {
+    echo "в пакете нет usr/share/splify2/dpi-suite.json (или он не JSON) — проверке стратегий не хватит целей"
+    exit 1; }
 # Проверка стратегий запускается объектом rpcd по имени файла. Нет файла — кнопка «Проверить»
 # отвечает отказом, и отказ этот выглядит как поломка бэкенда, а не как недособранный пакет.
 test -x "$PKG/usr/sbin/splify2-zapret-test" || {
@@ -348,6 +371,7 @@ docker run --rm -v "$PWD":/w -w /w alpine:latest sh -c \
        --info description:'splify2: каналы, выходы и списки поверх движка steer' \
        --info arch:noarch --info depends:'luci-base https-dns-proxy ip-full' \
        --script post-install:build/scripts/post-install \
+       --script post-upgrade:build/scripts/post-install \
        -F $PKG -o $OUT/luci-app-splify2-$VERSION-1_noarch.apk" > "$BUILD_LOG" 2>&1 \
     || { echo "упаковка apk провалилась:"; cat "$BUILD_LOG"; exit 1; }
 

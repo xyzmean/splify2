@@ -16,6 +16,10 @@ import { pending } from '@/lib/pending'
 //      без этого числа «30 из 54» не значит ничего.
 //   4. У стратегии два места применения — весь роутер и выход kind=zapret, — и применяется
 //      она в то, которое выбрано.
+//   5. Список сложен СЕМЕЙСТВАМИ под спойлеры, и проверяется ровно то, что названо: кнопка у
+//      семейства проверяет семейство, кнопка у стратегии — её одну. Прежний ряд «все ·
+//      Flowseal · v · YouTube» стоял дважды — фильтром списка и набором проверки, — и человек,
+//      нажав «Flowseal» в списке, получал проверку всех 58 (снято с живого роутера).
 
 const state = {
     installed: true, running: true, version: '72.20260307', curl: true,
@@ -38,6 +42,11 @@ const results = {
     at: Math.floor(Date.now() / 1000) - 600,
     targets: 54, baseline: 40, scope: 'all',
     results: [{ name: 'v5', ok: 50 }, { name: 'general (ALT)', ok: 38 }, { name: 'Yv01', ok: -1 }],
+}
+
+/** Развернуть семейство по имени: свёрнутое семейство своих стратегий не показывает. */
+function openFamily(name: string) {
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`развернуть ${name}`) }))
 }
 
 const idle = { state: 'idle' as const, running: false, results_at: results.at }
@@ -74,10 +83,24 @@ describe('вкладка Zapret', () => {
         await waitFor(() => expect(inst).toHaveBeenCalled())
     })
 
+    it('семейства сложены под спойлеры, открыто то, где применённая стратегия', async () => {
+        mockAll()
+        render(<Zapret />)
+        // Активная — v5, значит семейство v развёрнуто само; остальные свёрнуты, и их
+        // стратегий на экране нет — но заголовки с числом есть.
+        await waitFor(() => expect(screen.getByRole('button', { name: 'v5' })).toBeInTheDocument())
+        expect(screen.queryByText('general (ALT)')).toBeNull()
+        expect(screen.getByRole('button', { name: /развернуть Flowseal/ })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /развернуть YouTube/ })).toBeInTheDocument()
+        openFamily('Flowseal')
+        expect(screen.getByText('general (ALT)')).toBeInTheDocument()
+    })
+
     it('стратегии перечислены, активная отмечена', async () => {
         mockAll()
         render(<Zapret />)
-        await waitFor(() => expect(screen.getByText('general (ALT)')).toBeInTheDocument())
+        await waitFor(() => expect(screen.getByRole('button', { name: 'v5' })).toBeInTheDocument())
+        openFamily('YouTube')
         // Yv01 встречается ДВАЖДЫ, и это не дубликат: один раз в списке стратегий, второй —
         // как то, что уже применено у выхода yt в карточке «Куда применить». Проверять
         // getByText здесь нельзя именно поэтому.
@@ -91,6 +114,7 @@ describe('вкладка Zapret', () => {
         mockAll()
         render(<Zapret />)
         await waitFor(() => expect(screen.getByText('50/54')).toBeInTheDocument())
+        openFamily('Flowseal')
         expect(screen.getByText('38/54')).toBeInTheDocument()
         // Без этого числа результат не значит ничего: может, у этого провайдера и без
         // обхода открывается сорок.
@@ -101,14 +125,17 @@ describe('вкладка Zapret', () => {
         // Молча выбросить её значило бы оставить человека гадать, почему в списке дырка.
         mockAll()
         render(<Zapret />)
-        await waitFor(() => expect(screen.getByText('не идёт')).toBeInTheDocument())
+        await waitFor(() => expect(screen.getByRole('button', { name: 'v5' })).toBeInTheDocument())
+        openFamily('YouTube')
+        expect(screen.getByText('не идёт')).toBeInTheDocument()
     })
 
     it('применение идёт ВСЕМУ РОУТЕРУ, пока не выбран выход', async () => {
         mockAll()
         const ap = vi.spyOn(rpc, 'zapretApply').mockResolvedValue({ ok: true, name: 'Yv01' })
         render(<Zapret />)
-        await waitFor(() => expect(screen.getAllByText('Yv01').length).toBe(2))
+        await waitFor(() => expect(screen.getByRole('button', { name: 'v5' })).toBeInTheDocument())
+        openFamily('YouTube')
         // Последняя строка списка — Yv01; место применения не выбрано, значит уехать должно
         // пустое имя выхода, то есть «весь роутер».
         const rows = screen.getAllByText('Применить')
@@ -125,21 +152,57 @@ describe('вкладка Zapret', () => {
         await waitFor(() => expect(screen.getByText('выход yt')).toBeInTheDocument())
         fireEvent.click(screen.getByText('выход yt'))
         // Теперь у выхода применена Yv01, значит отмечена должна быть она, а «Применить» у
-        // v5 стать доступной.
+        // v5 стать доступной. Семейство v у этого места применения свёрнуто — открываем.
         await waitFor(() => expect(screen.getByText(/для выхода/)).toBeInTheDocument())
+        openFamily('v')
         const rows = screen.getAllByText('Применить')
         fireEvent.click(rows[0])
         await waitFor(() => expect(ap).toHaveBeenCalledWith('v5', 'yt'))
     })
 
-    it('проверка запускается с выбранным набором', async () => {
+    it('общая «Проверить» проверяет все, кнопка семейства — семейство', async () => {
         mockAll()
-        const start = vi.spyOn(rpc, 'zapretTestStart').mockResolvedValue({ ok: true, scope: 'v' })
+        const start = vi.spyOn(rpc, 'zapretTestStart').mockResolvedValue({ ok: true, scope: 'all' })
         render(<Zapret />)
         await waitFor(() => expect(screen.getByText('Проверить')).toBeInTheDocument())
-        fireEvent.click(screen.getAllByText('v')[0])
         fireEvent.click(screen.getByText('Проверить'))
-        await waitFor(() => expect(start).toHaveBeenCalledWith('v'))
+        await waitFor(() => expect(start).toHaveBeenCalledWith('all'))
+        // Пока запуск в полёте, кнопки семейств заперты — вторая проверка поделила бы с первой
+        // очередь и диапазон портов. Дождаться, пока отпустит.
+        const fam = screen.getByRole('button', { name: /проверить семейство Flowseal/ })
+        await waitFor(() => expect(fam).not.toBeDisabled())
+        fireEvent.click(fam)
+        await waitFor(() => expect(start).toHaveBeenCalledWith('flowseal'))
+    })
+
+    it('развёрнутая стратегия показывает ключи и открывшиеся цели, и проверяется одна', async () => {
+        mockAll({
+            res: {
+                ...results,
+                sets: {
+                    general: {
+                        baseline: 1, total: 3, targets: ['a.ru', 'b.ru', 'c.ru'], opened: ['a.ru'],
+                    },
+                },
+                results: [{ name: 'v5', ok: 2, total: 3, set: 'general', opened: ['a.ru', 'b.ru'] }],
+            } as never,
+        })
+        const one = vi.spyOn(rpc, 'zapretStrategy').mockResolvedValue({
+            name: 'v5', family: 'v', opts: ['--filter-tcp=443', '--dpi-desync=fake'],
+        })
+        const start = vi.spyOn(rpc, 'zapretTestStart').mockResolvedValue({ ok: true, scope: 'one:v5' })
+        render(<Zapret />)
+        await waitFor(() => expect(screen.getByText('2/3')).toBeInTheDocument())
+        fireEvent.click(screen.getByRole('button', { name: 'v5' }))
+        // Ключи — по запросу и дословно.
+        await waitFor(() => expect(one).toHaveBeenCalledWith('v5'))
+        await waitFor(() => expect(screen.getByText(/--dpi-desync=fake/)).toBeInTheDocument())
+        // Все три цели названы; та, что открывается и без обхода, помечена.
+        expect(screen.getByText('a.ru')).toBeInTheDocument()
+        expect(screen.getByText('c.ru')).toBeInTheDocument()
+        expect(screen.getAllByText('и без обхода').length).toBe(1)
+        fireEvent.click(screen.getByText('проверить эту стратегию'))
+        await waitFor(() => expect(start).toHaveBeenCalledWith('one:v5'))
     })
 
     it('пока проверка идёт, показан ход и кнопка «Остановить»', async () => {

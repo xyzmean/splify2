@@ -40,6 +40,9 @@ run protohandler sh "$ROOT/tests/protohandler.sh"
 # Каталог стратегий обхода DPI: два десятка замен, перенесённых из Zapret Manager, и отметка
 # активной стратегии там же, где её ставит он. Образец Flowseal лежит рядом, сети не нужно.
 run zapretmatch sh "$ROOT/tests/zapretmatch.sh"
+# Сама фоновая проверка стратегий: наборы целей по семействам, файл на стратегию, сводка,
+# одиночная проверка и остановка на середине. Сеть, nft и nfqws — заглушками в PATH.
+run zapret-test sh "$ROOT/tests/zapret-testmatch.sh"
 # Резолверы DoH: каталог, запись настройки и force_dns — ключ, который спорит с
 # перенаправлением DNS движка, и спорит молча.
 run dohmatch sh "$ROOT/tests/dohmatch.sh"

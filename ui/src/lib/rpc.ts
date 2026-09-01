@@ -153,6 +153,22 @@ export function deadline<T>(p: Promise<T>, ms: number, why = 'нет ответ�
     })
 }
 
+/** Ответ `vless_nodes` — как его печатает движок (`steer vless-nodes`), дословно. */
+export interface VlessNodesReply {
+    /** Имя выхода; пусто, когда узлы спрошены у подписки, а не у выхода. */
+    output: string
+    sub_file: string
+    node: number
+    /** Выбранные номера в порядке предпочтения; пусто — выбора нет (или спрошено у подписки). */
+    chosen?: number[]
+    usable: number
+    skipped: number
+    foreign: number
+    nodes: VlessNode[]
+    skipped_reasons?: VlessSkip[]
+    skipped_other?: number
+}
+
 export const rpc = {
     /** Live engine state: outputs with up/nat, per-channel counters, warnings. */
     status: declare<Status>('status'),
@@ -719,17 +735,13 @@ export const rpc = {
      *  день с интерфейсом, и на роутере со старым движком поля не будет вовсе.
      *  `skipped_other` печатается только при переполнении набора причин (их больше
      *  восьми) — то есть почти никогда. */
-    vlessNodes: declare<{
-        output: string
-        sub_file: string
-        node: number
-        usable: number
-        skipped: number
-        foreign: number
-        nodes: VlessNode[]
-        skipped_reasons?: VlessSkip[]
-        skipped_other?: number
-    }>('vless_nodes', ['output']),
+    vlessNodes: declare<VlessNodesReply>('vless_nodes', ['output']),
+
+    /** Те же узлы — у ПОДПИСКИ, а не у выхода: путём к её файлу. Нужно редактору выхода, чтобы
+     *  показать локации подписки, на которую ещё не заведён ни один выход; бэкенд принимает
+     *  только пути из своего перечня подписок. Бэкенд постарше параметра не знает и отвечает
+     *  «не указан выход» — вызывающий тогда спрашивает по любому выходу на этой подписке. */
+    vlessNodesOfSub: declare<VlessNodesReply>('vless_nodes', ['sub']),
 
     /** Проверить узел и замерить время ответа. По одному за вызов: проверка упирается в
      *  таймаут, и «проверить все» не уложилось бы в срок жизни вызова ubus. node = -1
@@ -807,9 +819,16 @@ export const rpc = {
     zapretStrategies: declare<{
         active: string
         updated: number
-        strategies: { name: string; family: 'flowseal' | 'v' | 'yv' | 'other' }[]
+        strategies: { name: string; family: ZapretFamily }[]
         outputs: { name: string; strategy: string; queue: number; up: boolean }[]
     }>('zapret_strategies'),
+
+    /** Одна стратегия целиком: её ключи nfqws, по строке на ключ. По запросу, а не в каталоге:
+     *  каталог показывается при каждом открытии вкладки, а ключи человек разворачивает у
+     *  одной-двух стратегий. */
+    zapretStrategy: declare<{ name: string; family: ZapretFamily; opts: string[] }>(
+        'zapret_strategy', ['name'],
+    ),
 
     /** Применить стратегию. `out` пуст — всему роутеру (/etc/config/zapret), иначе выходу
      *  kind=zapret. Два места применения одной и той же стратегии. */
@@ -817,6 +836,8 @@ export const rpc = {
         'zapret_apply', ['name', 'out'],
     ),
 
+    /** Набор: `all`, семейство (`flowseal`, `v`, `yv`) либо одна стратегия — `one:<имя>`.
+     *  Результат одиночной проверки ложится РЯДОМ с остальными, а не затирает их. */
     zapretTestStart: declare<{ ok: boolean; error?: string; scope?: string }>(
         'zapret_test_start', ['scope'],
     ),
@@ -841,16 +862,44 @@ export const rpc = {
     }>('zapret_test'),
 
     /** Результаты последней проверки — дословно тем файлом, который она написала.
-     *  Отсортированы по убыванию числа удач; ok = -1 значит «стратегия не поднялась». */
-    zapretResults: declare<{
-        at: number
-        targets: number
-        /** Сколько целей открылось БЕЗ обхода вовсе. Без этого числа «30 из 54» не значит
-         *  ничего: может, у этого провайдера и без обхода открывается тридцать. */
+     *  Отсортированы по убыванию доли удач; ok = -1 значит «стратегия не поднялась».
+     *
+     *  Наборов целей ДВА, как у Zapret Manager: общий (сайты плюс dpi-checkers) для Flowseal и
+     *  v, YouTube — для Yv. У каждого свой контрольный проход «без обхода» и свой перечень
+     *  целей; строка результата называет свой набор и то, что в нём открылось. Верхние
+     *  `targets` и `baseline` — про общий набор, для файла постарше. */
+    zapretResults: declare<ZapretResults>('zapret_results'),
+}
+
+export type ZapretFamily = 'flowseal' | 'v' | 'yv' | 'other'
+
+export type ZapretSet = 'general' | 'youtube'
+
+export interface ZapretResults {
+    at: number
+    targets: number
+    /** Сколько целей открылось БЕЗ обхода вовсе. Без этого числа «30 из 54» не значит
+     *  ничего: может, у этого провайдера и без обхода открывается тридцать. */
+    baseline: number
+    scope?: string
+    sets?: Partial<Record<ZapretSet, {
         baseline: number
-        scope?: string
-        results: { name: string; ok: number }[]
-    }>('zapret_results'),
+        total: number
+        at?: number
+        /** Все цели набора по порядку и те из них, что открылись без обхода. */
+        targets: string[]
+        opened: string[]
+    }>>
+    results: {
+        name: string
+        ok: number
+        /** Сколько целей было у ЭТОЙ стратегии; нет — как у набора (файл постарше). */
+        total?: number
+        set?: ZapretSet
+        at?: number
+        /** Метки открывшихся целей — в порядке перечня целей набора. */
+        opened?: string[]
+    }[]
 }
 
 export type Rpc = typeof rpc

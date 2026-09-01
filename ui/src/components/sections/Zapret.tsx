@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Check, Play, RefreshCw, Square, Waves } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, LoaderCircle, Play, RefreshCw, Square, Waves } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { rpc } from '@/lib/rpc'
+import { rpc, type ZapretFamily, type ZapretResults, type ZapretSet } from '@/lib/rpc'
 import { notify } from '@/lib/notify'
 import { t } from '@/lib/i18n'
 import { pending } from '@/lib/pending'
@@ -25,21 +25,29 @@ import { type Output, type Spec } from '@/lib/model'
  *  очереди и отдаёт в неё только свои же запросы (по диапазону исходящих портов). Стратегия,
  *  которая работает у человека, продолжает работать всю проверку — в отличие от того, как это
  *  устроено в самом менеджере, где на время проверки всей сети достаётся то одна случайная
- *  стратегия, то другая. */
+ *  стратегия, то другая.
+ *
+ *  СПИСОК — СЕМЕЙСТВАМИ ПОД СПОЙЛЕРАМИ, И ПРОВЕРЯЕТСЯ ТО, ЧТО НАЗВАНО. Полсотни строк одним
+ *  столбом не читались; хуже, ряд кнопок «все · Flowseal · v · YouTube» стоял здесь дважды —
+ *  один фильтровал список, другой выбирал набор для проверки, — и человек, нажав в списке
+ *  «Flowseal», получал проверку всех 58 (снято с живого роутера). Теперь семейство — одна
+ *  строка-заголовок со своей кнопкой проверки, у каждой стратегии — своя, а общая «Проверить»
+ *  честно называется проверкой всех. У развёрнутой стратегии видны её ключи и то, какие
+ *  именно сайты с ней открылись: число «14/18» само по себе не говорит, YouTube это или
+ *  госуслуги. */
 
-const SCOPES: { id: string; label: string }[] = [
-    { id: 'all', label: 'все' },
-    { id: 'flowseal', label: 'Flowseal' },
-    { id: 'v', label: 'v' },
-    { id: 'yv', label: 'YouTube' },
-]
-
-const FAMILY: Record<string, string> = {
+const FAMILY: Record<ZapretFamily, string> = {
     flowseal: 'Flowseal',
     v: 'v',
     yv: 'YouTube',
-    other: '—',
+    other: 'другие',
 }
+const FAMILY_ORDER: ZapretFamily[] = ['flowseal', 'v', 'yv', 'other']
+/** Семейство → набор целей, которым его меряет проверка (см. splify2-zapret-test, zt_set_of). */
+const SET_OF: Record<ZapretFamily, ZapretSet> = {
+    flowseal: 'general', v: 'general', yv: 'youtube', other: 'general',
+}
+const SET_NAME: Record<ZapretSet, string> = { general: 'общий набор', youtube: 'YouTube' }
 
 function ago(ts: number): string {
     if (!ts) return 'ни разу'
@@ -50,19 +58,41 @@ function ago(ts: number): string {
     return `${Math.round(s / 86400)} сут назад`
 }
 
+/** Число проверки для стратегии: удач, целей и контрольное «без обхода» её набора.
+ *  Файл постарше наборов не знает — тогда верхние числа, они и были про общий набор. */
+function scoreOf(res: ZapretResults | null, name: string, family: ZapretFamily) {
+    const r = res?.results.find((x) => x.name === name)
+    if (!r) return undefined
+    const set = r.set || SET_OF[family]
+    const s = res?.sets?.[set]
+    return {
+        ok: r.ok,
+        total: r.total ?? s?.total ?? res?.targets ?? 0,
+        baseline: s?.baseline ?? res?.baseline ?? 0,
+        set,
+        opened: r.opened,
+        targets: s?.targets,
+        baseOpened: s?.opened,
+    }
+}
+
 export default function Zapret() {
     const [st, setSt] = useState<Awaited<ReturnType<typeof rpc.zapretState>> | null>(null)
     const [cat, setCat] = useState<Awaited<ReturnType<typeof rpc.zapretStrategies>> | null>(null)
-    const [res, setRes] = useState<Awaited<ReturnType<typeof rpc.zapretResults>> | null>(null)
+    const [res, setRes] = useState<ZapretResults | null>(null)
     const [test, setTest] = useState<Awaited<ReturnType<typeof rpc.zapretTest>> | null>(null)
     const [busy, setBusy] = useState('')
-    const [scope, setScope] = useState('all')
     /** Куда применять выбранное: пусто — весь роутер, иначе имя выхода kind=zapret. */
     const [target, setTarget] = useState('')
-    const [family, setFamily] = useState('')
+    /** Развёрнутые семейства. По умолчанию открыто то, где применённая стратегия: за ним и
+     *  пришли; остальное — по нажатию. */
+    const [openFam, setOpenFam] = useState<Partial<Record<ZapretFamily, boolean>> | null>(null)
+    /** Развёрнутая стратегия и её ключи (грузятся по запросу). */
+    const [openRow, setOpenRow] = useState('')
+    const [opts, setOpts] = useState<Record<string, string[] | null>>({})
     /** Имя нового выхода. Заводится ЗДЕСЬ, а не в общем редакторе выходов, и это не про
-     *  удобство: тот знает два вида выхода (локация подписки и свои туннели), а выход обхода
-     *  не имеет устройства вовсе. Плюс выход без стратегии не значит ничего, а стратегии — тут. */
+     *  удобство: у выхода обхода нет устройства вовсе, а без стратегии он не значит ничего —
+     *  стратегии же живут тут. */
     const [newOut, setNewOut] = useState('')
 
     const reloadState = useCallback(
@@ -113,6 +143,24 @@ export default function Zapret() {
             notify(String(e instanceof Error ? e.message : e), 'error')
         } finally {
             setBusy('')
+        }
+    }
+
+    /** Запустить проверку набора: все, семейство или одна стратегия. Ход подхватит опрос выше
+     *  на следующем круге; чтобы «идёт» появилось сразу, а не через две секунды, ход спрашивается
+     *  здесь же. */
+    async function startTest(scope: string) {
+        await act('test', () => rpc.zapretTestStart(scope), t('Проверка запущена'))
+        rpc.zapretTest().then((r) => { setTest(r); wasRunning.current = r.running }).catch(() => undefined)
+    }
+
+    function toggleRow(name: string) {
+        const next = openRow === name ? '' : name
+        setOpenRow(next)
+        if (next && opts[next] === undefined) {
+            rpc.zapretStrategy(next)
+                .then((r) => setOpts((m) => ({ ...m, [next]: r.opts || [] })))
+                .catch(() => setOpts((m) => ({ ...m, [next]: null })))
         }
     }
 
@@ -172,16 +220,23 @@ export default function Zapret() {
         )
     }
 
-    const score = new Map((res?.results || []).map((r) => [r.name, r.ok]))
     const outs = cat?.outputs || []
     const all = cat?.strategies || []
-    const list = family ? all.filter((s) => s.family === family) : all
     const running = test?.running === true
     /* Что применено в выбранном месте: у роутера — отметка из /etc/config/zapret (её же
        ставит Zapret Manager), у выхода — заголовок его файла ключей. */
     const applied = target
         ? (outs.find((o) => o.name === target)?.strategy || '')
         : st.active
+    const appliedFam = all.find((s) => s.name === applied)?.family
+    const isOpen = (f: ZapretFamily) => (openFam ? !!openFam[f] : f === appliedFam)
+    const toggleFam = (f: ZapretFamily) =>
+        setOpenFam((m) => {
+            const base = m ?? Object.fromEntries(FAMILY_ORDER.map((x) => [x, x === appliedFam]))
+            return { ...base, [f]: !base[f] }
+        })
+    const families = FAMILY_ORDER.filter((f) => all.some((s) => s.family === f))
+    const testable = st.curl && st.strategies > 0 && !running && busy === ''
 
     return (
         <div className="space-y-4">
@@ -248,7 +303,7 @@ export default function Zapret() {
                 <CardHeader><CardTitle className="text-base">{t('Проверка стратегий')}</CardTitle></CardHeader>
                 <CardContent className="space-y-3">
                     <div className="text-xs text-muted-foreground">
-                        {t('Идёт в фоне: окно роутера можно закрыть. Пользовательского трафика проверка не касается — она поднимает свой обработчик и отдаёт в него только свои запросы, а ваша стратегия всё это время работает как обычно.')}
+                        {t('Идёт в фоне: окно роутера можно закрыть. Пользовательского трафика проверка не касается — она поднимает свой обработчик и отдаёт в него только свои запросы, а ваша стратегия всё это время работает как обычно. Наборов целей два, как у Zapret Manager: общий (сайты и dpi-checkers) для Flowseal и v, домены YouTube — для Yv.')}
                     </div>
                     {running ? (
                         <div className="space-y-2">
@@ -281,31 +336,17 @@ export default function Zapret() {
                         </div>
                     ) : (
                         <div className="flex flex-wrap items-center gap-2">
-                            <div className="flex gap-1">
-                                {SCOPES.map((s) => (
-                                    <button
-                                        key={s.id}
-                                        type="button"
-                                        onClick={() => setScope(s.id)}
-                                        className={[
-                                            'rounded-lg px-2.5 py-1 text-xs transition-colors duration-200',
-                                            scope === s.id
-                                                ? 'bg-primary/10 font-medium text-primary'
-                                                : 'text-subtle hover:bg-accent',
-                                        ].join(' ')}
-                                    >
-                                        {t(s.label)}
-                                    </button>
-                                ))}
-                            </div>
                             <Button
                                 size="sm"
                                 disabled={busy !== '' || !st.curl || st.strategies === 0}
-                                onClick={() => void act('test', () => rpc.zapretTestStart(scope), t('Проверка запущена'))}
+                                onClick={() => void startTest('all')}
                             >
                                 <Play className="h-3.5 w-3.5" aria-hidden="true" />
                                 {t('Проверить')}
                             </Button>
+                            <span className="text-xs text-muted-foreground">
+                                {t('все стратегии; семейство или одну — кнопками в списке ниже')}
+                            </span>
                         </div>
                     )}
                     {test?.state === 'error' && test.error_text && (
@@ -315,8 +356,21 @@ export default function Zapret() {
                         отличным, и никаким — смотря сколько открывается без обхода вовсе. */}
                     {res && res.at > 0 && (
                         <div className="text-xs text-muted-foreground">
-                            {t('последняя проверка')}: {ago(res.at)} · {t('целей')} {res.targets} ·{' '}
-                            {t('без обхода открылось')} {res.baseline}
+                            {t('последняя проверка')}: {ago(res.at)}
+                            {res.sets && Object.keys(res.sets).length ? (
+                                (['general', 'youtube'] as ZapretSet[])
+                                    .filter((k) => res.sets?.[k])
+                                    .map((k) => (
+                                        <span key={k}>
+                                            {' · '}{SET_NAME[k]}: {t('целей')} {res.sets![k]!.total},{' '}
+                                            {t('без обхода открылось')} {res.sets![k]!.baseline}
+                                        </span>
+                                    ))
+                            ) : (
+                                <>
+                                    {' · '}{t('целей')} {res.targets} · {t('без обхода открылось')} {res.baseline}
+                                </>
+                            )}
                         </div>
                     )}
                 </CardContent>
@@ -399,90 +453,210 @@ export default function Zapret() {
                     </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-1">
-                    <div className="flex gap-1 pb-1">
-                        {[{ id: '', label: 'все' }, ...SCOPES.slice(1).map((s) => ({ id: s.id, label: s.label }))]
-                            .map((f) => (
-                                <button
-                                    key={f.id || 'any'}
-                                    type="button"
-                                    onClick={() => setFamily(f.id)}
-                                    className={[
-                                        'rounded-lg px-2.5 py-1 text-xs transition-colors duration-200',
-                                        family === f.id
-                                            ? 'bg-primary/10 font-medium text-primary'
-                                            : 'text-subtle hover:bg-accent',
-                                    ].join(' ')}
-                                >
-                                    {t(f.label)}
-                                </button>
-                            ))}
-                    </div>
-                    {list.length === 0 && (
+                    {all.length === 0 && (
                         <div className="py-3 text-sm text-muted-foreground">
                             {t('Каталог пуст — обновите его.')}
                         </div>
                     )}
-                    {list.map((s) => {
-                        const on = applied === s.name
-                        const ok = score.get(s.name)
+                    {families.map((fam) => {
+                        const list = all.filter((s) => s.family === fam)
+                        const open = isOpen(fam)
+                        /* Лучшее число семейства — в заголовок: так свёрнутое семейство всё
+                           же отвечает на вопрос «стоит ли сюда заглядывать». */
+                        const best = list
+                            .map((s) => scoreOf(res, s.name, fam))
+                            .filter((x): x is NonNullable<typeof x> => !!x && x.ok >= 0)
+                            .sort((a, b) => b.ok / Math.max(1, b.total) - a.ok / Math.max(1, a.total))[0]
+                        const hasApplied = list.some((s) => s.name === applied)
                         return (
-                            <div
-                                key={s.name}
-                                className={[
-                                    'flex items-center gap-2 rounded-lg px-3 py-2 text-sm',
-                                    on ? 'bg-primary/10' : '',
-                                ].join(' ')}
-                            >
-                                {on
-                                    ? <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-                                    : <span className="h-4 w-4 shrink-0" aria-hidden="true" />}
-                                <span className={`min-w-0 flex-1 truncate ${on ? 'font-medium text-primary' : ''}`}>
-                                    {s.name}
-                                </span>
-                                <span className="shrink-0 text-[11px] text-muted-foreground">
-                                    {FAMILY[s.family]}
-                                </span>
-                                {/* Число проверки стоит НАПРОТИВ стратегии, а не отдельным
-                                    списком: вопрос человека — «какую выбрать», и ответ должен
-                                    быть в той же строке, где кнопка выбора. -1 значит «не
-                                    поднялась вовсе» — такой же ответ, как плохое число. */}
-                                <span className="w-16 shrink-0 text-right text-xs">
-                                    {ok === undefined ? (
-                                        <span className="text-muted-foreground">—</span>
-                                    ) : ok < 0 ? (
-                                        <span className="text-destructive">{t('не идёт')}</span>
-                                    ) : (
-                                        <span
-                                            className={
-                                                res && ok > res.baseline
-                                                    ? 'font-medium text-success'
-                                                    : res && ok < res.baseline
-                                                      ? 'text-warning-fg'
-                                                      : 'text-muted-foreground'
-                                            }
-                                        >
-                                            {ok}/{res?.targets ?? 0}
+                            <div key={fam} className="rounded-xl border border-border">
+                                <div className="flex items-center gap-2 px-2 py-1.5">
+                                    <button
+                                        type="button"
+                                        onClick={() => toggleFam(fam)}
+                                        aria-expanded={open}
+                                        aria-label={`${open ? t('свернуть') : t('развернуть')} ${FAMILY[fam]}`}
+                                        className="flex min-w-0 flex-1 items-center gap-2 rounded-lg bg-transparent px-1 py-1 text-left text-sm hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                                    >
+                                        {open
+                                            ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                                            : <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+                                        <span className="font-medium">{FAMILY[fam]}</span>
+                                        <span className="text-xs text-muted-foreground">
+                                            {list.length}
+                                            {hasApplied ? ` · ${t('применена')} ${applied}` : ''}
+                                            {best ? ` · ${t('лучшая')} ${best.ok}/${best.total}` : ''}
                                         </span>
+                                    </button>
+                                    {!running && (
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            disabled={!testable}
+                                            aria-label={`${t('проверить семейство')} ${FAMILY[fam]}`}
+                                            onClick={() => void startTest(fam)}
+                                        >
+                                            <Play className="h-3.5 w-3.5" aria-hidden="true" />
+                                            {t('проверить семейство')}
+                                        </Button>
                                     )}
-                                </span>
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    disabled={busy !== '' || on}
-                                    onClick={() =>
-                                        void act(
-                                            `apply:${s.name}`,
-                                            () => rpc.zapretApply(s.name, target),
-                                            `${t('Применена')} ${s.name}`,
-                                        )}
-                                >
-                                    {busy === `apply:${s.name}` ? t('…') : t('Применить')}
-                                </Button>
+                                </div>
+                                {open && (
+                                    <div className="border-t border-border p-1">
+                                        {list.map((s) => {
+                                            const on = applied === s.name
+                                            const sc = scoreOf(res, s.name, fam)
+                                            const expanded = openRow === s.name
+                                            return (
+                                                <div key={s.name} className={on ? 'rounded-lg bg-primary/10' : ''}>
+                                                    <div className="flex items-center gap-2 px-2 py-1.5 text-sm">
+                                                        {on
+                                                            ? <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                                                            : <span className="h-4 w-4 shrink-0" aria-hidden="true" />}
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => toggleRow(s.name)}
+                                                            aria-expanded={expanded}
+                                                            className={`min-w-0 flex-1 truncate rounded bg-transparent px-1 text-left hover:underline decoration-dotted focus:outline-none focus-visible:ring-2 focus-visible:ring-primary ${on ? 'font-medium text-primary' : ''}`}
+                                                        >
+                                                            {s.name}
+                                                        </button>
+                                                        {/* Число проверки стоит НАПРОТИВ стратегии, а не отдельным
+                                                            списком: вопрос человека — «какую выбрать», и ответ должен
+                                                            быть в той же строке, где кнопка выбора. -1 значит «не
+                                                            поднялась вовсе» — такой же ответ, как плохое число. */}
+                                                        <span className="w-16 shrink-0 text-right text-xs">
+                                                            {sc === undefined ? (
+                                                                <span className="text-muted-foreground">—</span>
+                                                            ) : sc.ok < 0 ? (
+                                                                <span className="text-destructive">{t('не идёт')}</span>
+                                                            ) : (
+                                                                <span
+                                                                    className={
+                                                                        sc.ok > sc.baseline
+                                                                            ? 'font-medium text-success'
+                                                                            : sc.ok < sc.baseline
+                                                                              ? 'text-warning-fg'
+                                                                              : 'text-muted-foreground'
+                                                                    }
+                                                                >
+                                                                    {sc.ok}/{sc.total}
+                                                                </span>
+                                                            )}
+                                                        </span>
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            disabled={busy !== '' || on}
+                                                            onClick={() =>
+                                                                void act(
+                                                                    `apply:${s.name}`,
+                                                                    () => rpc.zapretApply(s.name, target),
+                                                                    `${t('Применена')} ${s.name}`,
+                                                                )}
+                                                        >
+                                                            {busy === `apply:${s.name}` ? t('…') : t('Применить')}
+                                                        </Button>
+                                                    </div>
+                                                    {expanded && (
+                                                        <StrategyDetails
+                                                            opts={opts[s.name]}
+                                                            score={sc}
+                                                            testable={testable}
+                                                            running={running}
+                                                            onTest={() => void startTest(`one:${s.name}`)}
+                                                        />
+                                                    )}
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                )}
                             </div>
                         )
                     })}
                 </CardContent>
             </Card>
+        </div>
+    )
+}
+
+/** Развёрнутая стратегия: её ключи nfqws и что с ней открылось.
+ *
+ *  Ключи — дословно, по строке: человек видит, ЧТО применяет, а не только имя. Цели — все,
+ *  из набора этой стратегии, и у каждой две отметки: открылась ли с обходом и открывалась ли
+ *  без него. Цель, которая открывается и так, стратегии в заслугу не идёт — и видно это
+ *  только рядом, а не по двум числам сверху. */
+function StrategyDetails({
+    opts, score, testable, running, onTest,
+}: {
+    opts: string[] | null | undefined
+    score: ReturnType<typeof scoreOf>
+    testable: boolean
+    running: boolean
+    onTest: () => void
+}) {
+    const opened = new Set(score?.opened || [])
+    const base = new Set(score?.baseOpened || [])
+    const targets = score?.targets || []
+    return (
+        <div className="space-y-2 px-3 pb-3 pt-1 text-xs">
+            <div>
+                <div className="sp-label uppercase tracking-wide text-muted-foreground">{t('ключи nfqws')}</div>
+                {opts === undefined ? (
+                    <div className="mt-1 flex items-center gap-1 text-muted-foreground">
+                        <LoaderCircle className="h-3 w-3 animate-spin" aria-hidden="true" /> {t('читаю…')}
+                    </div>
+                ) : opts === null ? (
+                    <div className="mt-1 text-warning-fg">{t('бэкенд постарше ключи не отдаёт — обновите интерфейс')}</div>
+                ) : (
+                    <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-muted p-2 font-mono text-[11px] leading-relaxed">
+                        {opts.join('\n')}
+                    </pre>
+                )}
+            </div>
+            <div>
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <div className="sp-label uppercase tracking-wide text-muted-foreground">
+                        {score
+                            ? score.ok < 0
+                                ? t('стратегия не поднялась')
+                                : `${t('открылось')} ${score.ok} ${t('из')} ${score.total} · ${SET_NAME[score.set]} · ${t('без обхода')} ${score.baseline}`
+                            : t('ещё не проверялась')}
+                    </div>
+                    {!running && (
+                        <Button variant="ghost" size="sm" disabled={!testable} onClick={onTest}>
+                            <Play className="h-3.5 w-3.5" aria-hidden="true" />
+                            {t('проверить эту стратегию')}
+                        </Button>
+                    )}
+                </div>
+                {score && score.ok >= 0 && targets.length > 0 && (
+                    <ul className="mt-1 grid gap-x-3 gap-y-0.5 sm:grid-cols-2 lg:grid-cols-3">
+                        {targets.map((h) => {
+                            const ok = opened.has(h)
+                            const free = base.has(h)
+                            return (
+                                <li key={h} className="flex items-center gap-1.5 truncate">
+                                    <span
+                                        className={`h-2 w-2 shrink-0 rounded-full ${ok ? 'bg-success' : 'bg-destructive'}`}
+                                        aria-hidden="true"
+                                    />
+                                    <span className={`truncate ${ok ? '' : 'text-muted-foreground'}`}>{h}</span>
+                                    {free && (
+                                        <span className="shrink-0 text-[10px] text-muted-foreground" title={t('открывается и без обхода')}>
+                                            {t('и без обхода')}
+                                        </span>
+                                    )}
+                                </li>
+                            )
+                        })}
+                    </ul>
+                )}
+                {score && score.ok >= 0 && targets.length === 0 && score.opened && (
+                    <div className="mt-1 text-muted-foreground">{score.opened.join(', ') || t('ничего не открылось')}</div>
+                )}
+            </div>
         </div>
     )
 }

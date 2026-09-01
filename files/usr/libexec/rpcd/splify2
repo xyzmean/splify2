@@ -1943,6 +1943,10 @@ list)
     json_add_object zapret_remove; json_close_object
     json_add_object zapret_sync; json_close_object
     json_add_object zapret_strategies; json_close_object
+    # Одна стратегия целиком — её ключи nfqws. Отдельным методом и по запросу, а не полем
+    # zapret_strategies: каталог показывается при каждом открытии вкладки, а ключи человек
+    # разворачивает у одной-двух стратегий, и гонять полсотни блоков ради этого незачем.
+    json_add_object zapret_strategy; json_add_string name; json_close_object
     # `out` — какому выходу kind=zapret. Пусто означает «всему роутеру», то есть
     # /etc/config/zapret: это два разных места применения одной и той же стратегии, и
     # различать их полем дешевле, чем двумя методами с одинаковым телом.
@@ -1959,7 +1963,9 @@ list)
     json_add_object zapret_results; json_close_object
     json_add_object fetch_mode; json_close_object
     json_add_object fetch_mode_set; json_add_string mode; json_close_object
-    json_add_object vless_nodes; json_add_string output; json_close_object
+    # `sub` — путь к файлу подписки: узлы подписки, на которую ещё не заведён ни один выход.
+    # Одно из двух: либо имя выхода, либо файл.
+    json_add_object vless_nodes; json_add_string output; json_add_string sub; json_close_object
     json_add_object vless_probe
         json_add_string output; json_add_int node
     json_close_object
@@ -4011,6 +4017,22 @@ splify2: набор выходов обхода DPI изменился — об�
         read -r input
         json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
         json_get_var output output
+        json_get_var sub sub
+        # Узлы можно спросить и у ПОДПИСКИ, без выхода: движок принимает путь к файлу вместо
+        # имени выхода (steer vless-nodes /путь). Нужно редактору выхода: локации подписки
+        # показываются до того, как на неё заведён хоть один выход, — иначе выход собирался бы
+        # вслепую. Путь принимается только СВОЙ — из перечня подписок роутера: метод читает
+        # файл с диска, и произвольный путь означал бы чтение произвольного файла.
+        if [ -n "$sub" ]; then
+            _vn_ok=0
+            for _vn_n in $(sub_names); do
+                sub_use "$_vn_n"
+                [ "$SUB" = "$sub" ] && { _vn_ok=1; break; }
+            done
+            [ "$_vn_ok" = 1 ] || fail "нет такой подписки: $sub"
+            [ -s "$sub" ] || fail "подписка ещё не скачана"
+            output="$sub"
+        fi
         [ -n "$output" ] || fail "не указан выход"
         # Движок печатает JSON сам — отдаём дословно. Разбирать его здесь значило бы
         # держать вторую модель узла в shell, а имена узлов приходят из подписки и
@@ -4316,6 +4338,40 @@ splify2: набор выходов обхода DPI изменился — об�
         json_dump
         ;;
 
+    zapret_strategy)
+        # Ключи одной стратегии — как их запустит nfqws, по строке на ключ. Дословно из
+        # каталога: интерфейс показывает их человеку, чтобы тот видел, ЧТО применяет, а не
+        # только имя. Заголовок «#Имя» из блока снимается — он служебный (см. zp_block).
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var name name
+        [ -n "$name" ] || fail "не названа стратегия"
+        zp_has "$name" || fail "нет такой стратегии в каталоге: $name"
+        json_init
+        json_add_string name "$name"
+        case "$name" in
+            general*) json_add_string family flowseal ;;
+            Yv*)      json_add_string family yv ;;
+            v[0-9]*)  json_add_string family v ;;
+            *)        json_add_string family other ;;
+        esac
+        json_add_array opts
+        # Без конвейера — как в zapret_strategies: тело конвейера идёт в подоболочке, и
+        # накопленный jshn из неё не возвращается.
+        _zo_ifs="$IFS"
+        IFS='
+'
+        for _zo_l in $(zp_block "$name" 2>/dev/null); do
+            IFS="$_zo_ifs"
+            case "$_zo_l" in ''|\#*) ;; *) json_add_string "" "$_zo_l" ;; esac
+            IFS='
+'
+        done
+        IFS="$_zo_ifs"
+        json_close_array
+        json_dump
+        ;;
+
     zapret_apply)
         read -r input
         json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
@@ -4356,9 +4412,13 @@ splify2: набор выходов обхода DPI изменился — об�
         read -r input 2>/dev/null || input='{}'
         json_load "${input:-{\}}" 2>/dev/null
         json_get_var scope scope 2>/dev/null
+        # Набор — семейство либо одна стратегия («one:имя»). Одиночная проверка нужна ради
+        # вопроса «а эта у меня пойдёт?» и стоит секунды вместо часа; её результат ложится
+        # рядом с остальными, а не затирает их (см. хранение в splify2-zapret-test).
         case "${scope:-all}" in
             all|flowseal|v|yv) ;;
-            *) fail "набор бывает all, flowseal, v или yv" ;;
+            one:?*) zp_has "${scope#one:}" || fail "нет такой стратегии в каталоге: ${scope#one:}" ;;
+            *) fail "набор бывает all, flowseal, v, yv или one:<стратегия>" ;;
         esac
         zp_installed || fail "обход DPI не установлен"
         [ -s "$ZP_CATALOG" ] || fail "каталог стратегий пуст — обновите его"

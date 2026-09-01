@@ -399,6 +399,15 @@ pm_add "$TMP/$UI_PKG" || die "интерфейс не установился"
 info "установлен"
 
 # ---- запуск -------------------------------------------------------------------
+# Срок вызова rpcd — тот же, что ждёт интерфейс (120 с); стандартные 30 с обрывали долгие
+# вызовы (установка, подписка, каталог стратегий) на середине. Подробно — в
+# files/etc/uci-defaults/99-splify2, который делает то же самое при установке пакетом; здесь
+# повтор на случай, если uci-defaults на этой системе отложен до перезагрузки.
+_rt="$(uci -q get rpcd.@rpcd[0].timeout)"
+case "${_rt:-30}" in ''|*[!0-9]*) _rt=30 ;; esac
+if [ "$_rt" -lt 120 ]; then
+    uci -q set rpcd.@rpcd[0].timeout=120 && uci -q commit rpcd
+fi
 /etc/init.d/rpcd restart >/dev/null 2>&1 || true   # чтобы ubus увидел новый бэкенд
 if [ -x /etc/init.d/steer ]; then
     /etc/init.d/steer enable >/dev/null 2>&1 || true

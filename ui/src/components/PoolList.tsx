@@ -7,7 +7,7 @@ import PoolEditor from '@/components/PoolEditor'
 import { rpc } from '@/lib/rpc'
 import { pending } from '@/lib/pending'
 import { country } from '@/lib/geo'
-import { EMPTY_SPEC, type Output, type Spec } from '@/lib/model'
+import { devList, EMPTY_SPEC, isPart, type Spec } from '@/lib/model'
 import { type Live } from '@/lib/live'
 
 /** Выходы: во что правила ведут трафик.
@@ -17,14 +17,22 @@ import { type Live } from '@/lib/live'
  *  вопрос: он показывал, КАК выход устроен, тогда как со списка спрашивают, КУДА он ведёт и
  *  работает ли. Настройка открывается по нажатию, целым экраном. */
 
-function devList(o: Output): string[] {
-    return o.devices?.length ? o.devices : o.device ? [o.device] : []
-}
-
-export default function PoolList({ live }: { live: Live }) {
+export default function PoolList({
+    live, onEditingChange,
+}: {
+    live: Live
+    /** Открылся или закрылся редактор выхода. Раздел выше по этому признаку убирает свои
+     *  подпункты: редактор — целый экран, и три строки-входа над ним читались как часть
+     *  формы, которой они не являются. */
+    onEditingChange?: (on: boolean) => void
+}) {
     const [spec, setSpec] = useState<Spec | null>(null)
     /** Что правим: имя выхода, пустая строка — новый, null — список. */
-    const [editing, setEditing] = useState<string | null>(null)
+    const [editing, setEditingRaw] = useState<string | null>(null)
+    const setEditing = (v: string | null) => {
+        setEditingRaw(v)
+        onEditingChange?.(v !== null)
+    }
     const [geo, setGeo] = useState<Record<string, { cc?: string; ms?: number }>>({})
 
     useEffect(() => {
@@ -70,7 +78,9 @@ export default function PoolList({ live }: { live: Live }) {
         )
     }
 
-    const rows = Object.entries(spec.outputs)
+    /* Служебные части пулов — не выходы для человека: их локации показаны строками внутри
+     * своего пула (см. Output.part_of). */
+    const rows = Object.entries(spec.outputs).filter(([, o]) => !isPart(o))
 
     return (
         <div className="space-y-3">
@@ -110,7 +120,15 @@ export default function PoolList({ live }: { live: Live }) {
                                       country(g?.cc),
                                       o.kind === 'vless'
                                           ? 'подписка'
-                                          : devs.join(' → ') || 'устройство не выбрано',
+                                          : devs
+                                                /* Устройство служебной части называется
+                                                   подпиской, которой оно принадлежит: имя
+                                                   вида «vpn-1» человеку ни о чём не говорит. */
+                                                .map((d) => {
+                                                    const p = spec.outputs[d]
+                                                    return p && isPart(p) ? 'подписка' : d
+                                                })
+                                                .join(' → ') || 'устройство не выбрано',
                                       g?.ms ? `${g.ms} мс` : '',
                                       rules ? `правил: ${rules}` : '',
                                   ]

@@ -136,8 +136,16 @@ class PendingStore {
         if (!a || !s) return 0
         let n = 0
         const names = new Set([...Object.keys(a.outputs || {}), ...Object.keys(s.outputs || {})])
-        for (const name of names)
-            if (same(a.outputs?.[name], s.outputs?.[name]) === false) n++
+        const changed = [...names].filter((name) => same(a.outputs?.[name], s.outputs?.[name]) === false)
+        for (const name of changed) {
+            /* Служебная часть пула считается вместе со своим пулом, если тот тоже изменился:
+             * человек собрал ОДИН выход, и «Применить · 3» на нём читалось бы как три правки,
+             * которых он не делал. Изменилась одна часть при прежнем пуле — это правка, и она
+             * считается. */
+            const pool = (s.outputs?.[name] ?? a.outputs?.[name])?.part_of
+            if (pool && changed.includes(pool)) continue
+            n++
+        }
         /* Каналов может не быть вовсе: спека приезжает от бэкенда и из архива, а поле
          * необязательное. Считать длину у отсутствующего массива значило бы уронить весь
          * экран на разборе чужого файла. */

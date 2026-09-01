@@ -13,8 +13,18 @@
 # трогала пользовательский трафик. Отсюда всё устройство этого файла.
 #
 # ФОН. Скрипт запускается через start-stop-daemon -b из объекта rpcd и живёт сам по себе. Ход
-# он пишет в /var/run (строка «стратегия 7 из 49» живёт минуты), результат — один раз, в
-# конце, в /etc/splify2/zapret/results.json. Браузер тут ни при чём: он читает файлы.
+# он пишет в /var/run (строка «стратегия 7 из 49» живёт минуты), результат каждой стратегии —
+# в свой файл в $ZP_RESULTS_DIR сразу по её окончании, а сводку results.json собирает из этих
+# файлов в конце. Браузер тут ни при чём: он читает файлы.
+#
+#   Почему по файлу на стратегию, а не одна запись в конце, как было. Три причины, и все
+#   пришли с живого роутера. Остановленная на середине проверка не оставляла НИЧЕГО — сорок
+#   минут работы пропадали из-за одного нажатия «Остановить». Проверить ОДНУ стратегию
+#   («а эта у меня пойдёт?») было нельзя: результат одной затирал результаты остальных.
+#   И «какие домены открылись» знала только сама проверка — в сводку уезжало одно число.
+#   Файл на стратегию решает все три разом: результаты складываются, а не заменяют друг
+#   друга, и хранят перечень открывшихся целей. Файлы крошечные (сотни байт), пишутся по
+#   разу на стратегию за прогон — износа флеша от этого не будет.
 #
 # ИЗОЛЯЦИЯ. Ни /etc/config/zapret, ни файлы стратегий выходов, ни сам обход не трогаются
 # вовсе — стратегия, которая работает у человека, продолжает работать всю проверку. Вместо
@@ -40,6 +50,13 @@
 # обхода и в его же цепочку predefrag (там их снимают с учёта conntrack, без чего ядро
 # отбрасывает их как INVALID), младший — выводит их из НАШЕЙ очереди. Всё это ровно те же
 # биты и по тем же причинам, что у выхода kind=zapret в движке (см. steer/src/spec.h).
+#
+# ЦЕЛИ — КАК У МЕНЕДЖЕРА, И РАЗНЫЕ ДЛЯ РАЗНЫХ СЕМЕЙСТВ. У Zapret Manager два разных теста:
+# общие стратегии (Flowseal, v) он гоняет по своему списку сайтов плюс набору dpi-checkers, а
+# стратегии YouTube (Yv) — по списку доменов YouTube, потому что они и написаны только под
+# него: мерить Yv по gosuslugi.ru значит получить число, которое ни о чём не говорит. Здесь то
+# же самое: у каждой стратегии свой набор целей по её семейству, и у каждого набора свой
+# контрольный проход «без обхода».
 set -u
 
 ZAPRET_SH=${ZAPRET_SH:-/usr/lib/splify2/zapret.sh}
@@ -58,11 +75,20 @@ ZT_PORT_HI=${ZT_PORT_HI:-20999}
 # Сколько запросов разом. Четыре, а не двадцать: на 880 МГц двадцать параллельных TLS —
 # это замер загрузки процессора, а не стратегии.
 ZT_PARALLEL=${ZT_PARALLEL:-4}
-ZT_DPI_SUITE=${ZT_DPI_SUITE:-https://raw.githubusercontent.com/hyperion-cs/dpi-checkers/refs/heads/main/ru/tcp-16-20/suite.v2.json}
+# Набор dpi-checkers — тот же, что берёт менеджер. Ссылка без `refs/heads/`: обходные пути
+# скачивания (fetch.sh) разбирают адрес как владелец/репозиторий/ветка/путь, и «refs» на
+# месте ветки уводил их в несуществующий каталог.
+ZT_DPI_SUITE=${ZT_DPI_SUITE:-https://raw.githubusercontent.com/hyperion-cs/dpi-checkers/main/ru/tcp-16-20/suite.v2.json}
+# Снимок того же набора, приехавший с пакетом. Нужен ровно тогда, когда до GitHub не дойти
+# ни одним из путей fetch.sh (на роутере владельца — именно так: githubusercontent закрыт,
+# зеркала отвечают 403), и без него целей оставалось 18 против шести десятков у менеджера.
+ZT_DPI_SNAPSHOT=${ZT_DPI_SNAPSHOT:-/usr/share/splify2/dpi-suite.json}
 ZT_CURL=${ZT_CURL:-curl}
 
 log() { logger -t splify2-zapret-test "$*"; [ -t 1 ] && echo "$*"; return 0; }
 
+# Набор: all | flowseal | v | yv — семейство; one:<имя> — одна стратегия. Разбор один и
+# тот же, что у объекта rpcd (zapret_test_start): он отсеивает чужое до запуска.
 scope=all
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -104,10 +130,19 @@ fi
 # Оставленная таблица уводила бы в мёртвую очередь всё, что сядет на эти порты, а
 # оставленный nfqws — разбирал бы это стратегией, которую никто не выбирал. Поэтому trap
 # ставится ДО того, как что-либо создано.
+#
+# Сводка results.json собирается и при остановке: то, что успело проверить, уже лежит по
+# файлам, и человек имеет право увидеть эту половину, а не пустоту.
+# Обработчик запускается ВНУТРИ подстановки `$(zt_run_one …)`, то есть в подоболочке, и её
+# переменных главная оболочка не видит. Поэтому его pid лежит в файле: иначе «Остановить» на
+# середине стратегии оставляло бы nfqws на очереди до конца её проверки.
 zt_nfqws_pid=""
+zt_summary_wanted=0
 cleanup() {
     [ -n "$zt_nfqws_pid" ] && kill "$zt_nfqws_pid" 2>/dev/null
+    [ -s "$zt_tmp/nfqws.pid" ] && kill "$(cat "$zt_tmp/nfqws.pid")" 2>/dev/null
     nft delete table inet "$ZT_TABLE" 2>/dev/null
+    [ "$zt_summary_wanted" = 1 ] && zt_summary
     rm -rf "$zt_tmp" 2>/dev/null
     return 0
 }
@@ -116,10 +151,13 @@ trap 'cleanup; exit 143' INT TERM
 trap 'cleanup' EXIT
 
 # ---- цели проверки -------------------------------------------------------------------
-# Постоянная часть — тот же список, что у менеджера (prepare_urls): государственные услуги,
+# Строка цели — «МЕТКА|ССЫЛКА». Метка — то, что человек увидит в списке открывшегося,
+# поэтому это имя сайта, а не код проверки из набора dpi-checkers.
+
+# Общий набор: постоянная часть — тот же список, что у менеджера (prepare_urls): госуслуги,
 # торренты, соцсети, видео, игры. Он не про «любимые сайты», а про разные способы блокировки:
 # одни закрыты по SNI, другие по адресу, третьи только по QUIC.
-zt_targets() {
+zt_targets_general() {
     printf '%s\n' \
         "gosuslugi.ru|https://www.gosuslugi.ru" \
         "esia.gosuslugi.ru|https://esia.gosuslugi.ru" \
@@ -131,21 +169,55 @@ zt_targets() {
         "facebook.com|https://facebook.com" \
         "rutor.info|https://rutor.info" \
         "rutracker.org|https://rutracker.org" \
+        "epidemz.net.co|https://epidemz.net.co" \
         "nnmclub.to|https://nnmclub.to" \
         "openwrt.org|https://openwrt.org" \
+        "sxyprn.net|https://sxyprn.net" \
+        "spankbang.com|https://ru.spankbang.com" \
+        "pornhub.com|https://pornhub.com" \
         "discord.com|https://discord.com" \
         "x.com|https://x.com" \
+        "filmix.my|https://filmix.my" \
         "flightradar24.com|https://flightradar24.com" \
         "play.google.com|https://play.google.com" \
-        "youtube.com|https://www.youtube.com" \
+        "anitokyo.tv|https://anitokyo.tv" \
         "cub.red|https://cub.red"
-    # Переменная часть — набор dpi-checkers, тот же, что берёт менеджер. Не приезжает —
-    # работаем на постоянной части: половина целей лучше отказа от проверки.
-    if command -v download >/dev/null 2>&1 &&
-       download "$ZT_DPI_SUITE" "$zt_tmp/suite.json" 2>/dev/null; then
-        sed -n 's/.*"id":[[:space:]]*"\([^"]*\)".*"host":[[:space:]]*"\([^"]*\)".*/\1|https:\/\/\2/p' \
-            "$zt_tmp/suite.json"
+    # Переменная часть — набор dpi-checkers, тот же, что берёт менеджер: свежий, если
+    # скачался, иначе снимок из пакета. Не приезжает и снимка нет — работаем на постоянной
+    # части: половина целей лучше отказа от проверки.
+    _tg_suite="$zt_tmp/suite.json"
+    if ! { command -v download >/dev/null 2>&1 && download "$ZT_DPI_SUITE" "$_tg_suite" 2>/dev/null; }; then
+        [ -s "$ZT_DPI_SNAPSHOT" ] && cp "$ZT_DPI_SNAPSHOT" "$_tg_suite" 2>/dev/null
     fi
+    [ -s "$_tg_suite" ] &&
+        sed -n 's/.*"id":[[:space:]]*"[^"]*".*"host":[[:space:]]*"\([^"]*\)".*/\1|https:\/\/\1/p' \
+            "$_tg_suite"
+}
+
+# Набор YouTube — домены из теста менеджера (run_test_core_youtube, переменная DOMAINS): сам
+# сайт, картинки, API и кеши googlevideo. Стратегии Yv написаны под них и ни под что больше.
+zt_targets_youtube() {
+    for _ty_d in youtu.be youtube.com i.ytimg.com i9.ytimg.com yt3.ggpht.com yt4.ggpht.com \
+        googleapis.com jnn-pa.googleapis.com googleusercontent.com signaler-pa.youtube.com \
+        youtubei.googleapis.com manifest.googlevideo.com yt3.googleusercontent.com \
+        rr4---sn-4g5e6nze.googlevideo.com rr4---sn-5go7yner.googlevideo.com \
+        rr4---sn-q4flrnsl.googlevideo.com rr5---sn-n8v7knez.googlevideo.com \
+        rr2---sn-q4fl6ndl.googlevideo.com rr1---sn-q4fl6n6y.googlevideo.com \
+        rr1---sn-aj5go5-53.googlevideo.com rr1---sn-4axm-n8vs.googlevideo.com \
+        rr14---sn-n8v7kn7r.googlevideo.com rr16---sn-axq7sn76.googlevideo.com \
+        rr4---sn-jvhnu5g-c35d.googlevideo.com rr1---sn-8ph2xajvh-5xge.googlevideo.com \
+        rr1---sn-xguxaxjvh-gufl.googlevideo.com rr1---sn-gvnuxaxjvh-jx3z.googlevideo.com \
+        rr1---sn-gvnuxaxjvh-jx3l.googlevideo.com rr1---sn-gvnuxaxjvh-o8ge.googlevideo.com \
+        rr5---sn-gvnuxaxjvh-n8vk.googlevideo.com rr10---sn-gvnuxaxjvh-304z.googlevideo.com \
+        rr12---sn-gvnuxaxjvh-bvwz.googlevideo.com rr3---sn-ug5onuxaxjvh-n8v6.googlevideo.com \
+        rr1---sn-ug5onuxaxjvh-p5ge.googlevideo.com rr1---sn-ug5onuxaxjvh-p3ul.googlevideo.com \
+        rr1---sn-ug5onuxaxjvh-n8v6.googlevideo.com rr1---sn-u5uuxaxjvhg0-ocje.googlevideo.com
+    do printf '%s|https://%s/\n' "$_ty_d" "$_ty_d"; done
+}
+
+# Каким набором мерить стратегию — по семейству, тем же правилом, что печатает zapret_strategies.
+zt_set_of() {  # ИМЯ -> general|youtube
+    case "$1" in Yv*) echo youtube ;; *) echo general ;; esac
 }
 
 # Одна цель. Ключи curl — те же, что у менеджера, чтобы «открылось» значило у нас и у него
@@ -166,22 +238,22 @@ zt_check() {  # МЕТКА|ССЫЛКА ФАЙЛ_ОТМЕТОК
     fi
 }
 
-# Все цели, по ZT_PARALLEL за раз. Счёт удач — по строкам в файле: складывать числа из
-# фоновых процессов нечем, у каждого своя копия переменных.
+# Все цели, по ZT_PARALLEL за раз. Открывшиеся метки — в ФАЙЛ_ОТМЕТОК, по строке; счёт удач
+# — по строкам в нём: складывать числа из фоновых процессов нечем, у каждого своя копия
+# переменных.
 #
 # ЖДЁМ ПО PID, А НЕ `wait` БЕЗ АРГУМЕНТОВ, и это не педантизм — это ошибка, найденная на
 # живом прогоне. Голый `wait` ждёт ВСЕХ детей оболочки, а среди них есть обработчик nfqws:
 # он поднят на всё время проверки стратегии и не завершается никогда. Проверка вставала
 # насмерть после первой же стратегии — ход показывал «1 из 10» часами, процессы жили, в
 # журнале ни строчки. Единственный внешний признак был именно такой: счётчик не двигается.
-zt_check_all() {  # ФАЙЛ_ЦЕЛЕЙ -> печатает число удач
-    _za_ok="$zt_tmp/ok"
-    : > "$_za_ok"
+zt_check_all() {  # ФАЙЛ_ЦЕЛЕЙ ФАЙЛ_ОТМЕТОК
+    : > "$2"
     _za_pids=""
     _za_n=0
     while IFS= read -r _za_t; do
         [ -n "$_za_t" ] || continue
-        zt_check "$_za_t" "$_za_ok" &
+        zt_check "$_za_t" "$2" &
         _za_pids="$_za_pids $!"
         _za_n=$((_za_n + 1))
         if [ "$_za_n" -ge "$ZT_PARALLEL" ]; then
@@ -191,7 +263,14 @@ zt_check_all() {  # ФАЙЛ_ЦЕЛЕЙ -> печатает число удач
         fi
     done < "$1"
     for _za_p in $_za_pids; do wait "$_za_p" 2>/dev/null; done
-    wc -l < "$_za_ok" | tr -d ' '
+}
+
+# Метки из файла отметок одной строкой через запятую — в порядке ЦЕЛЕЙ, а не в порядке
+# ответа: параллельные запросы дописывают файл вперемешку, а человеку список нужен в том же
+# порядке, что и перечень целей.
+zt_opened() {  # ФАЙЛ_ЦЕЛЕЙ ФАЙЛ_ОТМЕТОК
+    awk -F'|' 'NR == FNR { ok[$1] = 1; next } ($1 in ok) { printf "%s%s", (n++ ? "," : ""), $1 }' \
+        "$2" "$1"
 }
 
 # ---- правила изоляции ------------------------------------------------------------------
@@ -229,12 +308,16 @@ NFT
 # check_zpr_off у менеджера, только без остановки обхода всей сети.
 
 # ---- прогон одной стратегии -------------------------------------------------------------
-zt_run_one() {  # ИМЯ ФАЙЛ_ЦЕЛЕЙ -> печатает число удач
+# Печатает число удач; открывшиеся метки оставляет в ФАЙЛ_ОТМЕТОК. -1 — стратегия не
+# поднялась вовсе (пустой блок, негодные ключи, мгновенно умерший процесс).
+zt_run_one() {  # ИМЯ ФАЙЛ_ЦЕЛЕЙ ФАЙЛ_ОТМЕТОК
     # Аргументы запоминаются СРАЗУ: ниже стоит `set --`, который собирает ключи стратегии в
-    # позиционные параметры и тем самым затирает $1 и $2. Без этого файл целей читался бы из
+    # позиционные параметры и тем самым затирает $1..$3. Без этого файл целей читался бы из
     # пустого имени, и каждая стратегия давала бы ноль удач.
     _zr_name="$1"
     _zr_targets="$2"
+    _zr_ok="$3"
+    : > "$_zr_ok"
     zp_block "$_zr_name" > "$zt_tmp/opts" 2>/dev/null
     [ -s "$zt_tmp/opts" ] || { echo -1; return; }
     set --
@@ -250,6 +333,7 @@ zt_run_one() {  # ИМЯ ФАЙЛ_ЦЕЛЕЙ -> печатает число уд
     "$ZP_NFQWS" --dry-run --qnum="$ZT_QUEUE" "$@" >/dev/null 2>&1 || { echo -1; return; }
     "$ZP_NFQWS" --qnum="$ZT_QUEUE" --dpi-desync-fwmark=0x60000000 "$@" >/dev/null 2>&1 &
     zt_nfqws_pid=$!
+    echo "$zt_nfqws_pid" > "$zt_tmp/nfqws.pid"
     # Обработчику нужно успеть сесть на очередь. Полсекунды хватает (замерено), но проверяем
     # факт, а не время: мёртвый процесс тут значит, что мерить нечего.
     sleep 1
@@ -258,14 +342,98 @@ zt_run_one() {  # ИМЯ ФАЙЛ_ЦЕЛЕЙ -> печатает число уд
         echo -1
         return
     fi
-    zt_check_all "$_zr_targets"
+    zt_check_all "$_zr_targets" "$_zr_ok"
     kill "$zt_nfqws_pid" 2>/dev/null
     wait "$zt_nfqws_pid" 2>/dev/null
     zt_nfqws_pid=""
+    rm -f "$zt_tmp/nfqws.pid"
+    wc -l < "$_zr_ok" | tr -d ' '
+}
+
+# ---- хранение результатов -----------------------------------------------------------------
+# По файлу на стратегию в $ZP_RESULTS_DIR, имя — md5 от имени стратегии: в именах стратегий
+# пробелы и скобки («general (ALT10)»), и класть их в имя файла значит спорить с оболочкой.
+# Внутри одна строка полями через табуляцию: имя, набор, удач, целей, открывшиеся метки
+# через запятую, время. Контрольный проход набора хранится рядом — `_baseline.<набор>`.
+zt_res_file() {  # ИМЯ
+    printf '%s/%s' "$ZP_RESULTS_DIR" "$(printf '%s' "$1" | md5sum | cut -c1-32)"
+}
+
+zt_json_str() {  # СТРОКА -> JSON-строка в кавычках
+    printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+}
+
+# Сводка results.json — из файлов результатов, целиком и через временный файл: файл лежит во
+# флеш-разделе, и его читает интерфейс, поэтому либо старая сводка, либо новая, обрубка не
+# бывает. Порядок — по убыванию доли удач: первым идёт то, что человек и ищет.
+#
+# Верхние `targets` и `baseline` — про ОБЩИЙ набор (или про YouTube, если проверяли только
+# его): их читает интерфейс постарше, который про наборы не знает. Всё остальное — в `sets` и
+# в каждой строке `results`.
+#
+# Поля файлов разбирает awk, а не `read`: табуляция для `read` — пробельный разделитель, и
+# два подряд (пустой перечень открывшегося) он склеивает, сдвигая все поля правее. Метки —
+# имена сайтов, кавычек и обратных косых в них не бывает, а имя стратегии экранируется.
+#
+# Стратегии, которые не удалось даже запустить (ok = -1), в сводку тоже попадают: «эта
+# стратегия у вас не поднимается» — такой же ответ, как «открылось 3 из 30», и молча
+# выбросить её значило бы оставить человека гадать, почему в списке дырка.
+zt_summary() {
+    [ -d "$ZP_RESULTS_DIR" ] || return 0
+    _zs_now="$(date +%s)"
+    _zs_tt=0; _zs_tb=0
+    {
+        printf '{"at":%s,"scope":%s,"sets":{' "$_zs_now" "$(zt_json_str "$scope")"
+        _zs_first=1
+        for _zs_set in general youtube; do
+            _zs_bf="$ZP_RESULTS_DIR/_baseline.$_zs_set"
+            [ -s "$_zs_bf" ] || continue
+            [ "$_zs_first" = 1 ] || printf ','
+            _zs_first=0
+            awk -F'\t' -v set="$_zs_set" '
+                function list(s,   n, a, i, k) {
+                    n = split(s, a, ",")
+                    for (i = 1; i <= n; i++) if (a[i] != "") printf "%s\"%s\"", (k++ ? "," : ""), a[i]
+                }
+                NR == 1 {
+                    printf "\"%s\":{\"baseline\":%d,\"total\":%d,\"at\":%d,\"targets\":[", set, $1, $2, $4
+                    list($5)
+                    printf "],\"opened\":["
+                    list($3)
+                    printf "]}"
+                }' "$_zs_bf"
+            # Верхний уровень — общий набор; YouTube только если общего нет.
+            if [ "$_zs_set" = general ] || [ "$_zs_tt" = 0 ]; then
+                _zs_tt="$(awk -F'\t' 'NR == 1 { print $2 + 0 }' "$_zs_bf")"
+                _zs_tb="$(awk -F'\t' 'NR == 1 { print $1 + 0 }' "$_zs_bf")"
+            fi
+        done
+        printf '},"targets":%s,"baseline":%s,"results":[' "${_zs_tt:-0}" "${_zs_tb:-0}"
+        # Сортировка по доле: awk печатает долю первым полем, sort её снимает.
+        for _zs_f in "$ZP_RESULTS_DIR"/*; do
+            case "${_zs_f##*/}" in _*) continue ;; esac
+            [ -s "$_zs_f" ] || continue
+            awk -F'\t' 'NR == 1 { r = ($4 > 0 ? $3 / $4 : -1); printf "%.6f\t%s\n", r, $0 }' "$_zs_f"
+        done | sort -rn | awk -F'\t' '
+            BEGIN { first = 1 }
+            {
+                name = $2
+                gsub(/\\/, "\\\\", name)
+                gsub(/"/, "\\\"", name)
+                printf "%s{\"name\":\"%s\",\"set\":\"%s\",\"ok\":%d,\"total\":%d,\"at\":%d,\"opened\":[",
+                       (first ? "" : ","), name, $3, $4, $5, $7
+                n = split($6, o, ",")
+                k = 0
+                for (i = 1; i <= n; i++) if (o[i] != "") printf "%s\"%s\"", (k++ ? "," : ""), o[i]
+                printf "]}"
+                first = 0
+            }'
+        printf ']}\n'
+    } > "$ZP_RESULTS.tmp" && mv "$ZP_RESULTS.tmp" "$ZP_RESULTS"
 }
 
 # ---- сам прогон --------------------------------------------------------------------------
-mkdir -p "$(dirname "$ZP_PROGRESS")" "$ZP_DIR" 2>/dev/null
+mkdir -p "$(dirname "$ZP_PROGRESS")" "$ZP_DIR" "$ZP_RESULTS_DIR" 2>/dev/null
 
 # Отметка «начали» ставится ДО сбора целей, и это не мелочь: сбор идёт в сеть за набором
 # dpi-checkers и занимает на роутере до полуминуты. Пока файла хода нет, страница видит
@@ -275,18 +443,36 @@ started=%s
 scope=%s
 ' "$(date +%s)" "$scope" > "$ZP_PROGRESS"
 
-zt_targets > "$zt_tmp/targets"
-total_t="$(grep -c '|' "$zt_tmp/targets")"
-[ "$total_t" -gt 0 ] || { log "целей нет"; exit 2; }
-
+# Какие стратегии. Одна — по точному имени; семейство — по началу имени, тем же правилом,
+# что у zapret_strategies в объекте rpcd.
 case "$scope" in
+    one:*)    zp_names | grep -xF -- "${scope#one:}" > "$zt_tmp/names" ;;
     flowseal) zp_names | grep '^general' > "$zt_tmp/names" ;;
     v)        zp_names | grep '^v[0-9]'  > "$zt_tmp/names" ;;
     yv)       zp_names | grep '^Yv'      > "$zt_tmp/names" ;;
     *)        zp_names                   > "$zt_tmp/names" ;;
 esac
 total_s="$(grep -c . "$zt_tmp/names")"
-[ "$total_s" -gt 0 ] || { log "стратегий для проверки нет"; exit 2; }
+[ "$total_s" -gt 0 ] || {
+    log "стратегий для проверки нет ($scope)"
+    printf 'state=error\nerror=%s\n' "стратегий для проверки нет" > "$ZP_PROGRESS"
+    exit 2
+}
+
+# Цели — только тех наборов, что понадобятся: за набором dpi-checkers ходить незачем, если
+# проверяются одни стратегии YouTube.
+need_general=0; need_youtube=0
+while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    case "$(zt_set_of "$name")" in youtube) need_youtube=1 ;; *) need_general=1 ;; esac
+done < "$zt_tmp/names"
+: > "$zt_tmp/t.general"; : > "$zt_tmp/t.youtube"
+# Повторы по метке снимаются: снимок dpi-checkers и постоянная часть могут назвать один сайт.
+[ "$need_general" = 1 ] && zt_targets_general | awk -F'|' '!seen[$1]++' > "$zt_tmp/t.general"
+[ "$need_youtube" = 1 ] && zt_targets_youtube | awk -F'|' '!seen[$1]++' > "$zt_tmp/t.youtube"
+total_t="$(grep -c '|' "$zt_tmp/t.general")"
+[ "$total_t" -gt 0 ] || total_t="$(grep -c '|' "$zt_tmp/t.youtube")"
+[ "$total_t" -gt 0 ] || { log "целей нет"; exit 2; }
 
 started="$(date +%s)"
 progress() {  # СДЕЛАНО ТЕКУЩАЯ
@@ -294,46 +480,40 @@ progress() {  # СДЕЛАНО ТЕКУЩАЯ
         "$started" "$scope" "$total_s" "$1" "$total_t" "$2" > "$ZP_PROGRESS"
 }
 progress 0 ''
-log "проверка стратегий: $total_s стратегий, $total_t целей"
+log "проверка стратегий: $total_s стратегий, целей: общих $(grep -c '|' "$zt_tmp/t.general"), YouTube $(grep -c '|' "$zt_tmp/t.youtube")"
 
 zt_rules_up || { log "не удалось поставить правила изоляции"; exit 2; }
+zt_summary_wanted=1
 
-base="$(zt_check_all "$zt_tmp/targets")"
-log "без обхода: $base из $total_t"
+# Контрольный проход — по каждому нужному набору, и запоминается вместе с перечнем целей:
+# по нему интерфейс рисует, что открывается без обхода, и знает полный список целей.
+for set in general youtube; do
+    [ -s "$zt_tmp/t.$set" ] || continue
+    zt_check_all "$zt_tmp/t.$set" "$zt_tmp/ok"
+    base="$(wc -l < "$zt_tmp/ok" | tr -d ' ')"
+    all="$(awk -F'|' 'BEGIN { ORS = "" } { printf "%s%s", (NR > 1 ? "," : ""), $1 }' "$zt_tmp/t.$set")"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$base" "$(grep -c '|' "$zt_tmp/t.$set")" \
+        "$(zt_opened "$zt_tmp/t.$set" "$zt_tmp/ok")" "$(date +%s)" "$all" \
+        > "$ZP_RESULTS_DIR/_baseline.$set"
+    log "без обхода ($set): $base из $(grep -c '|' "$zt_tmp/t.$set")"
+done
 
-: > "$zt_tmp/results"
 done_n=0
 while IFS= read -r name; do
     [ -n "$name" ] || continue
     done_n=$((done_n + 1))
     progress "$done_n" "$name"
-    ok="$(zt_run_one "$name" "$zt_tmp/targets")"
-    printf '%s\t%s\n' "$ok" "$name" >> "$zt_tmp/results"
-    log "$name: $ok из $total_t"
+    set="$(zt_set_of "$name")"
+    ok="$(zt_run_one "$name" "$zt_tmp/t.$set" "$zt_tmp/ok")"
+    total="$(grep -c '|' "$zt_tmp/t.$set")"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$set" "$ok" "$total" \
+        "$(zt_opened "$zt_tmp/t.$set" "$zt_tmp/ok")" "$(date +%s)" > "$(zt_res_file "$name")"
+    log "$name: $ok из $total ($set)"
 done < "$zt_tmp/names"
 
 # ---- результат ---------------------------------------------------------------------------
-# Пишется ОДИН раз и целиком, через временный файл: файл лежит во флеш-разделе, и запись по
-# ходу дела означала бы полсотни записей за прогон. Порядок — по убыванию числа удач: первым
-# идёт то, что человек и ищет.
-#
-# Стратегии, которые не удалось даже запустить (ok = -1), в список тоже попадают: «эта
-# стратегия у вас не поднимается» — такой же ответ, как «открылось 3 из 30», и молча
-# выбросить её значило бы оставить человека гадать, почему в списке дырка.
-{
-    printf '{"at":%s,"scope":"%s","targets":%s,"baseline":%s,"results":[' \
-        "$(date +%s)" "$scope" "$total_t" "$base"
-    sort -rn "$zt_tmp/results" | awk -F'\t' '
-        BEGIN { first = 1 }
-        {
-            name = $2
-            gsub(/\\/, "\\\\", name)
-            gsub(/"/, "\\\"", name)
-            printf "%s{\"name\":\"%s\",\"ok\":%d}", (first ? "" : ","), name, $1
-            first = 0
-        }'
-    printf ']}\n'
-} > "$ZP_RESULTS.tmp" && mv "$ZP_RESULTS.tmp" "$ZP_RESULTS"
+zt_summary
+zt_summary_wanted=0
 
 printf 'state=done\nstarted=%s\nscope=%s\ntotal=%s\ndone=%s\ntargets=%s\n' \
     "$started" "$scope" "$total_s" "$done_n" "$total_t" > "$ZP_PROGRESS"

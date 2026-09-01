@@ -682,7 +682,7 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         DOH_SH="$ROOT/files/usr/lib/splify2/doh.sh" \
         ZAPRET_TEST="$T/bin/zapret-test" \
         ZP_DIR="$T/zapret" ZP_CATALOG="$T/zapret/strategies.txt" \
-        ZP_RESULTS="$T/zapret/results.json" ZP_STAMP="$T/zapret/updated" \
+        ZP_RESULTS="$T/zapret/results.json" ZP_RESULTS_DIR="$T/zapret/results.d" ZP_STAMP="$T/zapret/updated" \
         ZP_PROGRESS="$T/zapret/progress" ZP_PIDFILE="$T/zapret/pid" \
         ZP_OPTS_DIR="$T/etc/steer-zapret" ZP_CONF="$T/etc/config-zapret" \
         ZP_NFQWS="${ZP_NFQWS_FIXTURE:-$T/bin/nfqws-missing}" ZP_INIT="$T/bin/initd-zapret" \
@@ -1598,6 +1598,18 @@ check "ссылка второй подписки в своей секции" "h
       "$(uci_get splify2.sub_green.url)"
 check "и ссылка первой на месте" "https://first.invalid/sub" \
       "$(uci_get splify2.main.sub_url)"
+
+# Узлы подписки БЕЗ выхода: редактор выхода показывает локации подписки до того, как на неё
+# заведён хоть один выход. Движку уходит путь к файлу вместо имени выхода, и путь принимается
+# только свой — из перечня подписок роутера: иначе метод читал бы с диска что угодно.
+: > "$T/steer.log"
+out="$(STEER_JSON='{"output":"","sub_file":"x","node":-1,"chosen":[],"nodes":[]}' \
+       rpcd vless_nodes "{\"sub\":\"$T/etc/subs/green.txt\"}")"
+check "узлы подписки спрашиваются у движка путём к её файлу" \
+      "vless-nodes $T/etc/subs/green.txt --spec $T/etc/spec.json" "$(tail -1 "$T/steer.log")"
+check "и ответ движка отдан дословно" "x" "$(printf '%s' "$out" | jget sub_file)"
+out="$(rpcd vless_nodes '{"sub":"/etc/passwd"}')"
+check "чужой путь вместо подписки отвергается" "false" "$(printf '%s' "$out" | jget ok)"
 # Остаток второй подписки спрашивается по ЕЁ файлу: общий файл означал бы, что обзор
 # показывает остаток одной панели под именем другой.
 out="$(rpcd sub_quota '{"name":"green"}')"
@@ -2201,6 +2213,8 @@ check "проверка без обхода не запускается" "false"
 
 out="$(rpcd zapret_test_start '{"scope":"чужой"}')"
 check "чужой набор отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+check "и отказ называет допустимые наборы, включая одиночный" "yes" \
+      "$(printf '%s' "$out" | grep -q 'one:' && echo yes || echo no)"
 
 # Результатов ещё нет — метод обязан отдать РАЗБИРАЕМЫЙ JSON, а не пустоту: интерфейс на
 # пустом ответе показал бы «нет данных» вместо «проверка не запускалась».
@@ -2227,6 +2241,25 @@ check "семейство считает бэкенд, а не интерфей�
 out="$(rpcd zapret_apply '{"name":"v1"}')"
 check "применение без установленного обхода отвергается" "false" \
       "$(printf '%s' "$out" | jget ok)"
+
+# Одна стратегия целиком: её ключи, по строке на ключ, без служебного заголовка «#Имя».
+# Интерфейс показывает их человеку, чтобы тот видел, ЧТО применяет.
+printf '#v1\n--filter-tcp=443\n--dpi-desync=fake\n\n#Yv01\n--filter-tcp=443\n' > "$T/zapret/strategies.txt"
+out="$(rpcd zapret_strategy '{"name":"v1"}')"
+check "ключи стратегии отдаются списком" "yes" \
+      "$(printf '%s' "$out" | grep -q '"opts":\["--filter-tcp=443","--dpi-desync=fake"\]' && echo yes || echo no)"
+check "семейство стратегии названо" "v" "$(printf '%s' "$out" | jget family)"
+out="$(rpcd zapret_strategy '{"name":"нет такой"}')"
+check "неизвестная стратегия — отказ" "false" "$(printf '%s' "$out" | jget ok)"
+
+# Одиночная проверка: набор «one:имя» принимается, если стратегия есть в каталоге, и
+# отвергается по имени, а не как «чужой набор», если нет.
+out="$(rpcd zapret_test_start '{"scope":"one:v1"}')"
+check "одиночный набор доходит до проверки установки" "yes" \
+      "$(printf '%s' "$out" | grep -q 'не установлен' && echo yes || echo no)"
+out="$(rpcd zapret_test_start '{"scope":"one:v9"}')"
+check "одиночный набор с чужим именем отвергается по имени" "yes" \
+      "$(printf '%s' "$out" | grep -q 'нет такой стратегии' && echo yes || echo no)"
 
 # ---- экземпляры обработчиков пересобираются, а не ждут перезагрузки роутера -----------
 #

@@ -5,10 +5,9 @@ import { Switch } from '@/components/ui/switch'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
 import { pending } from '@/lib/pending'
-import { toCatalog, customServices, EMPTY_SPEC, type Channel, type OutputStatus, type ServiceEntry, type Spec } from '@/lib/model'
+import { toCatalog, customServices, EMPTY_SPEC, isPart, type Channel, type OutputStatus, type ServiceEntry, type Spec } from '@/lib/model'
 import { type Live } from '@/lib/live'
 import { Hint } from '@/components/ui/hint'
-import ClientNetsCard from '@/components/ClientNetsCard'
 import RuleEditor, { pathFor, selectedIds } from '@/components/tabs/RuleEditor'
 
 /** Правила: единственное место, где что-то назначается.
@@ -37,6 +36,14 @@ function describe(ch: Channel, services: ServiceEntry[]) {
         ? entries.map((sv) => sv.name).join(', ')
         : `${entries.slice(0, 2).map((sv) => sv.name).join(', ')} и ещё ${entries.length - 2}`
     return total ? `${what} · ${total.toLocaleString('ru-RU')} записей` : what
+}
+
+/** Куда вести новое правило, пока человек не выбрал сам: первый туннельный выход, а не первый
+ *  по алфавиту ключей — правило заводят ради туннеля, и «напрямую» по умолчанию читалось бы
+ *  как правило, которое ничего не делает. Служебные части пулов не предлагаются вовсе. */
+function defaultOut(spec: Spec): string | undefined {
+    const names = Object.keys(spec.outputs).filter((n) => !isPart(spec.outputs[n]))
+    return names.find((n) => spec.outputs[n].kind !== 'direct') ?? names[0]
 }
 
 function whoText(ch: Channel) {
@@ -132,7 +139,7 @@ export default function RulesTab({
         if (doneWanted.current === wanted) return
         doneWanted.current = wanted
         onWantedUsed?.()
-        const out = Object.keys(spec.outputs)[0]
+        const out = defaultOut(spec)
         if (!out) {
             notify('Сначала соберите пул VPN — правилу некуда вести', 'warning')
             return
@@ -185,7 +192,7 @@ export default function RulesTab({
 
     function add() {
         if (!spec) return
-        const out = Object.keys(spec.outputs)[0]
+        const out = defaultOut(spec)
         if (!out) {
             notify('Сначала соберите пул VPN — правилу некуда вести', 'warning')
             return
@@ -251,7 +258,10 @@ export default function RulesTab({
      *  выхода не было бы в списке вовсе, то есть шаблон «Исключение» выглядел бы сломанным
      *  ровно в тот момент, когда им пользуются впервые. Факты кладутся сверху: `up`, метку и
      *  таблицу знает только движок. */
-    const outputs: Record<string, OutputStatus> = { ...spec.outputs, ...(live.status?.outputs || {}) }
+    const outputs: Record<string, OutputStatus> = {}
+    for (const [n, o] of Object.entries({ ...spec.outputs, ...(live.status?.outputs || {}) }))
+        /* Служебные части пулов — не цели для правила: их локации человек видит внутри пула. */
+        if (!isPart(spec.outputs[n])) outputs[n] = o
 
     if (open !== null && spec.channels[open]) {
         const ch = spec.channels[open]
@@ -372,11 +382,9 @@ export default function RulesTab({
 
     return (
         <div className="space-y-3">
-            {/* Кого касаются правила — ПЕРЕД самими правилами, а не после: правило, заведённое
-                на сеть, из которой никто не приходит, выглядит настроенным и не работает
-                (splify2#16). Здесь, а не в «Системе»: это про маршрутизацию, а не про коробку. */}
-            <ClientNetsCard spec={spec} status={live.status} onChange={edit} />
-
+            {/* «Кого маршрутизируем» живёт в Настройках → Общее, и только там: карточка стояла
+                и здесь, и человек видел одну и ту же настройку в двух разделах. Правила — про
+                то, ЧТО и КУДА; откуда приходят клиенты — настройка роутера, а не правила. */}
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-muted-foreground">
                     Сверху вниз — побеждает{' '}

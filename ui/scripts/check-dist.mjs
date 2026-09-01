@@ -32,7 +32,11 @@ const EXPECTED_JS = [
   // разрешался с первого раза, и раздел открывался пустым (поймано на роутере, барьер —
   // tests/dist-load.test.tsx). Поэтому выходы, каталог и диагностика теперь лежат в кусках
   // своих разделов, а не в собственных.
-  'splify-XsteerPanel.js', 'splify-ClientNetsCard.js',
+  //
+  // «Кого маршрутизируем» (ClientNetsCard) куском больше не является: карточку читает один
+  // раздел — Настройки → Общее, — из правил она убрана как повтор, и rollup вернул её в кусок
+  // настроек.
+  'splify-XsteerPanel.js',
 ]
 
 const js = readdirSync(DIST).filter((f) => f.endsWith('.js')).sort()
