@@ -238,7 +238,9 @@ zt_run_one() {  # ИМЯ ФАЙЛ_ЦЕЛЕЙ -> печатает число уд
     zp_block "$_zr_name" > "$zt_tmp/opts" 2>/dev/null
     [ -s "$zt_tmp/opts" ] || { echo -1; return; }
     set --
-    while IFS= read -r _zr_l; do
+    # Тот же капкан `read` без завершающего перевода строки, что в zp_dry_run: без второй
+    # половины условия проверялось бы на один ключ меньше, чем движок запустит.
+    while IFS= read -r _zr_l || [ -n "$_zr_l" ]; do
         case "$_zr_l" in ''|\#*) continue ;; esac
         set -- "$@" "$_zr_l"
     done < "$zt_tmp/opts"

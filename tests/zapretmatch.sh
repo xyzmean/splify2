@@ -262,6 +262,43 @@ printf '#v1\n--filter-tcp=443\n--dpi-desync=НЕ ТО\n' > "$ZP_OPTS_DIR/yt.opts
 check "изменившаяся — считается" "0" \
     "$(zp_drifted v1 "$ZP_OPTS_DIR/yt.opts"; echo $?)"
 
+# ---- проверка ключей перед применением читает файл ЦЕЛИКОМ --------------------
+#
+# zp_dry_run собирает аргументы для `nfqws --dry-run` тем же циклом `while IFS= read -r`,
+# которым обёртка обработчика читает файл ключей, — и `read` роняет последнюю строку файла без
+# завершающего перевода строки: код возврата у него в этом случае ненулевой, хотя переменная
+# УЖЕ заполнена, и тело цикла не исполняется (I-148).
+#
+# Почему это не косметика и почему хуже, чем было. Обёртка последнюю строку теперь читает
+# (правка на стороне steer), а проверка — нет. Значит негодный последний ключ проходит
+# dry-run и роняет уже живой экземпляр: procd поднимает и роняет его по кругу, а при
+# on_fail=drop помеченный трафик в это время стоит. Пока обе половины теряли одну и ту же
+# строку, они были согласованно неправы; теперь они расходятся.
+#
+# Стенд поведенческий, а не грепом по тексту: подставной nfqws записывает свои аргументы, и
+# проверяется, что последний ключ до них дошёл. Файл пишется printf БЕЗ \n в конце — ровно так
+# он выглядит после правки руками по ssh.
+zp_nfqws_args="$tmp/dry-args"
+cat > "$tmp/nfqws-rec" <<'REC'
+#!/bin/sh
+for a in "$@"; do printf '%s\n' "$a"; done > "$ZP_NFQWS_ARGS"
+exit 0
+REC
+chmod +x "$tmp/nfqws-rec"
+ZP_NFQWS="$tmp/nfqws-rec"
+export ZP_NFQWS_ARGS="$zp_nfqws_args"
+printf '#Стратегия\n--filter-tcp=443\n--dpi-desync=fake' > "$tmp/no-eol.opts"
+zp_dry_run "$tmp/no-eol.opts"
+check "проверка ключей: последний ключ файла без перевода строки дошёл" "1" \
+    "$(grep -c -- '--dpi-desync=fake' "$zp_nfqws_args" 2>/dev/null; true)"
+check "проверка ключей: имя стратегии в ключи не уехало" "0" \
+    "$(grep -c -- '#Стратегия' "$zp_nfqws_args" 2>/dev/null; true)"
+printf -- '--filter-tcp=443\n--dpi-desync=fake\n' > "$tmp/eol.opts"
+zp_dry_run "$tmp/eol.opts"
+check "проверка ключей: обычный файл с переводом строки не сдвоил последнюю" "1" \
+    "$(grep -c -- '--dpi-desync=fake' "$zp_nfqws_args" 2>/dev/null; true)"
+ZP_NFQWS="$tmp/nfqws-none"
+
 printf '\n%d проверок пройдено' "$pass"
 if [ "$fail" -gt 0 ]; then printf ', %d ПРОВАЛЕНО\n' "$fail"; exit 1; fi
 printf '\nвсе проверки прошли\n'
