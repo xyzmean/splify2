@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { rpc, type ZapretFamily, type ZapretResults, type ZapretSet } from '@/lib/rpc'
 import { notify } from '@/lib/notify'
 import { t } from '@/lib/i18n'
+import { cacheGet, cacheSet } from '@/lib/cache'
 import { pending } from '@/lib/pending'
 import { type Output, type Spec } from '@/lib/model'
 
@@ -77,9 +78,17 @@ function scoreOf(res: ZapretResults | null, name: string, family: ZapretFamily) 
 }
 
 export default function Zapret() {
-    const [st, setSt] = useState<Awaited<ReturnType<typeof rpc.zapretState>> | null>(null)
-    const [cat, setCat] = useState<Awaited<ReturnType<typeof rpc.zapretStrategies>> | null>(null)
-    const [res, setRes] = useState<ZapretResults | null>(null)
+    /* Рисуется С ЗАПОМНЕННОГО: zapret_state спрашивает у пакетного менеджера версию, и это
+     * секунды на роутере — всё это время вкладка стояла с одним словом «Загрузка…». Снимок
+     * прошлого открытия показывает каталог сразу, свежее приезжает следом. */
+    type St = Awaited<ReturnType<typeof rpc.zapretState>>
+    type Cat = Awaited<ReturnType<typeof rpc.zapretStrategies>>
+    const [st, setStRaw] = useState<St | null>(() => cacheGet<St>('zapret:state'))
+    const [cat, setCatRaw] = useState<Cat | null>(() => cacheGet<Cat>('zapret:cat'))
+    const [res, setResRaw] = useState<ZapretResults | null>(() => cacheGet<ZapretResults>('zapret:res'))
+    const setSt = (v: St | null) => { setStRaw(v); if (v) cacheSet('zapret:state', v) }
+    const setCat = (v: Cat | null) => { setCatRaw(v); if (v) cacheSet('zapret:cat', v) }
+    const setRes = (v: ZapretResults | null) => { setResRaw(v); if (v) cacheSet('zapret:res', v) }
     const [test, setTest] = useState<Awaited<ReturnType<typeof rpc.zapretTest>> | null>(null)
     const [busy, setBusy] = useState('')
     /** Куда применять выбранное: пусто — весь роутер, иначе имя выхода kind=zapret. */
@@ -97,9 +106,9 @@ export default function Zapret() {
 
     const reloadState = useCallback(
         () => Promise.all([
-            rpc.zapretState().then(setSt).catch(() => setSt(null)),
-            rpc.zapretStrategies().then(setCat).catch(() => setCat(null)),
-            rpc.zapretResults().then(setRes).catch(() => setRes(null)),
+            rpc.zapretState().then(setSt).catch(() => setStRaw(null)),
+            rpc.zapretStrategies().then(setCat).catch(() => setCatRaw(null)),
+            rpc.zapretResults().then(setRes).catch(() => setResRaw(null)),
         ]).then(() => undefined),
         [],
     )
@@ -453,6 +462,14 @@ export default function Zapret() {
                     </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-1">
+                    {res && res.at > 0 && (
+                        <p className="pb-1 text-xs text-muted-foreground">
+                            {t('Число — сколько целей открылось со стратегией.')}{' '}
+                            <span className="text-success">{t('Зелёное')}</span> — {t('больше, чем без обхода')},{' '}
+                            <span className="text-warning-fg">{t('жёлтое')}</span> — {t('меньше')}, {t('серое — столько же')}.{' '}
+                            {t('Нажмите на имя стратегии — покажутся её ключи и открывшиеся сайты.')}
+                        </p>
+                    )}
                     {all.length === 0 && (
                         <div className="py-3 text-sm text-muted-foreground">
                             {t('Каталог пуст — обновите его.')}
@@ -517,9 +534,14 @@ export default function Zapret() {
                                                             type="button"
                                                             onClick={() => toggleRow(s.name)}
                                                             aria-expanded={expanded}
-                                                            className={`min-w-0 flex-1 truncate rounded bg-transparent px-1 text-left hover:underline decoration-dotted focus:outline-none focus-visible:ring-2 focus-visible:ring-primary ${on ? 'font-medium text-primary' : ''}`}
+                                                            className={`flex min-w-0 flex-1 items-center gap-1 rounded bg-transparent px-1 text-left hover:underline decoration-dotted focus:outline-none focus-visible:ring-2 focus-visible:ring-primary ${on ? 'font-medium text-primary' : ''}`}
                                                         >
-                                                            {s.name}
+                                                            {/* Шеврон — знак, что строка раскрывается: без него никто не
+                                                                догадывался нажать на имя. */}
+                                                            {expanded
+                                                                ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                                                                : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />}
+                                                            <span className="min-w-0 truncate">{s.name}</span>
                                                         </button>
                                                         {/* Число проверки стоит НАПРОТИВ стратегии, а не отдельным
                                                             списком: вопрос человека — «какую выбрать», и ответ должен

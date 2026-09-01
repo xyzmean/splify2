@@ -23,7 +23,7 @@ import { type Live } from '@/lib/live'
 type Screen = 'root' | 'ifaces' | 'vless' | 'xsteer'
 
 const TITLE: Record<Exclude<Screen, 'root'>, string> = {
-    ifaces: 'VPN',
+    ifaces: 'Свои туннели',
     vless: 'VLESS',
     xsteer: 'XSTEER',
 }
@@ -43,14 +43,19 @@ export default function Vpn({ live }: { live: Live }) {
     if (screen !== 'root') {
         return (
             <div className="space-y-4">
-                <button
-                    type="button"
-                    onClick={() => setScreen('root')}
-                    className="flex items-center gap-1 text-sm text-primary"
-                >
-                    <ChevronLeft className="h-4 w-4" aria-hidden="true" /> VPN
-                </button>
-                <h2 className="sp-title">{TITLE[screen]}</h2>
+                {/* Одна строка: откуда пришли и где мы. Заголовок раздела над ней уже стоит,
+                    и третья строка «VPN / ‹ VPN / VLESS» читалась как заикание. */}
+                <div className="flex flex-wrap items-baseline gap-2">
+                    <button
+                        type="button"
+                        onClick={() => setScreen('root')}
+                        className="flex items-center gap-1 text-sm text-primary"
+                    >
+                        <ChevronLeft className="h-4 w-4" aria-hidden="true" /> VPN
+                    </button>
+                    <span className="text-sm text-muted-foreground">/</span>
+                    <h2 className="sp-title">{TITLE[screen]}</h2>
+                </div>
                 {screen === 'ifaces' && <IfacesPanel live={live} />}
                 {screen === 'vless' && <VlessScreen />}
                 {screen === 'xsteer' && <XsteerPanel live={live} />}
@@ -81,10 +86,12 @@ export default function Vpn({ live }: { live: Live }) {
     return (
         <div className="space-y-4">
             {!editing && <div className="space-y-2.5">
+                {/* «Свои туннели», а не «VPN»: строка «VPN» внутри раздела VPN не говорила,
+                    что за ней — WireGuard, AmneziaWG и прочие устройства самого роутера. */}
                 <HubRow
                     icon={ShieldCheck}
-                    title="VPN"
-                    state={ifaceDevs.length ? `активны: ${ifaceDevs.join(', ')}` : 'ни один туннель не взят'}
+                    title="Свои туннели"
+                    state={ifaceDevs.length ? `взяты: ${ifaceDevs.join(', ')}` : 'WireGuard, AmneziaWG, OpenVPN — ни один не взят'}
                     onClick={() => setScreen('ifaces')}
                 />
                 <HubRow

@@ -3,7 +3,7 @@ import { ArrowLeft, Search, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { rpc } from '@/lib/rpc'
 import { isCidr4, isIp4 } from '@/lib/validate'
-import { type Channel, type OutputStatus, type ServiceEntry, devList } from '@/lib/model'
+import { type Channel, type OutputStatus, type ServiceEntry, devList, isPart } from '@/lib/model'
 
 /** Редактор правила — на месте таблицы, а не в модальном окне.
  *
@@ -419,11 +419,17 @@ export default function RuleEditor({
                                         />
                                         <span className="min-w-0 flex-1 truncate">{n}</span>
                                         <span className="shrink-0 text-xs text-muted-foreground">
+                                            {/* «нет NAT» — только у своего устройства: у туннеля
+                                                подписки (и у пула, где активна часть подписки)
+                                                masquerade не нужен вовсе, и метка пугала зря. */}
                                             {o.kind === 'direct'
                                                 ? 'мимо туннеля'
-                                                : o.nat === false
+                                                : o.nat === false && o.kind === 'interface' && !isPart(outputs[o.device || ''])
+                                                      && !(o.device && outputs[o.device]?.kind === 'vless')
                                                   ? 'нет NAT'
-                                                  : o.device || ''}
+                                                  : o.kind === 'interface' && o.device && isPart(outputs[o.device])
+                                                    ? 'подписка'
+                                                    : o.device || ''}
                                         </span>
                                     </label>
                                 )

@@ -2,12 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowRight, LoaderCircle, Plus, Search, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { SubBlock, TunnelBlock, type Facts } from '@/components/OutputCards'
+import { PoolBlock, SubBlock, TunnelBlock, type Facts } from '@/components/OutputCards'
 import { deadline, rpc, type SubQuota } from '@/lib/rpc'
 import { subsRemember, subsRemembered } from '@/lib/subs'
 import { human, type DiagCheck, type Live } from '@/lib/live'
 import { usePending } from '@/lib/pending'
-import { ON_FAIL_TEXT, type Channel, type ChannelStatus, type OutputStatus } from '@/lib/model'
+import { ON_FAIL_TEXT, type Channel, type ChannelStatus, type OutputStatus, devList, isPart } from '@/lib/model'
 import { country } from '@/lib/geo'
 import Flag from '@/components/Flag'
 import { type SectionId } from '@/lib/sections'
@@ -471,7 +471,16 @@ function RuleRow({
      * это `device`, поставленный движком, а не первый в списке. */
     const cands = st?.devices?.length ? st.devices : st?.device ? [st.device] : []
     const active = st?.device || (st?.kind === 'vless' ? undefined : cands[0])
-    const spare = cands.filter((d) => d !== active)
+    /* Части пула зовутся подписками, а не «vpn-2»: имя части — служебное, человек его не давал. */
+    const { spec } = usePending()
+    const remembered = subsRemembered() ?? []
+    const label = (d: string) => {
+        const p = spec?.outputs?.[d]
+        if (!p || !isPart(p)) return d
+        const s = remembered.find((x) => x.path === p.sub_file)
+        return s?.title || s?.name || 'подписка'
+    }
+    const spare = cands.filter((d) => d !== active).map(label)
     const place = country(facts?.geo?.cc)
     /* Выход читается слева направо: имя выхода → через что он идёт сейчас. Устройство
      * повторяет имя выхода чаще, чем нет (его так и заводят), и строка «vless vless» —
@@ -617,12 +626,34 @@ function OutputsColumn({
                           sub={s}
                           outs={vless
                               .filter(([n, o]) => (spec?.outputs?.[n]?.sub_file || o.sub_file || '') === s.path)
-                              .map(([name, st]) => ({ name, st, facts: facts[name] }))}
+                              .map(([name, st]) => ({
+                                  name, st, facts: facts[name],
+                                  /* Локация, взятая в пул, так и подписана: иначе строка под
+                                     подпиской и строка в блоке пула читались как два туннеля. */
+                                  note: spec?.outputs?.[name]?.part_of ? `в пуле ${spec.outputs[name].part_of}` : undefined,
+                              }))}
                       />
                   ))}
-            {tunnels.map(([name, st]) => (
-                <TunnelBlock key={name} name={name} st={st} facts={facts[name]} />
-            ))}
+            {tunnels.map(([name, st]) => {
+                /* Пул с локациями подписок — своим блоком: строки по порядку, активная отмечена,
+                   части названы подписками. Свой туннель без частей — как прежде. */
+                const o = spec?.outputs?.[name]
+                const devs = devList(o).length ? devList(o) : devList(st)
+                if (!devs.some((d) => isPart(spec?.outputs?.[d])))
+                    return <TunnelBlock key={name} name={name} st={st} facts={facts[name]} />
+                const members = devs.map((d) => {
+                    const p = spec?.outputs?.[d]
+                    const sub = subs?.find((x) => x.path === p?.sub_file)
+                    return {
+                        dev: d,
+                        label: p && isPart(p) ? sub?.title || sub?.name || 'подписка' : d,
+                        active: st.device === d,
+                        st: live.status?.outputs?.[d],
+                        facts: facts[d],
+                    }
+                })
+                return <PoolBlock key={name} name={name} members={members} />
+            })}
 
         </div>
     )

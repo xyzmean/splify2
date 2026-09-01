@@ -65,14 +65,17 @@ export default function Settings({
     if (screen !== 'root') {
         return (
             <div className="space-y-4">
-                <button
-                    type="button"
-                    onClick={() => setScreen('root')}
-                    className="flex items-center gap-1 text-sm text-primary"
-                >
-                    <ChevronLeft className="h-4 w-4" aria-hidden="true" /> Настройки
-                </button>
-                <h2 className="sp-title">{TITLE[screen]}</h2>
+                <div className="flex flex-wrap items-baseline gap-2">
+                    <button
+                        type="button"
+                        onClick={() => setScreen('root')}
+                        className="flex items-center gap-1 text-sm text-primary"
+                    >
+                        <ChevronLeft className="h-4 w-4" aria-hidden="true" /> Настройки
+                    </button>
+                    <span className="text-sm text-muted-foreground">/</span>
+                    <h2 className="sp-title">{TITLE[screen]}</h2>
+                </div>
                 <>
                     {screen === 'diag' && <Diagnostics live={live} />}
                     {screen === 'general' && (
@@ -112,7 +115,9 @@ export default function Settings({
         )
     }
 
-    const own = Object.keys(local).length
+    /* Свои — это custom/, а не всё, что лежит на роутере: скачанные списки каталога тоже
+       файлы, и «своих списков: 47» на роутере с двумя своими было неправдой. */
+    const own = Object.keys(local).filter((f) => f.startsWith('custom/')).length
     const used = new Set(
         (spec?.channels || []).flatMap((c) => [
             ...(c.match.prefixes_files || []),

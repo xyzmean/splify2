@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { type ClientNet, type Spec, type Status } from '@/lib/model'
+import { devList, type ClientNet, type Spec, type Status } from '@/lib/model'
 import { rpc } from '@/lib/rpc'
 
 /** Кого маршрутизируем: устройства, с которых движок забирает трафик клиентов (splify2#16).
@@ -59,13 +59,25 @@ export default function ClientNetsCard({ spec, status, onChange }: Props) {
     /** Устройства роутера плюс те, что названы в спеке, но сейчас отсутствуют. Демон
      *  Tailscale запускается позже сети, и правило по `iifname` это переживает намеренно —
      *  значит и экран обязан: снятый молча флажок читался бы как «настройка пропала». */
+    /** Устройства туннелей — не клиенты. Устройства выходов (wg0, TUN подписок, части пулов)
+     *  бэкенд перечисляет наравне с br-lan, и человек видел в списке «кого маршрутизируем»
+     *  Xui-1 и Xui-2 — то, куда трафик уходит, а не откуда приходит. Выбранное руками не
+     *  прячется: снятый молча флажок читался бы как пропавшая настройка. */
+    const tunnelDevs = useMemo(() => {
+        const outs = Object.values(spec?.outputs || {})
+        return new Set(outs.flatMap((o) => [
+            ...devList(o),
+            ...(o.kind === 'vless' || o.kind === 'xsteer' ? [o.name] : []),
+        ]))
+    }, [spec])
+
     const rows = useMemo(() => {
-        const known = nets || []
+        const known = (nets || []).filter((n) => !tunnelDevs.has(n.name) || chosen.includes(n.name))
         const missing = chosen
             .filter((d) => !known.some((n) => n.name === d))
             .map((d) => ({ name: d, up: false, wan: false, subnets: [], absent: true }))
         return [...known.map((n) => ({ ...n, absent: false })), ...missing]
-    }, [nets, chosen])
+    }, [nets, chosen, tunnelDevs])
 
     function toggle(name: string) {
         if (!spec) return
@@ -112,7 +124,7 @@ export default function ClientNetsCard({ spec, status, onChange }: Props) {
             </CardHeader>
             <CardContent className="space-y-3">
                 <p className="text-[13px] text-muted-foreground">
-                    Правила ниже касаются устройств, которые приходят через эти интерфейсы. Роутер
+                    Правила касаются устройств, которые приходят через эти интерфейсы. Роутер
                     бывает выходной точкой не только для домашней сети — например, для хостов из
                     Tailscale или ZeroTier, которым он шлюз.
                 </p>

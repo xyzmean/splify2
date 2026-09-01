@@ -35,6 +35,8 @@ export interface OutRef {
     name: string
     st?: OutputStatus
     facts?: Facts
+    /** Короткая приписка к строке — например, «в пуле vpn» у локации, взятой в пул. */
+    note?: string
 }
 
 /** Что блок показывал в прошлый раз. Рисуется сразу при открытии — до первого ответа ubus.
@@ -301,7 +303,7 @@ export function SubBlock({ outs = [], sub }: {
  *  СВОИМ БЛОКОМ, а не строкой внутри подписки. Локация — это то, чем человек выходит в
  *  интернет прямо сейчас: у неё своё состояние (поднята ли), свой отклик и свой адрес, и
  *  сложенные в один блок три локации читаются как одно целое, которым они не являются. */
-function Location({ name, st, facts }: OutRef) {
+function Location({ name, st, facts, note }: OutRef) {
     /** Имя узла, выбранного движком, — ЗАПАСНАЯ подпись локации: пока измерение не пришло
      *  (или устарело), из него берётся хотя бы страна, которую назвал продавец. */
     const [node, setNode] = useState<string | null>(null)
@@ -316,7 +318,47 @@ function Location({ name, st, facts }: OutRef) {
         return () => { stop = true }
     }, [name, st?.device])
 
-    return <Where name={name} st={st} facts={facts} fallback={node} showIp />
+    return <Where name={name} st={st} facts={facts} fallback={node} note={note} showIp />
+}
+
+/** Блок пула, в котором есть локации подписок.
+ *
+ *  Не TunnelBlock: тот показывает знак бесконечности и одно место, а у пула из двух подписок и
+ *  wg0 объём считают подписки в своих блоках, и место у него — у каждой строки своё. Здесь
+ *  строки в порядке предпочтения, активная отмечена словом: на вопрос «через что я сейчас
+ *  выхожу и что стоит в запасе» пул отвечает сам, без имён вида «vpn-1». */
+export function PoolBlock({ name, members }: {
+    name: string
+    members: { dev: string; label: string; active: boolean; st?: OutputStatus; facts?: Facts }[]
+}) {
+    return (
+        <Card>
+            <CardHeader className="flex-row items-baseline justify-between gap-x-2 space-y-0">
+                <CardTitle>{name}</CardTitle>
+                <span className="text-xs text-muted-foreground">пул · {members.length} строк</span>
+            </CardHeader>
+            <CardContent>
+                <ol className="space-y-2">
+                    {members.map((m, i) => (
+                        <li key={m.dev} className={`flex items-start gap-2 ${m.active ? '' : 'opacity-70'}`}>
+                            <span className="w-4 shrink-0 pt-0.5 text-[11px] tabular-nums text-muted-foreground">{i + 1}</span>
+                            <div className="min-w-0 flex-1">
+                                <div className="flex items-baseline gap-2">
+                                    <span className="min-w-0 truncate text-[12px] text-muted-foreground">{m.label}</span>
+                                    {m.active && (
+                                        <span className="shrink-0 rounded-full bg-primary/10 px-1.5 text-[10px] font-medium text-primary">
+                                            сейчас
+                                        </span>
+                                    )}
+                                </div>
+                                <Where name={m.dev} st={m.st} facts={m.facts} fallback={null} />
+                            </div>
+                        </li>
+                    ))}
+                </ol>
+            </CardContent>
+        </Card>
+    )
 }
 
 /** Блок своего туннеля: WireGuard, AmneziaWG, xsteer.
@@ -350,13 +392,14 @@ export function TunnelBlock({ name, st, facts }: OutRef) {
  *  Пока выход не поднят, локации нет и выдумывать её нечем: показывается беда. Прошлое
  *  измерение рядом со сломанным туннелем читалось бы как «всё в порядке». */
 function Where({
-    name, st, facts, fallback, showIp,
+    name, st, facts, fallback, showIp, note,
 }: {
     name: string
     st?: OutputStatus
     facts?: Facts
     fallback: string | null
     showIp?: boolean
+    note?: string
 }) {
     const up = st?.up === true
     if (st && !up) return <Trouble st={st} name={name} />
@@ -374,7 +417,7 @@ function Where({
                 <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
                     <Flag cc={cc} />
                     <span className="min-w-0 truncate text-[13px] font-medium">{place}</span>
-
+                    {note && <span className="shrink-0 text-[11px] text-muted-foreground">{note}</span>}
                 </span>
                 <Ping p={facts?.ping} />
             </div>

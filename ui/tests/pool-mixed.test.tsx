@@ -171,7 +171,8 @@ describe('пул из двух подписок и своего туннеля',
         await waitFor(() => expect(screen.getByText('vpn')).toBeInTheDocument())
         expect(screen.queryByText('vpn-1')).toBeNull()
         expect(screen.queryByText('vpn-2')).toBeNull()
-        expect(screen.getByText(/подписка → подписка → wg0/)).toBeInTheDocument()
+        // Части названы подписками, из которых взяты, а не словом «подписка» дважды.
+        await waitFor(() => expect(screen.getByText(/Riot → Blue → wg0/)).toBeInTheDocument())
     })
 
     it('на движке без пула смешанный состав не записывается, а объясняется', async () => {

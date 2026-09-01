@@ -8,6 +8,7 @@ import { rpc } from '@/lib/rpc'
 import { pending } from '@/lib/pending'
 import { country } from '@/lib/geo'
 import { devList, EMPTY_SPEC, isPart, type Spec } from '@/lib/model'
+import { subsRemember, subsRemembered, type SubRow } from '@/lib/subs'
 import { type Live } from '@/lib/live'
 
 /** Выходы: во что правила ведут трафик.
@@ -34,6 +35,18 @@ export default function PoolList({
         onEditingChange?.(v !== null)
     }
     const [geo, setGeo] = useState<Record<string, { cc?: string; ms?: number }>>({})
+    /* Подписки — чтобы часть пула называлась именем подписки, а не «подписка»: строка
+     * «подписка → подписка» не говорила, какая из двух идёт первой. */
+    const [subs, setSubs] = useState<SubRow[]>(() => subsRemembered() ?? [])
+    useEffect(() => {
+        rpc.subList()
+            .then((r) => { setSubs(r.subs || []); subsRemember(r.subs) })
+            .catch(() => {})
+    }, [])
+    const subTitle = (path?: string) => {
+        const s = subs.find((x) => x.path === path)
+        return s?.title || s?.name || 'подписка'
+    }
 
     useEffect(() => {
         pending.load().then(setSpec).catch(() => setSpec(EMPTY_SPEC))
@@ -126,7 +139,7 @@ export default function PoolList({
                                                    вида «vpn-1» человеку ни о чём не говорит. */
                                                 .map((d) => {
                                                     const p = spec.outputs[d]
-                                                    return p && isPart(p) ? 'подписка' : d
+                                                    return p && isPart(p) ? subTitle(p.sub_file) : d
                                                 })
                                                 .join(' → ') || 'устройство не выбрано',
                                       g?.ms ? `${g.ms} мс` : '',

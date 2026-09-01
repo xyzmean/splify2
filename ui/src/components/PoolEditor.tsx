@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowDown, ArrowUp, Check, GripVertical, Trash2, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Check, GripVertical, Search, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { notify } from '@/lib/notify'
@@ -92,6 +92,20 @@ function blocksOf(spec: Spec, name: string | undefined): Block[] {
     })
 }
 
+/** Имя нового выхода по умолчанию: `vpn`, занято — `vpn2`, `vpn3`… Пустое поле заставляло
+ *  придумывать имя до того, как человек вообще понял, что здесь собирает; имя можно поменять. */
+function freeName(spec: Spec): string {
+    if (!spec.outputs.vpn) return 'vpn'
+    let n = 2
+    while (spec.outputs[`vpn${n}`]) n++
+    return `vpn${n}`
+}
+
+/** Сколько локаций подписки показывать свёрнуто: выбранные — всегда, остальных — до этого
+ *  числа. Две подписки по тридцать локаций разворачивались в столб на три экрана, в котором
+ *  порядок предпочтения справа терялся, а на телефоне уезжал в самый низ. */
+const FOLD = 6
+
 /** Ключ строки — чтобы React не терял состояние при перестановке. */
 function blockKey(b: Block): string {
     return b.kind === 'sub' ? `s:${b.sub}` : `d:${b.dev}`
@@ -111,7 +125,11 @@ export default function PoolEditor({
      *  версии: см. lib/engine.ts. */
     const pools = poolsSupported(live?.status ?? null)
     const existing = name ? spec.outputs[name] : undefined
-    const [title, setTitle] = useState(name || '')
+    const [title, setTitle] = useState(name || freeName(spec))
+    /** Поиск по локациям: страна или слово из названия, по всем подпискам разом. */
+    const [query, setQuery] = useState('')
+    /** Подписки, развёрнутые целиком (по нажатию «показать все»). */
+    const [openSubs, setOpenSubs] = useState<Record<string, boolean>>({})
     const [blocks, setBlocks] = useState<Block[]>(() => blocksOf(spec, name))
     const [onFail, setOnFail] = useState<OnFail>(existing?.on_fail || 'drop')
     const [tunnels, setTunnels] = useState<{ name: string; up: boolean; kind: string }[]>([])
@@ -439,9 +457,9 @@ export default function PoolEditor({
                     onChange={(e) => setTitle(e.currentTarget.value)}
                     placeholder="имя выхода"
                     aria-label="имя выхода"
-                    className="h-[38px] min-w-[12rem] rounded-lg border border-border bg-background px-3 text-sm"
+                    className="h-[38px] min-w-0 flex-1 rounded-lg border border-border bg-background px-3 text-sm sm:max-w-[16rem]"
                 />
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                     {name && (
                         <Button variant="destructive" onClick={remove}>
                             <Trash2 className="h-4 w-4" aria-hidden="true" /> Удалить
@@ -459,8 +477,23 @@ export default function PoolEditor({
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
                 {/* ---- слева: что можно взять ------------------------------------------ */}
                 <Card>
-                    <CardHeader>
+                    <CardHeader className="space-y-3">
                         <CardTitle>Что можно взять</CardTitle>
+                        <label className="flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-3">
+                            <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                            <input
+                                value={query}
+                                onChange={(e) => setQuery(e.currentTarget.value)}
+                                placeholder="найти локацию: страна или слово из названия"
+                                aria-label="найти локацию"
+                                className="min-w-0 flex-1 bg-transparent text-sm focus:outline-none"
+                            />
+                            {query && (
+                                <button type="button" onClick={() => setQuery('')} aria-label="очистить поиск" className="sp-row bg-transparent p-0 text-muted-foreground hover:text-foreground">
+                                    <X className="h-4 w-4" />
+                                </button>
+                            )}
+                        </label>
                     </CardHeader>
                     <CardContent className="space-y-5">
                         {subs.length === 0 && (
@@ -477,6 +510,25 @@ export default function PoolEditor({
                             const b = subBlock(s.path)
                             const nodes = nodesBySub[s.path]
                             const any = !!b && b.nodes.length === 0
+                            /* Что показывать из локаций: при поиске — совпавшие; иначе выбранные
+                               и первые FOLD, пока подписку не развернули целиком. */
+                            const q = query.trim().toLowerCase()
+                            const all = nodes || []
+                            const hit = (nd: VlessNode) => {
+                                const cc = ccFromName(nd.name)
+                                return `${plainName(nd.name)} ${country(cc)} ${cc || ''}`.toLowerCase().includes(q)
+                            }
+                            const picked = new Set(b?.nodes || [])
+                            const shown = q
+                                ? all.filter(hit)
+                                : openSubs[s.path]
+                                  ? all
+                                  : [
+                                        ...all.filter((nd) => picked.has(nd.index)),
+                                        ...all.filter((nd) => !picked.has(nd.index)).slice(0, Math.max(0, FOLD - picked.size)),
+                                    ]
+                            const folded = !q && !openSubs[s.path] && shown.length < all.length
+                            if (q && !shown.length && !all.length) return null
                             return (
                                 <div key={s.path}>
                                     <div className="flex items-baseline justify-between gap-2">
@@ -512,9 +564,16 @@ export default function PoolEditor({
                                                 локации появятся после «Применить»
                                             </li>
                                         )}
-                                        {(nodes || []).map((nd) => {
-                                            const cc = ccFromName(nd.name)
+                                        {q && nodes && !shown.length && (
+                                            <li className="px-2.5 py-1 text-xs text-muted-foreground">ничего не нашлось</li>
+                                        )}
+                                        {shown.map((nd) => {
+                                            const cc = ccFromName(nd.name);
                                             const on = !!b && b.nodes.includes(nd.index)
+                                            /* Страна справа — только когда её нет в самом названии:
+                                               «Германия №2 … Германия» повторяло слово дважды. */
+                                            const cName = country(cc)
+                                            const hint = cName && !plainName(nd.name).toLowerCase().includes(cName.toLowerCase()) ? cName : undefined
                                             return (
                                                 <li key={nd.index}>
                                                     <Choice
@@ -528,11 +587,22 @@ export default function PoolEditor({
                                                         onClick={() => toggleNode(s.path, nd.index)}
                                                         flag={cc}
                                                         title={plainName(nd.name) || `узел ${nd.index + 1}`}
-                                                        hint={country(cc)}
+                                                        hint={hint}
                                                     />
                                                 </li>
                                             )
                                         })}
+                                        {(folded || (!q && openSubs[s.path] && all.length > FOLD)) && (
+                                            <li>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setOpenSubs((m) => ({ ...m, [s.path]: !m[s.path] }))}
+                                                    className="w-full rounded-lg bg-transparent px-2.5 py-1.5 text-left text-xs text-primary hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                                                >
+                                                    {folded ? `показать все ${all.length} локаций` : 'свернуть'}
+                                                </button>
+                                            </li>
+                                        )}
                                     </ul>
                                 </div>
                             )
@@ -577,8 +647,11 @@ export default function PoolEditor({
                     </CardContent>
                 </Card>
 
-                {/* ---- справа: порядок и отказ ------------------------------------------- */}
-                <div className="space-y-4">
+                {/* ---- справа: порядок и отказ -------------------------------------------
+                    На широком экране колонка липнет к верху и остаётся на виду, пока человек
+                    листает локации; на узком идёт ПЕРВОЙ — выбранное важнее перечня, из которого
+                    выбирают, а перечень на телефоне длиной в несколько экранов. */}
+                <div className="order-first space-y-4 xl:order-none xl:sticky xl:top-4 xl:self-start">
                     <Card>
                         <CardHeader>
                             <CardTitle>Порядок предпочтения</CardTitle>
@@ -586,7 +659,7 @@ export default function PoolEditor({
                         <CardContent className="space-y-2">
                             {blocks.length === 0 ? (
                                 <p className="text-xs text-muted-foreground">
-                                    ничего не выбрано — отметьте локации или туннели слева
+                                    ничего не выбрано — отметьте локации или туннели в списке «Что можно взять»
                                 </p>
                             ) : (
                                 <ol className="space-y-1.5" aria-label="порядок предпочтения">
