@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import { Check } from 'lucide-react'
 import { useLive } from '@/lib/live'
 import { pending, usePending } from '@/lib/pending'
-import { type ServiceEntry } from '@/lib/model'
+import { isPart, type ServiceEntry } from '@/lib/model'
 import { SECTION_TITLE, type SectionId } from '@/lib/sections'
 import Rail from '@/components/Rail'
 import FirstRun from '@/components/FirstRun'
@@ -72,8 +72,14 @@ export default function Console() {
     const warnings = (live.diag?.fail ?? 0) + (live.diag?.warn ?? 0)
     const counts = {
         rules: spec ? { text: String(spec.channels.length) } : undefined,
+        /* Служебные части пулов — не выходы для человека (Output.part_of): пул из двух
+           подписок в рельсе считается одним выходом, а не тремя. */
         vpn: live.status
-            ? { text: String(Object.keys(live.status.outputs || {}).length) }
+            ? {
+                  text: String(
+                      Object.keys(live.status.outputs || {}).filter((n) => !isPart(spec?.outputs?.[n])).length,
+                  ),
+              }
             : undefined,
         settings: warnings > 0 ? { text: String(warnings), alarm: true } : undefined,
     }
