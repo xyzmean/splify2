@@ -412,34 +412,48 @@ function RulesBoard({
         ? channels.map((c) => ({ name: c.name, out: c.out, enabled: c.enabled !== false }))
         : sets.map((s) => ({ name: s.name, out: s.out, enabled: true }))
 
+    /* РАЗДЕЛ, А НЕ КАРТОЧКА, и это не вкусовщина.
+     *
+     *  Правила и выходы на обзоре — две половины одного вопроса «куда идёт трафик», и стоят
+     *  они рядом в двух столбцах. Но оформлены были по-разному: у выходов заголовок раздела
+     *  над карточками (и ссылка «проверить» справа от него), а у правил — заголовок ВНУТРИ
+     *  карточки. Из-за этого их первые строки не совпадали по высоте (заголовок карточки
+     *  ниже на её отступ), и два соседних столбца читались как два разных вида вещей.
+     *
+     *  Теперь у обоих одно и то же: строка заголовка раздела с подписью справа, под ней
+     *  содержимое. Карточка у правил осталась — но уже без своей шапки, поэтому у её
+     *  содержимого возвращён верхний отступ (CardContent по построению рассчитан на шапку
+     *  над собой и сверху его не имеет). */
     return (
-        <Card>
-            <CardHeader className="flex-row flex-wrap items-baseline justify-between gap-x-2 gap-y-1 space-y-0">
-                <CardTitle>Правила</CardTitle>
+        <div className="space-y-3">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
+                <h2 className="sp-sub">Правила</h2>
                 <span className="shrink-0 text-xs text-muted-foreground">с загрузки роутера</span>
-            </CardHeader>
-            <CardContent>
-                {rows.length === 0 ? (
-                    <p className="py-4 text-center text-sm text-muted-foreground">
-                        Правил нет — весь трафик идёт напрямую.
-                    </p>
-                ) : (
-                    <ul className="divide-y divide-border">
-                        {rows.map((r, i) => (
-                            <RuleRow
-                                key={`${r.name}-${i}`}
-                                n={i + 1}
-                                row={r}
-                                set={setOf(r.name)}
-                                st={live.status?.outputs?.[r.out]}
-                                facts={facts[r.out]}
-                                onSection={onSection}
-                            />
-                        ))}
-                    </ul>
-                )}
-            </CardContent>
-        </Card>
+            </div>
+            <Card>
+                <CardContent className="pt-3.5 lg:pt-4">
+                    {rows.length === 0 ? (
+                        <p className="py-4 text-center text-sm text-muted-foreground">
+                            Правил нет — весь трафик идёт напрямую.
+                        </p>
+                    ) : (
+                        <ul className="divide-y divide-border">
+                            {rows.map((r, i) => (
+                                <RuleRow
+                                    key={`${r.name}-${i}`}
+                                    n={i + 1}
+                                    row={r}
+                                    set={setOf(r.name)}
+                                    st={live.status?.outputs?.[r.out]}
+                                    facts={facts[r.out]}
+                                    onSection={onSection}
+                                />
+                            ))}
+                        </ul>
+                    )}
+                </CardContent>
+            </Card>
+        </div>
     )
 }
 
