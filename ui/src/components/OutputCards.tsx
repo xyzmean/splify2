@@ -130,7 +130,7 @@ export function SubBlock({ outs = [], sub }: {
         } finally {
             if (alive.current) setBusy(false)
         }
-    }, [remember])
+    }, [remember, sub?.name])
 
     useEffect(() => {
         /* Про НАЗВАННУЮ подписку всё уже сказано перечнем (sub_list): второй вопрос о том же

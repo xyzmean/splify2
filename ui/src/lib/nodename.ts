@@ -23,6 +23,9 @@ export function plainName(s?: string | null): string {
     if (!s) return ''
     return s
         .replace(/[\u{1F1E6}-\u{1F1FF}]/gu, '')
+        /* Селекторы начертания (FE00–FE0F) и соединитель (200D) — комбинирующие знаки, и
+         * линтер предупреждает о них в классе символов. Здесь это и есть цель: убрать их. */
+        // oxlint-disable-next-line no-misleading-character-class
         .replace(/[\u{1F300}-\u{1FAFF}\u{2190}-\u{2BFF}\u{FE00}-\u{FE0F}\u{200D}]/gu, '')
         .replace(/\s{2,}/g, ' ')
         .replace(/^[\s·|,\-—]+|[\s·|,\-—]+$/g, '')

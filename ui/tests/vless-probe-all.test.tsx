@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/preact'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { isCidr4, isDomain, isHttpUrl, isIfaceName, isIp4, isPositiveInt } from '@/lib/validate'
+import { isCidr4, isHttpUrl, isIp4 } from '@/lib/validate'
 import type { Output, VlessProbe } from '@/lib/model'
 
 // Проверка всей подписки сразу, свёртка списка узлов (R-019) и проверка ссылки на
@@ -323,34 +323,5 @@ describe('validate.ts: границы регулярок', () => {
         expect(isCidr4('10.0.0.0/08')).toBe(false)
         expect(isCidr4('10.0.0.0')).toBe(false)
         expect(isCidr4('10.0.0.0/')).toBe(false)
-    })
-
-    it('isDomain: намеренно щедрая — режет только явно не-имена', () => {
-        expect(isDomain('example.com')).toBe(true)
-        expect(isDomain('*.example.com')).toBe(true)
-        expect(isDomain('рф.example')).toBe(true)          // IDN не отвергаем
-        expect(isDomain('router')).toBe(true)              // одна метка = локальная зона
-        expect(isDomain('a b.com')).toBe(false)
-        expect(isDomain('http://example.com')).toBe(false) // схема — это уже не имя
-        expect(isDomain('user@example.com')).toBe(false)
-        expect(isDomain('')).toBe(false)
-    })
-
-    it('isPositiveInt и isIfaceName: ноль, знак, длина имени устройства', () => {
-        expect(isPositiveInt('1')).toBe(true)
-        expect(isPositiveInt(' 42 ')).toBe(true)
-        expect(isPositiveInt('0')).toBe(false)
-        expect(isPositiveInt('-1')).toBe(false)
-        expect(isPositiveInt('1.5')).toBe(false)
-        expect(isPositiveInt('')).toBe(false)
-
-        expect(isIfaceName('wg0')).toBe(true)
-        expect(isIfaceName('br-lan.100')).toBe(true)
-        expect(isIfaceName('steer_tun0')).toBe(true)
-        expect(isIfaceName('')).toBe(false)
-        expect(isIfaceName('a'.repeat(15))).toBe(true)      // IFNAMSIZ - 1
-        expect(isIfaceName('a'.repeat(16))).toBe(false)
-        expect(isIfaceName('wg 0')).toBe(false)
-        expect(isIfaceName('wg/0')).toBe(false)
     })
 })

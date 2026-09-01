@@ -3,7 +3,7 @@ import { ArrowLeft, Search, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { rpc } from '@/lib/rpc'
 import { isCidr4, isIp4 } from '@/lib/validate'
-import { type Channel, type OutputStatus, type ServiceEntry } from '@/lib/model'
+import { type Channel, type OutputStatus, type ServiceEntry, devList } from '@/lib/model'
 
 /** Редактор правила — на месте таблицы, а не в модальном окне.
  *
@@ -32,12 +32,6 @@ export function pathFor(file: string) {
  *  проходит первый признак и не совпадает ни с одним пакетом. */
 const MAC = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i
 
-/** Устройства выхода: кандидаты, а если их нет — активное. То же правило, что в OutboundsTab,
- *  и по той же причине (I-059): у выхода, ещё не применённого движком, активного нет вовсе,
- *  а устройство он уже занимает. */
-function devList(o: OutputStatus): string[] {
-    return o.devices?.length ? o.devices : o.device ? [o.device] : []
-}
 
 /** Сервис выбран, если в правиле есть ХОТЯ БЫ ОДНА его часть.
  *
@@ -123,8 +117,12 @@ export default function RuleEditor({
         const on = chosen.includes(sv.id)
         const pref = new Set(ch.match.prefixes_files || [])
         const doms = new Set(ch.match.domains_files || [])
-        for (const f of sv.prefixes) on ? pref.delete(pathFor(f)) : pref.add(pathFor(f))
-        for (const f of sv.domains) on ? doms.delete(pathFor(f)) : doms.add(pathFor(f))
+        for (const f of sv.prefixes) {
+            if (on) pref.delete(pathFor(f)); else pref.add(pathFor(f))
+        }
+        for (const f of sv.domains) {
+            if (on) doms.delete(pathFor(f)); else doms.add(pathFor(f))
+        }
         /* match расширяется, а не пересоздаётся: правило с `any` (или любым полем,
          * которого эта форма не знает) при щелчке по галочке теряло его молча —
          * «весь трафик» превращался в «только выбранное» без единого слова (I-012). */
