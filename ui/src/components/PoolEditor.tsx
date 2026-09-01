@@ -837,7 +837,9 @@ function Choice({
                 />
             )}
             <span className="min-w-0 flex-1 truncate font-medium">{title}</span>
-            {hint && <span className="shrink-0 text-[11px] text-muted-foreground">{hint}</span>}
+            {/* Подсказка справа на узком экране прячется: она отъедала место у названия, и
+                «любая рабочая» обрезалось до «любая р…». */}
+            {hint && <span className="hidden shrink-0 text-[11px] text-muted-foreground sm:inline">{hint}</span>}
         </button>
     )
 }

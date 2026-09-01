@@ -650,6 +650,7 @@ function OutputsColumn({
                         active: st.device === d,
                         st: live.status?.outputs?.[d],
                         facts: facts[d],
+                        sub: !!(p && isPart(p)),
                     }
                 })
                 return <PoolBlock key={name} name={name} members={members} />

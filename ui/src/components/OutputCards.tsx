@@ -329,7 +329,7 @@ function Location({ name, st, facts, note }: OutRef) {
  *  выхожу и что стоит в запасе» пул отвечает сам, без имён вида «vpn-1». */
 export function PoolBlock({ name, members }: {
     name: string
-    members: { dev: string; label: string; active: boolean; st?: OutputStatus; facts?: Facts }[]
+    members: { dev: string; label: string; active: boolean; st?: OutputStatus; facts?: Facts; sub?: boolean }[]
 }) {
     return (
         <Card>
@@ -351,7 +351,12 @@ export function PoolBlock({ name, members }: {
                                         </span>
                                     )}
                                 </div>
-                                <Where name={m.dev} st={m.st} facts={m.facts} fallback={null} />
+                                {/* У части подписки место берётся как у локации — с именем узла
+                                    продавца запасной подписью; иначе до первого замера строка
+                                    показывала служебное имя устройства («vpn-1»). */}
+                                {m.sub
+                                    ? <Location name={m.dev} st={m.st} facts={m.facts} />
+                                    : <Where name={m.dev} st={m.st} facts={m.facts} fallback={null} />}
                             </div>
                         </li>
                     ))}
