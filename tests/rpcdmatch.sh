@@ -68,9 +68,17 @@ case "$1" in
     enable)  rm -f "$SANDBOX/disabled" ;;
     disable) : > "$SANDBOX/disabled" ;;
     enabled) [ -f "$SANDBOX/disabled" ] && exit 1; exit "${ENGINE_ENABLED:-0}" ;;
+    # `start` на работающем сервисе — это пересборка набора экземпляров procd. След нужен
+    # заглушке движка: по нему её `status` отвечает, жив ли обработчик обхода. Без этого
+    # проверить «экземпляры пересобрались» было бы нечем — заглушка всегда говорила бы «жив».
+    start)   : > "$SANDBOX/zapret-up" ;;
 esac
 exit 0
 EOF
+
+# Обход DPI: объект проверяет только исполнимость файла (zp_installed), поэтому заглушке
+# достаточно быть исполняемой. Ключи nfqws проверяет стенд zapretmatch, а не эта.
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/nfqws"
 
 cat > "$T/bin/initd-rpcd" <<'EOF'
 #!/bin/sh
@@ -505,6 +513,17 @@ for name, o in (d.get('outputs') or {}).items():
         continue
     if o.get('kind') == 'direct':
         outs[name] = {'kind': 'direct'}
+    elif o.get('kind') == 'zapret':
+        # У выхода обхода `up` означает «жив обработчик его очереди», а не «поднято
+        # устройство». Заглушка не может это знать сама, поэтому читает след, который
+        # оставляет заглушка init-скрипта на `start`: так моделируется procd, заводящий
+        # экземпляр. Отвечать здесь всегда True значило бы проверять ветку, которая на
+        # роутере никогда не выбирается.
+        import os as _os
+        up = _os.path.exists(_os.path.join(_os.environ.get('SANDBOX', ''), 'zapret-up'))
+        outs[name] = {'kind': 'zapret', 'up': up, 'mark': f'0x{mark:08x}',
+                      'queue': 8300, 'opts_file': f'/etc/steer/zapret/{name}.opts'}
+        mark <<= 1
     else:
         outs[name] = {'kind': o.get('kind'), 'up': True, 'mark': f'0x{mark:08x}', 'table': 300}
         mark <<= 1
@@ -2208,6 +2227,44 @@ check "семейство считает бэкенд, а не интерфей�
 out="$(rpcd zapret_apply '{"name":"v1"}')"
 check "применение без установленного обхода отвергается" "false" \
       "$(printf '%s' "$out" | jget ok)"
+
+# ---- экземпляры обработчиков пересобираются, а не ждут перезагрузки роутера -----------
+#
+# `steer apply` ставит правила, но экземпляров procd НЕ ЗАВОДИТ — их заводит init-скрипт,
+# разбирая спеку. Значит новый выход kind=zapret после «Применить» остался бы без
+# обработчика: стратегия выбрана, правило очереди стоит, разбирать пакеты некому. И при
+# on_fail=drop (умолчание) трафик канала при этом СТОИТ, то есть «включил и интернет
+# пропал» на полностью настроенном с виду выходе. Ровно та же беда уже была с выходами
+# vless и обфускаторами (splicicd#20), и лечится тем же способом.
+#
+# `start`, а не `restart`: procd сверяет описанные экземпляры с запущенными и заводит
+# разницу, не трогая остальные. Проверено на роутере — PIDы клиентов vless не изменились.
+: > "$T/initd.log"
+rm -f "$T/zapret-dirty" "$T/zapret-up"
+SPEC_ZAP='{"schema":1,"outputs":{"direct":{"kind":"direct"},"zt":{"kind":"zapret"}},"channels":[]}'
+printf '%s' "$SPEC_ZAP" > "$T/etc/spec.json"
+out="$(ZAPRET_DIRTY="$T/zapret-dirty" ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd apply)"
+check "apply пересобирает экземпляры обхода" "1" \
+      "$(grep -c '^start$' "$T/initd.log")"
+check "и говорит, что сделал" "yes" \
+      "$(printf '%s' "$out" | jget output | grep -q 'обработчики пересобраны' && echo yes || echo no)"
+
+# Обхода нет вовсе — пересобирать нечего, но СКАЗАТЬ надо: трафик такого канала остановлен.
+: > "$T/initd.log"
+out="$(ZAPRET_DIRTY="$T/zapret-dirty" rpcd apply)"
+check "без пакета zapret экземпляры не пересобираются" "0" \
+      "$(grep -c '^start$' "$T/initd.log")"
+check "но человеку сказано про пакет" "yes" \
+      "$(printf '%s' "$out" | jget output | grep -q 'пакет zapret не установлен' && echo yes || echo no)"
+
+# Выходов обхода в спеке нет — ни лишнего `start`, ни лишних слов.
+: > "$T/initd.log"
+printf '%s' '{"schema":1,"outputs":{"direct":{"kind":"direct"}},"channels":[]}' > "$T/etc/spec.json"
+out="$(ZAPRET_DIRTY="$T/zapret-dirty" rpcd apply)"
+check "без выходов обхода apply их не трогает" "0" \
+      "$(grep -c '^start$' "$T/initd.log")"
+check "и молчит о них" "no" \
+      "$(printf '%s' "$out" | jget output | grep -q 'обход DPI' && echo yes || echo no)"
 
 # ---- opkg: пустые списки пакетов не должны валить установку -------------------------
 # С живого роутера: «cannot find dependency ip-full for steer», хотя пакет скачан и лежит
