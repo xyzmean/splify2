@@ -124,6 +124,14 @@ check "таблица изоляции снята в конце" "yes" "$(grep -
 check "у таблицы изоляции своя predefrag до conntrack" "yes" \
       "$(grep -q 'hook output priority -401' "$T/nft-rules.log" && echo yes || echo no)"
 check "четыре правила notrack, как у zapret" "4" "$(grep -c ' notrack comment' "$T/nft-rules.log")"
+# Метка «не для системного обхода» ставится ПОСЛЕ очереди, отдельной цепочкой: с ней на пакете
+# nfqws считал его своим порождённым и не обрабатывал ничего (снято с роутера владельца).
+check "в цепочке очереди бит 0x40000000 не ставится" "0" \
+      "$(sed -n '/chain out {/,/^    }/p' "$T/nft-rules.log" | grep -c 'or 0x40000000')"
+check "бит ставится цепочкой после очереди" "yes" \
+      "$(grep -A2 'chain skip' "$T/nft-rules.log" | grep -q 'priority mangle + 6' && echo yes || echo no)"
+check "ответные пакеты тоже в очередь, как у zapret" "yes" \
+      "$(grep -q 'ct reply packets 1-3 counter queue' "$T/nft-rules.log" && echo yes || echo no)"
 check "обработчики не остались" "0" "$(for p in $(cat "$T/nfqws.pids" 2>/dev/null); do kill -0 "$p" 2>/dev/null && echo x; done | grep -c x)"
 check "файл хода — done" "state=done" "$(head -1 "$T/run/progress")"
 
