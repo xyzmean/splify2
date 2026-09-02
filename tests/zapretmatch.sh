@@ -74,6 +74,20 @@ case "\$1" in
 esac
 EOF
 chmod +x "$ZP_INIT"
+# uci стенда: помнит один ключ — zapret.config.run_on_boot — в файле. Ключ появляется у
+# обёртки remittor и без него ссылка в rc.d ещё не значит «встанет после перезагрузки».
+mkdir -p "$tmp/bin"
+cat > "$tmp/bin/uci" <<EOF
+#!/bin/sh
+case "\$*" in
+    *"get zapret.config.run_on_boot") cat "$tmp/run_on_boot" 2>/dev/null ;;
+    *"set zapret.config.run_on_boot="*) printf '%s\n' "\${*##*=}" > "$tmp/run_on_boot" ;;
+    *commit*) : ;;
+    *) exit 1 ;;
+esac
+EOF
+chmod +x "$tmp/bin/uci"
+PATH="$tmp/bin:$PATH"
 . "$LIB"
 
 # ---- сборка каталога ---------------------------------------------------------
@@ -403,6 +417,16 @@ zp_enable
 check "включение ставит автозапуск и запускает" "enable start" \
       "$(tr '\n' ' ' < "$tmp/init.log" | sed 's/ $//')"
 check "и автозапуск снова включён" "0" "$(zp_enabled; echo $?)"
+# Обёртка remittor: ссылка есть, а run_on_boot=0 — после перезагрузки обхода не будет, и
+# «включён» здесь было бы ложью. Выключение снимает ключ, включение ставит.
+printf '0\n' > "$tmp/run_on_boot"
+check "ссылка есть, run_on_boot=0 — не включён" "1" "$(zp_enabled; echo $?)"
+zp_enable
+check "включение ставит run_on_boot" "1" "$(cat "$tmp/run_on_boot")"
+check "и теперь включён" "0" "$(zp_enabled; echo $?)"
+zp_disable
+check "выключение снимает run_on_boot" "0" "$(cat "$tmp/run_on_boot")"
+rm -f "$tmp/run_on_boot"
 ZP_INIT="$tmp/нет-такого"
 check "без init-скрипта выключать нечего — отказ" "1" "$(zp_disable; echo $?)"
 

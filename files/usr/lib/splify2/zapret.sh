@@ -136,9 +136,17 @@ zp_running() {
 
 # Включён ли автозапуск службы — по ссылке в rc.d, как это делает сам `service enabled`,
 # только без запуска init-скрипта: состояние спрашивают на каждом открытии вкладки.
+#
+# И ПО run_on_boot. Пакет zapret-openwrt (remittor) подменяет /etc/init.d/zapret обёрткой:
+# её `boot` отказывается стартовать, а `enabled` отвечает 61, пока в /etc/config/zapret не
+# стоит `option run_on_boot '1'` — «service blocked». Ссылка при этом на месте. Снято с
+# живого роутера: ссылка есть, run_on_boot нет — после перезагрузки обхода нет, а интерфейс
+# показывал бы «включён». Где ключа нет вовсе (другая сборка zapret) — решает ссылка.
+zp_run_on_boot() { uci -q get zapret.config.run_on_boot 2>/dev/null; }
 zp_enabled() {
     set -- "$ZP_RCD"/S[0-9][0-9]zapret
-    [ -e "$1" ]
+    [ -e "$1" ] || return 1
+    case "$(zp_run_on_boot)" in ''|1) return 0 ;; *) return 1 ;; esac
 }
 
 # Включить/выключить обход всему роутеру. Это выключатель СЛУЖБЫ, а не стирание стратегии:
@@ -152,15 +160,21 @@ zp_enabled() {
 # `disable` до `stop`, а не после: если stop подвиснет, ссылка автозапуска уже снята, и после
 # перезагрузки обход не встанет сам — человек нажимал «Выключить», а не «Выключить до
 # перезагрузки».
+# run_on_boot правится вслед за ссылкой, если ключ у этой сборки есть: обёртка remittor
+# ставит его в `enable` сама, но `disable` у неё не переопределён и ключ не снимает, а по нему
+# судят и её `boot`, и luci-app-zapret. Держать оба признака согласными — единственный способ,
+# чтобы три инструмента показывали одно.
 zp_disable() {
     [ -x "$ZP_INIT" ] || return 1
     "$ZP_INIT" disable >/dev/null 2>&1
+    [ -n "$(zp_run_on_boot)" ] && { uci -q set zapret.config.run_on_boot=0; uci -q commit zapret; }
     "$ZP_INIT" stop >/dev/null 2>&1
     return 0
 }
 zp_enable() {
     [ -x "$ZP_INIT" ] || return 1
     "$ZP_INIT" enable >/dev/null 2>&1
+    [ -n "$(zp_run_on_boot)" ] && { uci -q set zapret.config.run_on_boot=1; uci -q commit zapret; }
     "$ZP_INIT" start >/dev/null 2>&1
     return 0
 }
