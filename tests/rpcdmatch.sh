@@ -728,6 +728,7 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         GH_BODY="${GH_BODY-}" \
         GH_FAIL="${GH_FAIL-}" \
         GH_CACHE="$T/var/releases.json" \
+        GH_CACHE_TTL_MIN="${GH_CACHE_TTL_MIN:-0}" \
         STEER_ERR="${STEER_ERR:-}" \
         APK_ADD_RC="${APK_ADD_RC:-0}" \
         APK_ADD_OUT="${APK_ADD_OUT:-}" \
@@ -946,6 +947,19 @@ check "интерфейс отдаёт названия тем же полем" 
 out="$(GH_BODY='не json' rpcd steer_versions)"
 check "нечитаемый ответ GitHub не роняет метод" "true;[];{}" \
       "$([ -n "$out" ] && echo true || echo false);$(printf '%s' "$out" | jget versions);$(printf '%s' "$out" | jget names)"
+
+# Память перечня выпусков. Поход на GitHub стоит полторы секунды там, где он закрыт, и шёл при
+# каждом открытии страницы; теперь ответ живёт шесть часов. Стенд в остальных проверках
+# память выключает (GH_CACHE_TTL_MIN=0), потому что подменяет ответы GitHub от проверки к
+# проверке; здесь включает и смотрит, что второй вызов на GitHub не ходит.
+reset_logs
+rm -f "$T"/var/releases.json.*.cache
+GH_CACHE_TTL_MIN=360 rpcd steer_versions >/dev/null
+out="$(GH_CACHE_TTL_MIN=360 rpcd steer_versions)"
+check "второй вызов версий движка берёт память, а не GitHub" "1" \
+      "$(grep -c 'api.github.com/repos/xyzmean/steer' "$T/wget.log")"
+check "и отдаёт то же самое" "26.9 Andromeda" "$(printf '%s' "$out" | jqget names 26.9)"
+rm -f "$T"/var/releases.json.*.cache
 
 # ---- splify2#15: перечень версий переживает закрытый api.github.com ------------------
 # Пакеты и списки обход получили ещё в запуске 59 (общая download() с лестницей «зеркало →

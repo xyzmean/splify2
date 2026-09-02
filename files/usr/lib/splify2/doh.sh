@@ -24,10 +24,25 @@ DOH_SPEC=${DOH_SPEC:-/etc/steer/spec.json}
 DOH_PORT0=${DOH_PORT0:-5053}
 
 doh_installed() { [ -x "$DOH_INIT" ]; }
-doh_running()   { doh_installed && "$DOH_INIT" running >/dev/null 2>&1; }
+# Работает ли и включён ли автозапуск — на роутере по процессу и по ссылке в /etc/rc.d, а не
+# через init-скрипт: тот стоит оболочки с rc.common на каждый вопрос, а вкладка задаёт их два
+# при каждом открытии. Подменённый стендом init-скрипт спрашивается как раньше.
+doh_running()   {
+    doh_installed || return 1
+    if [ "$DOH_INIT" = /etc/init.d/https-dns-proxy ]; then pidof https-dns-proxy >/dev/null 2>&1
+    else "$DOH_INIT" running >/dev/null 2>&1
+    fi
+}
 # Включён ли автозапуск. Отдельно от «работает»: выключенная служба после перезагрузки не
 # вернётся, и человеку это надо видеть до перезагрузки, а не после.
-doh_enabled()   { doh_installed && "$DOH_INIT" enabled >/dev/null 2>&1; }
+doh_enabled()   {
+    doh_installed || return 1
+    if [ "$DOH_INIT" = /etc/init.d/https-dns-proxy ] && [ -d /etc/rc.d ]; then
+        set -- /etc/rc.d/S[0-9][0-9]https-dns-proxy
+        [ -e "$1" ]
+    else "$DOH_INIT" enabled >/dev/null 2>&1
+    fi
+}
 
 # ---- каталог ------------------------------------------------------------------------
 # Строки каталога без комментариев и пустых.
