@@ -287,6 +287,14 @@ zt_opened() {  # ФАЙЛ_ЦЕЛЕЙ ФАЙЛ_ОТМЕТОК
 #
 # Порты назначения — те же, что у zapret: стратегии писались под них, и разбирать что-то
 # ещё значило бы мерить не то, что человек потом получит.
+#
+# СВОЯ predefrag, а не расчёт на цепочку службы zapret. Порождённые обработчиком пакеты для
+# conntrack — мусор, учтённые они становятся INVALID, и fw4 их отбрасывает; с учёта их снимает
+# predefrag_nfqws системного zapret — но та живёт в таблице ЕГО службы и пропадает вместе с
+# ней. Снято с роутера владельца: общий обход выключен (обход оставлен одному выходу), и
+# проверка давала каждой стратегии число, равное «без обхода». Правила те же четыре, что у
+# zapret, приоритет тот же (-401, до conntrack); при работающем общем обходе две одинаковые
+# цепочки не мешают — notrack дважды это notrack.
 zt_rules_up() {
     nft delete table inet "$ZT_TABLE" 2>/dev/null
     nft -f - <<NFT
@@ -297,6 +305,16 @@ table inet $ZT_TABLE {
         tcp sport $ZT_PORT_LO-$ZT_PORT_HI tcp dport { 80, 443, 2053, 2083, 2087, 2096, 8443 } \
             ct original packets 1-9 meta mark set mark or 0x40000000 \
             counter queue num $ZT_QUEUE bypass
+    }
+    chain predefrag {
+        type filter hook output priority -401; policy accept;
+        meta mark and 0x40000000 != 0x00000000 jump predefrag_nfqws
+    }
+    chain predefrag_nfqws {
+        meta mark and 0x20000000 != 0x00000000 notrack comment "postnat traffic"
+        ip frag-off and 0x1fff != 0x0 notrack comment "ipfrag"
+        exthdr frag exists notrack comment "ipfrag"
+        tcp flags ! syn,rst,ack notrack comment "datanoack"
     }
 }
 NFT

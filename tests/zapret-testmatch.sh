@@ -46,7 +46,7 @@ mkdir -p "$T/bin" "$T/zapret" "$T/run"
 cat > "$T/bin/nft" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$SANDBOX/nft.log"
-[ "$1" = "-f" ] && cat > /dev/null
+[ "$1" = "-f" ] && cat >> "$SANDBOX/nft-rules.log"
 exit 0
 EOF
 # curl: последний аргумент — ссылка; «открылось», если её хост назван в CURL_OK.
@@ -119,6 +119,11 @@ check "у стратегии названы открывшиеся цели" "ru
 check "порядок открывшихся — как у целей, а не как ответили" "youtube.com,i.ytimg.com" \
       "$(jq "$R" '[r for r in d["results"] if r["name"]=="Yv01"][0]["opened"]')"
 check "таблица изоляции снята в конце" "yes" "$(grep -q 'delete table inet splify2_ztest_stand' "$T/nft.log" && echo yes || echo no)"
+# Порождённые обработчиком пакеты снимаются с учёта conntrack своей цепочкой, а не цепочкой
+# службы zapret: без неё при выключенном общем обходе каждая стратегия мерилась как «без обхода».
+check "у таблицы изоляции своя predefrag до conntrack" "yes" \
+      "$(grep -q 'hook output priority -401' "$T/nft-rules.log" && echo yes || echo no)"
+check "четыре правила notrack, как у zapret" "4" "$(grep -c ' notrack comment' "$T/nft-rules.log")"
 check "обработчики не остались" "0" "$(for p in $(cat "$T/nfqws.pids" 2>/dev/null); do kill -0 "$p" 2>/dev/null && echo x; done | grep -c x)"
 check "файл хода — done" "state=done" "$(head -1 "$T/run/progress")"
 
