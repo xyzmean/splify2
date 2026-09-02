@@ -20,20 +20,20 @@ import { type Live } from '@/lib/live'
  *  список кандидатов по предпочтению: первый живой забирает трафик, и возврат наверх
  *  происходит сам, когда верхний оживает.
  *
- *  ЧТО МОЖНО ВЗЯТЬ — ВСЁ И РАЗОМ. Две локации из одной подписки, три из другой и свой
- *  WireGuard — один выход. Раньше редактор предлагал выбор «либо одна подписка, либо свои
- *  туннели», и владелец упёрся в него ровно на этом наборе. Ограничение было не движка, а
- *  формы: движок собирает разнородный пул давно — выход `kind: interface`, в `devices`
- *  которого названы устройства выходов `kind: vless` (контракт steer, §выходы). Редактор
- *  теперь эту форму СОБИРАЕТ САМ: локации одной подписки становятся служебным выходом
- *  `kind: vless` (см. `Output.part_of`), а сам выход — пулом из их устройств и своих
- *  туннелей. Человек видит одно: список того, что взял, по порядку.
+ *  ЧТО МОЖНО ВЗЯТЬ — ВСЁ И РАЗОМ, В ЛЮБОМ ПОРЯДКЕ. Две локации из одной подписки, три из другой
+ *  и свой WireGuard — один выход, и строки в нём стоят так, как расставил человек: локации
+ *  разных подписок могут чередоваться. Раньше редактор предлагал выбор «либо одна подписка,
+ *  либо свои туннели», потом — блоки по подпискам; владелец упёрся и в то, и в другое.
  *
- *  ПОЧЕМУ ЛОКАЦИИ ОДНОЙ ПОДПИСКИ ИДУТ БЛОКОМ, а не вперемешку с чужими. У подписки внутри пула
- *  одно устройство и один клиент, который перебирает её узлы сам; между блоками перебирает
- *  сторож движка. Порядок «Германия №3 → wg0 → Германия №4» движок выразить не может — и
- *  нарисовать его значило бы пообещать то, чего не будет. Блок и есть правда о том, как это
- *  работает: локации внутри блока — по порядку, блоки — по порядку.
+ *  КАК ЭТО ЛОЖИТСЯ В ДВИЖОК. Движок собирает разнородный пул давно: выход `kind: interface`, в
+ *  `devices` которого названы устройства выходов `kind: vless` (контракт steer, §выходы).
+ *  Редактор эту форму собирает сам: СОСЕДНИЕ строки одной подписки становятся одним служебным
+ *  выходом `kind: vless` со списком `nodes` (см. `Output.part_of`), своё устройство — само
+ *  собой, а выход — пулом из их устройств в том же порядке. Так «Финляндия (Riot) → Польша
+ *  (VPN) → Эстония (Riot)» даёт три части, две из них на одной подписке, — и порядок человека
+ *  исполняется дословно. Соседние локации одной подписки нарочно сведены в одну часть: внутри
+ *  неё узлы перебирает сам клиент, за секунды; между частями — сторож движка, раз в минуту.
+ *  Человек видит одно: список того, что взял, по порядку.
  *
  *  ДВИЖОК ПОСТАРШЕ (без умения `pool`) собирать пул не умеет и промолчал бы: незнакомая форма
  *  для него законна, а живая локация в ней объявляется мёртвой. Поэтому на таком движке
@@ -47,10 +47,11 @@ interface Sub {
     present: boolean
 }
 
-/** Строка состава: локации ОДНОЙ подписки (в порядке предпочтения; пусто — «любая рабочая»)
- *  либо одно своё устройство. */
-type Block =
-    | { kind: 'sub'; sub: string; nodes: number[] }
+/** Строка состава: одна локация подписки, «любая рабочая» локация подписки либо одно своё
+ *  устройство. Порядок строк — порядок предпочтения, каким его расставил человек. */
+type Row =
+    | { kind: 'node'; sub: string; idx: number }
+    | { kind: 'any'; sub: string }
     | { kind: 'dev'; dev: string }
 
 const NAME_RE = /^[A-Za-z0-9_-]{1,24}$/
@@ -58,39 +59,6 @@ const NAME_RE = /^[A-Za-z0-9_-]{1,24}$/
  *  движок молча берёт первые пятнадцать символов (spec.c). Два длинных имени с общим началом
  *  дали бы одно устройство на два выхода — поэтому предел проверяется здесь, до записи. */
 const DEV_NAME_MAX = 15
-
-/** Служебные части пула по имени пула. */
-function partsOf(spec: Spec, pool: string | undefined): [string, Output][] {
-    if (!pool) return []
-    return Object.entries(spec.outputs).filter(([, o]) => o.part_of === pool)
-}
-
-/** Разложить существующий выход на строки состава. Обратная операция к `compile`. */
-function blocksOf(spec: Spec, name: string | undefined): Block[] {
-    const o = name ? spec.outputs[name] : undefined
-    if (!o) return []
-    if (o.kind === 'vless') {
-        const nodes = o.nodes?.length
-            ? o.nodes
-            : typeof o.node === 'number' && o.node >= 0
-              ? [o.node]
-              : []
-        return [{ kind: 'sub', sub: o.sub_file || '', nodes }]
-    }
-    if (o.kind !== 'interface') return []
-    const parts = partsOf(spec, name)
-    return devList(o).map((d): Block => {
-        const part = parts.find(([n, p]) => n === d || devList(p).includes(d))
-        if (!part) return { kind: 'dev', dev: d }
-        const p = part[1]
-        const nodes = p.nodes?.length
-            ? p.nodes
-            : typeof p.node === 'number' && p.node >= 0
-              ? [p.node]
-              : []
-        return { kind: 'sub', sub: p.sub_file || '', nodes }
-    })
-}
 
 /** Имя нового выхода по умолчанию: `vpn`, занято — `vpn2`, `vpn3`… Пустое поле заставляло
  *  придумывать имя до того, как человек вообще понял, что здесь собирает; имя можно поменять. */
@@ -106,9 +74,61 @@ function freeName(spec: Spec): string {
  *  порядок предпочтения справа терялся, а на телефоне уезжал в самый низ. */
 const FOLD = 6
 
+/** Служебные части пула по имени пула. */
+function partsOf(spec: Spec, pool: string | undefined): [string, Output][] {
+    if (!pool) return []
+    return Object.entries(spec.outputs).filter(([, o]) => o.part_of === pool)
+}
+
+/** Строки из выхода kind=vless (обычного или служебной части). */
+function rowsOfVless(o: Output): Row[] {
+    const sub = o.sub_file || ''
+    const nodes = o.nodes?.length
+        ? o.nodes
+        : typeof o.node === 'number' && o.node >= 0
+          ? [o.node]
+          : []
+    return nodes.length ? nodes.map((idx): Row => ({ kind: 'node', sub, idx })) : [{ kind: 'any', sub }]
+}
+
+/** Разложить существующий выход на строки состава. Обратная операция к сборке в save(). */
+function rowsOf(spec: Spec, name: string | undefined): Row[] {
+    const o = name ? spec.outputs[name] : undefined
+    if (!o) return []
+    if (o.kind === 'vless') return rowsOfVless(o)
+    if (o.kind !== 'interface') return []
+    const parts = partsOf(spec, name)
+    return devList(o).flatMap((d): Row[] => {
+        const part = parts.find(([n, p]) => n === d || devList(p).includes(d))
+        return part ? rowsOfVless(part[1]) : [{ kind: 'dev', dev: d }]
+    })
+}
+
 /** Ключ строки — чтобы React не терял состояние при перестановке. */
-function blockKey(b: Block): string {
-    return b.kind === 'sub' ? `s:${b.sub}` : `d:${b.dev}`
+function rowKey(r: Row): string {
+    return r.kind === 'node' ? `n:${r.sub}:${r.idx}` : r.kind === 'any' ? `a:${r.sub}` : `d:${r.dev}`
+}
+
+function sameRow(a: Row, b: Row): boolean {
+    return rowKey(a) === rowKey(b)
+}
+
+/** Группы соседних строк одной подписки — то, что станет частями пула. */
+type Group = { kind: 'sub'; sub: string; nodes: number[] } | { kind: 'dev'; dev: string }
+function groupsOf(rows: Row[]): Group[] {
+    const out: Group[] = []
+    for (const r of rows) {
+        if (r.kind === 'dev') { out.push({ kind: 'dev', dev: r.dev }); continue }
+        const last = out[out.length - 1]
+        /* «Любая рабочая» — всегда своя часть: пустой список узлов значит «все», и склеивать
+         * его с выбранными номерами значило бы потерять либо то, либо другое. */
+        if (r.kind === 'node' && last && last.kind === 'sub' && last.sub === r.sub && last.nodes.length) {
+            last.nodes.push(r.idx)
+            continue
+        }
+        out.push({ kind: 'sub', sub: r.sub, nodes: r.kind === 'node' ? [r.idx] : [] })
+    }
+    return out
 }
 
 export default function PoolEditor({
@@ -130,7 +150,7 @@ export default function PoolEditor({
     const [query, setQuery] = useState('')
     /** Подписки, развёрнутые целиком (по нажатию «показать все»). */
     const [openSubs, setOpenSubs] = useState<Record<string, boolean>>({})
-    const [blocks, setBlocks] = useState<Block[]>(() => blocksOf(spec, name))
+    const [rows, setRows] = useState<Row[]>(() => rowsOf(spec, name))
     const [onFail, setOnFail] = useState<OnFail>(existing?.on_fail || 'drop')
     const [tunnels, setTunnels] = useState<{ name: string; up: boolean; kind: string }[]>([])
     /* Перечень подписок начинается с запомненного: пока `sub_list` идёт, список говорил
@@ -139,7 +159,7 @@ export default function PoolEditor({
     /** Узлы каждой подписки глазами движка. `undefined` — ещё не спрашивали, `null` — спросить
      *  не удалось (подписка не скачана или бэкенд постарше без выхода на ней). */
     const [nodesBySub, setNodesBySub] = useState<Record<string, VlessNode[] | null>>({})
-    /** Какая строка сейчас тащится мышью — индекс в `blocks`. */
+    /** Какая строка сейчас тащится мышью — индекс в `rows`. */
     const [drag, setDrag] = useState<number | null>(null)
     const [over, setOver] = useState<number | null>(null)
 
@@ -185,6 +205,7 @@ export default function PoolEditor({
         const s = subOf(path)
         return s?.title || s?.name || path.replace(/^.*\//, '').replace(/\.txt$/, '')
     }
+    const nodeOf = (sub: string, idx: number) => (nodesBySub[sub] || []).find((x) => x.index === idx)
 
     /** Устройства, занятые ДРУГИМИ выходами: одно устройство в двух выходах kind=interface —
      *  это две таблицы маршрутизации на один туннель, и вторая молча не работает.
@@ -215,16 +236,15 @@ export default function PoolEditor({
     )
     const offered = tunnels.filter((t) => !partDevs.has(t.name))
 
-    const subBlock = (path: string) =>
-        blocks.find((b): b is Extract<Block, { kind: 'sub' }> => b.kind === 'sub' && b.sub === path)
-    const hasDev = (dev: string) => blocks.some((b) => b.kind === 'dev' && b.dev === dev)
+    const has = (r: Row) => rows.some((x) => sameRow(x, r))
 
     /** Движок без пула: одна подписка с одним узлом ЛИБО свои туннели. Взять второе, когда
      *  есть первое, значит записать то, что он молча исполнит не так. */
-    function refuseOnOldEngine(next: Block[]): boolean {
+    function refuseOnOldEngine(next: Row[]): boolean {
         if (pools) return false
-        const subsN = next.filter((b) => b.kind === 'sub').length
-        const devsN = next.length - subsN
+        const g = groupsOf(next)
+        const subsN = g.filter((x) => x.kind === 'sub').length
+        const devsN = g.length - subsN
         if (subsN > 1 || (subsN && devsN)) {
             notify('Движок этой версии не умеет смешанный пул: либо одна подписка, либо свои туннели. Обновите движок в разделе «Система».', 'warning')
             return true
@@ -232,77 +252,54 @@ export default function PoolEditor({
         return false
     }
 
-    function toggleNode(path: string, idx: number) {
-        const b = subBlock(path)
-        let next: Block[]
-        if (!b) next = [...blocks, { kind: 'sub', sub: path, nodes: [idx] }]
-        else if (b.nodes.includes(idx)) {
-            const nodes = b.nodes.filter((x) => x !== idx)
-            next = nodes.length
-                ? blocks.map((x) => (x === b ? { ...b, nodes } : x))
-                : blocks.filter((x) => x !== b)
-        } else {
-            /* Без пула локация одна: вторая отметка переезжает, а не добавляется. */
-            const nodes = pools ? [...b.nodes, idx] : [idx]
-            next = blocks.map((x) => (x === b ? { ...b, nodes } : x))
-        }
+    function commit(next: Row[]) {
         if (refuseOnOldEngine(next)) return
-        setBlocks(next)
+        setRows(next)
+    }
+
+    /** Отметить или снять локацию. Новая строка встаёт в конец: порядок — дело правой колонки. */
+    function toggleNode(sub: string, idx: number) {
+        const r: Row = { kind: 'node', sub, idx }
+        if (has(r)) { commit(rows.filter((x) => !sameRow(x, r))); return }
+        /* «Любая рабочая» этой подписки и выбранный номер вместе не значат ничего: выбор
+         * номера заменяет «любую». */
+        const base = rows.filter((x) => !(x.kind === 'any' && x.sub === sub))
+        /* Без пула локация одна: вторая отметка переезжает, а не добавляется. */
+        commit(pools ? [...base, r] : [...base.filter((x) => x.kind !== 'node'), r])
     }
 
     /** «Любая рабочая»: подписка взята целиком, выбор узла делает проверка при подъёме.
-     *  Повторное нажатие ничего не меняет — убирается подписка крестиком в порядке справа,
+     *  Повторное нажатие ничего не меняет — убирается строка крестиком в порядке справа,
      *  как и всё остальное; два способа убрать одно и то же путали бы. */
-    function anyOf(path: string) {
-        const b = subBlock(path)
-        if (b && b.nodes.length === 0) return
-        const next: Block[] = b
-            ? blocks.map((x) => (x === b ? { ...b, nodes: [] } : x))
-            : [...blocks, { kind: 'sub', sub: path, nodes: [] }]
-        if (refuseOnOldEngine(next)) return
-        setBlocks(next)
+    function anyOf(sub: string) {
+        const r: Row = { kind: 'any', sub }
+        if (has(r)) return
+        commit([...rows.filter((x) => !(x.kind === 'node' && x.sub === sub)), r])
     }
 
     function toggleDev(dev: string) {
-        const next = hasDev(dev)
-            ? blocks.filter((b) => !(b.kind === 'dev' && b.dev === dev))
-            : [...blocks, { kind: 'dev' as const, dev }]
-        if (refuseOnOldEngine(next)) return
-        setBlocks(next)
+        const r: Row = { kind: 'dev', dev }
+        commit(has(r) ? rows.filter((x) => !sameRow(x, r)) : [...rows, r])
     }
 
-    function moveBlock(i: number, j: number) {
-        if (j < 0 || j >= blocks.length || i === j) return
-        const next = blocks.slice()
-        const [b] = next.splice(i, 1)
-        next.splice(j, 0, b)
-        setBlocks(next)
+    function move(i: number, j: number) {
+        if (j < 0 || j >= rows.length || i === j) return
+        const next = rows.slice()
+        const [r] = next.splice(i, 1)
+        next.splice(j, 0, r)
+        setRows(next)
     }
 
-    function moveNode(path: string, i: number, d: number) {
-        const b = subBlock(path)
-        if (!b) return
-        const j = i + d
-        if (j < 0 || j >= b.nodes.length) return
-        const nodes = b.nodes.slice()
-        ;[nodes[i], nodes[j]] = [nodes[j], nodes[i]]
-        setBlocks(blocks.map((x) => (x === b ? { ...b, nodes } : x)))
-    }
-
-    function removeBlock(i: number) {
-        setBlocks(blocks.filter((_, k) => k !== i))
-    }
-
-    /** Форма выхода kind=vless из строки подписки. ОДНА форма из двух: спеку с `node` и `nodes`
-     *  разом движок отвергает целиком. Список — только там, где движок его понимает. */
-    function vlessOut(n: string, b: Extract<Block, { kind: 'sub' }>, fail: OnFail, partOf?: string): Output {
+    /** Форма выхода kind=vless из группы строк подписки. ОДНА форма из двух: спеку с `node` и
+     *  `nodes` разом движок отвергает целиком. Список — только там, где движок его понимает. */
+    function vlessOut(n: string, g: Extract<Group, { kind: 'sub' }>, fail: OnFail, partOf?: string): Output {
         return {
             name: n,
             kind: 'vless',
-            sub_file: b.sub,
-            ...(pools && b.nodes.length > 1
-                ? { nodes: b.nodes }
-                : { node: b.nodes.length ? b.nodes[0] : -1 }),
+            sub_file: g.sub,
+            ...(pools && g.nodes.length > 1
+                ? { nodes: g.nodes }
+                : { node: g.nodes.length ? g.nodes[0] : -1 }),
             on_fail: fail,
             ...(partOf ? { part_of: partOf } : {}),
         }
@@ -319,38 +316,42 @@ export default function PoolEditor({
             notify(`Выход «${n}» уже есть`, 'warning')
             return
         }
-        if (blocks.length === 0) {
+        if (rows.length === 0) {
             notify('Выберите, через что выходить', 'warning')
             return
         }
-        if (refuseOnOldEngine(blocks)) return
+        if (refuseOnOldEngine(rows)) return
 
-        const subBlocks = blocks.filter((b): b is Extract<Block, { kind: 'sub' }> => b.kind === 'sub')
+        const groups = groupsOf(rows)
+        const subGroups = groups.filter((g): g is Extract<Group, { kind: 'sub' }> => g.kind === 'sub')
         const outputs: Record<string, Output> = {}
         for (const [k, v] of Object.entries(spec.outputs)) if (!mine.has(k)) outputs[k] = v
 
-        if (blocks.length === 1 && subBlocks.length === 1) {
+        if (groups.length === 1 && subGroups.length === 1) {
             /* Одна подписка — обычный выход kind=vless, как и раньше: служебные части здесь
              * ни к чему, а имя выхода станет именем устройства. */
             if (n.length > DEV_NAME_MAX) {
                 notify(`Имя выхода подписки — не длиннее ${DEV_NAME_MAX} символов: оно становится именем устройства`, 'warning')
                 return
             }
-            outputs[n] = vlessOut(n, subBlocks[0], onFail)
-        } else if (subBlocks.length === 0) {
-            const devices = blocks.map((b) => (b as Extract<Block, { kind: 'dev' }>).dev)
+            outputs[n] = vlessOut(n, subGroups[0], onFail)
+        } else if (subGroups.length === 0) {
+            const devices = groups.map((g) => (g as Extract<Group, { kind: 'dev' }>).dev)
             outputs[n] = { name: n, kind: 'interface', devices, device: devices[0], on_fail: onFail }
         } else {
-            /* Пул. Локации каждой подписки — своим служебным выходом; имя части ≤ 15 символов
-             * (предел имени устройства) и устойчиво: у подписки, которая уже была в пуле, часть
-             * остаётся прежней — иначе перестановка блоков переименовывала бы устройства и
-             * перезапускала живые туннели. */
+            /* Пул. Каждая группа соседних локаций одной подписки — своим служебным выходом; имя
+             * части ≤ 15 символов (предел имени устройства) и по возможности прежнее: части с
+             * той же подпиской и теми же узлами оставляется её имя, иначе перестановка строк
+             * переименовывала бы устройства и перезапускала живые туннели. */
             const oldParts = partsOf(spec, name)
             const used = new Set(Object.keys(outputs))
             const devices: string[] = []
-            for (const b of blocks) {
-                if (b.kind === 'dev') { devices.push(b.dev); continue }
-                let pn = oldParts.find(([, p]) => p.sub_file === b.sub)?.[0]
+            const keyOf = (o: Output) => `${o.sub_file}|${(o.nodes?.length ? o.nodes : typeof o.node === 'number' && o.node >= 0 ? [o.node] : []).join(',')}`
+            for (const g of groups) {
+                if (g.kind === 'dev') { devices.push(g.dev); continue }
+                const want = `${g.sub}|${g.nodes.join(',')}`
+                let pn = oldParts.find(([k, p]) => !used.has(k) && keyOf(p) === want)?.[0]
+                    ?? oldParts.find(([k, p]) => !used.has(k) && p.sub_file === g.sub)?.[0]
                 if (!pn || used.has(pn)) {
                     const stem = n.slice(0, DEV_NAME_MAX - 2)
                     let k = 1
@@ -361,11 +362,11 @@ export default function PoolEditor({
                 /* Отказ части — всегда «остановить»: за судьбу трафика при отказе ВСЕГО пула
                  * отвечает сам пул, а часть, пустившая трафик напрямую, пробила бы его обещание
                  * раньше, чем сторож перешёл к следующей строке. */
-                outputs[pn] = vlessOut(pn, b, 'drop', n)
+                outputs[pn] = vlessOut(pn, g, 'drop', n)
                 devices.push(pn)
             }
             if (devices.length > 8) {
-                notify('В пуле не больше восьми строк — таков предел движка', 'warning')
+                notify('В пуле не больше восьми частей — таков предел движка; соседние локации одной подписки считаются одной частью', 'warning')
                 return
             }
             outputs[n] = { name: n, kind: 'interface', devices, device: devices[0], on_fail: onFail }
@@ -447,7 +448,7 @@ export default function PoolEditor({
         )
     }
 
-    const subsN = blocks.filter((b) => b.kind === 'sub').length
+    const subsInRows = new Set(rows.filter((r) => r.kind !== 'dev').map((r) => (r as { sub: string }).sub))
 
     return (
         <div className="space-y-4">
@@ -507,9 +508,8 @@ export default function PoolEditor({
                             </div>
                         )}
                         {subs.map((s) => {
-                            const b = subBlock(s.path)
                             const nodes = nodesBySub[s.path]
-                            const any = !!b && b.nodes.length === 0
+                            const any = has({ kind: 'any', sub: s.path })
                             /* Что показывать из локаций: при поиске — совпавшие; иначе выбранные
                                и первые FOLD, пока подписку не развернули целиком. */
                             const q = query.trim().toLowerCase()
@@ -518,7 +518,9 @@ export default function PoolEditor({
                                 const cc = ccFromName(nd.name)
                                 return `${plainName(nd.name)} ${country(cc)} ${cc || ''}`.toLowerCase().includes(q)
                             }
-                            const picked = new Set(b?.nodes || [])
+                            const picked = new Set(
+                                rows.filter((r) => r.kind === 'node' && r.sub === s.path).map((r) => (r as { idx: number }).idx),
+                            )
                             const shown = q
                                 ? all.filter(hit)
                                 : openSubs[s.path]
@@ -541,7 +543,7 @@ export default function PoolEditor({
                                         {s.present && nodes && (
                                             <span className="text-[11px] text-muted-foreground">
                                                 локаций: {nodes.length}
-                                                {b && b.nodes.length ? ` · взято: ${b.nodes.length}` : ''}
+                                                {picked.size ? ` · взято: ${picked.size}` : any ? ' · взята любая' : ''}
                                             </span>
                                         )}
                                     </div>
@@ -569,7 +571,7 @@ export default function PoolEditor({
                                         )}
                                         {shown.map((nd) => {
                                             const cc = ccFromName(nd.name);
-                                            const on = !!b && b.nodes.includes(nd.index)
+                                            const on = picked.has(nd.index)
                                             /* Страна справа — только когда её нет в самом названии:
                                                «Германия №2 … Германия» повторяло слово дважды. */
                                             const cName = country(cc)
@@ -619,7 +621,7 @@ export default function PoolEditor({
                                     </li>
                                 )}
                                 {offered.map((t) => {
-                                    const on = hasDev(t.name)
+                                    const on = has({ kind: 'dev', dev: t.name })
                                     const busy = taken.has(t.name)
                                     /* Чьё это устройство: у локации подписки его создаёт сам
                                      * движок, и человеку оно известно именем выхода. */
@@ -657,114 +659,107 @@ export default function PoolEditor({
                             <CardTitle>Порядок предпочтения</CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-2">
-                            {blocks.length === 0 ? (
+                            {rows.length === 0 ? (
                                 <p className="text-xs text-muted-foreground">
                                     ничего не выбрано — отметьте локации или туннели в списке «Что можно взять»
                                 </p>
                             ) : (
-                                <ol className="space-y-1.5" aria-label="порядок предпочтения">
-                                    {blocks.map((b, i) => (
-                                        <li
-                                            key={blockKey(b)}
-                                            draggable
-                                            onDragStart={(e) => {
-                                                setDrag(i)
-                                                e.dataTransfer?.setData('text/plain', String(i))
-                                                if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
-                                            }}
-                                            onDragOver={(e) => { e.preventDefault(); if (over !== i) setOver(i) }}
-                                            onDragLeave={() => { if (over === i) setOver(null) }}
-                                            onDrop={(e) => {
-                                                e.preventDefault()
-                                                if (drag !== null) moveBlock(drag, i)
-                                                setDrag(null)
-                                                setOver(null)
-                                            }}
-                                            onDragEnd={() => { setDrag(null); setOver(null) }}
-                                            className={[
-                                                'rounded-xl border p-2 transition-colors',
-                                                over === i && drag !== null && drag !== i
-                                                    ? 'border-primary bg-primary/10'
-                                                    : b.kind === 'sub'
-                                                      ? 'border-primary/40 bg-primary/5'
-                                                      : 'border-border',
-                                                drag === i ? 'opacity-50' : '',
-                                            ].join(' ')}
-                                        >
-                                            <div className="flex items-center gap-2">
-                                                <GripVertical
-                                                    className="h-4 w-4 shrink-0 cursor-grab text-muted-foreground"
-                                                    aria-hidden="true"
-                                                />
+                                <ol className="space-y-1" aria-label="порядок предпочтения">
+                                    {rows.map((r, i) => {
+                                        const nd = r.kind === 'node' ? nodeOf(r.sub, r.idx) : undefined
+                                        const cc = r.kind === 'node' ? ccFromName(nd?.name) : undefined
+                                        const label =
+                                            r.kind === 'dev'
+                                                ? r.dev
+                                                : r.kind === 'any'
+                                                  ? 'любая рабочая'
+                                                  : plainName(nd?.name) || `узел ${r.idx + 1}`
+                                        const hint = r.kind === 'dev' ? undefined : subTitle(r.sub)
+                                        /* Соседние локации одной подписки — одна часть пула, и это
+                                           видно: строки слиты в один блок без зазора. Граница блока
+                                           показывает, где кончается переключение внутри клиента
+                                           и начинается сторож движка. */
+                                        const prev = rows[i - 1]
+                                        const joined = !!prev && prev.kind === 'node' && r.kind === 'node' && prev.sub === r.sub
+                                        return (
+                                            <li
+                                                key={rowKey(r)}
+                                                draggable={pools}
+                                                onDragStart={(e) => {
+                                                    setDrag(i)
+                                                    e.dataTransfer?.setData('text/plain', String(i))
+                                                    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+                                                }}
+                                                onDragOver={(e) => { e.preventDefault(); if (over !== i) setOver(i) }}
+                                                onDragLeave={() => { if (over === i) setOver(null) }}
+                                                onDrop={(e) => {
+                                                    e.preventDefault()
+                                                    if (drag !== null) move(drag, i)
+                                                    setDrag(null)
+                                                    setOver(null)
+                                                }}
+                                                onDragEnd={() => { setDrag(null); setOver(null) }}
+                                                className={[
+                                                    'flex items-center gap-2 rounded-xl border p-2 transition-colors',
+                                                    over === i && drag !== null && drag !== i
+                                                        ? 'border-primary bg-primary/10'
+                                                        : r.kind === 'dev'
+                                                          ? 'border-border'
+                                                          : 'border-primary/40 bg-primary/5',
+                                                    joined ? '-mt-1 rounded-t-none border-t-0' : '',
+                                                    drag === i ? 'opacity-50' : '',
+                                                ].join(' ')}
+                                            >
+                                                {pools ? (
+                                                    <GripVertical
+                                                        className="h-4 w-4 shrink-0 cursor-grab text-muted-foreground"
+                                                        aria-hidden="true"
+                                                    />
+                                                ) : (
+                                                    <span className="h-4 w-4 shrink-0" aria-hidden="true" />
+                                                )}
                                                 <span className="w-4 text-[11px] tabular-nums text-muted-foreground">
                                                     {i + 1}
                                                 </span>
+                                                {r.kind === 'node' && <Flag cc={cc} />}
                                                 <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
-                                                    {b.kind === 'sub' ? subTitle(b.sub) : b.dev}
+                                                    {label}
+                                                    {hint && (
+                                                        <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">{hint}</span>
+                                                    )}
                                                 </span>
-                                                {b.kind === 'sub' && b.nodes.length === 0 && (
-                                                    <span className="shrink-0 text-[11px] text-muted-foreground">
-                                                        любая рабочая
-                                                    </span>
+                                                {pools && (
+                                                    <>
+                                                        <IconBtn label={`строка ${i + 1} выше`} onClick={() => move(i, i - 1)} disabled={i === 0}>
+                                                            <ArrowUp className="h-4 w-4" />
+                                                        </IconBtn>
+                                                        <IconBtn label={`строка ${i + 1} ниже`} onClick={() => move(i, i + 1)} disabled={i === rows.length - 1}>
+                                                            <ArrowDown className="h-4 w-4" />
+                                                        </IconBtn>
+                                                    </>
                                                 )}
-                                                {/* Движок без пула берёт одну локацию, и порядка
-                                                    предпочтения у неё нет — обещать его нечем;
-                                                    локация названа тут же, в строке. */}
-                                                {b.kind === 'sub' && !pools && b.nodes.length > 0 && (
-                                                    <span className="min-w-0 shrink truncate text-[11px] text-muted-foreground">
-                                                        {plainName((nodesBySub[b.sub] || []).find((x) => x.index === b.nodes[0])?.name) || `узел ${b.nodes[0] + 1}`}
-                                                    </span>
-                                                )}
-                                                <IconBtn label={`строка ${i + 1} выше`} onClick={() => moveBlock(i, i - 1)} disabled={i === 0}>
-                                                    <ArrowUp className="h-4 w-4" />
-                                                </IconBtn>
-                                                <IconBtn label={`строка ${i + 1} ниже`} onClick={() => moveBlock(i, i + 1)} disabled={i === blocks.length - 1}>
-                                                    <ArrowDown className="h-4 w-4" />
-                                                </IconBtn>
-                                                <IconBtn label={`убрать строку ${i + 1}`} onClick={() => removeBlock(i)} danger>
+                                                <IconBtn label={`убрать строку ${i + 1}`} onClick={() => setRows(rows.filter((_, k) => k !== i))} danger>
                                                     <X className="h-4 w-4" />
                                                 </IconBtn>
-                                            </div>
-                                            {b.kind === 'sub' && pools && b.nodes.length > 0 && (
-                                                <ol className="mt-1.5 space-y-0.5 pl-6">
-                                                    {b.nodes.map((idx, k) => {
-                                                        const nd = (nodesBySub[b.sub] || []).find((x) => x.index === idx)
-                                                        const cc = ccFromName(nd?.name)
-                                                        return (
-                                                            <li key={idx} className="flex items-center gap-2 rounded-lg px-1.5 py-1 text-[13px]">
-                                                                <span className="w-4 text-[11px] tabular-nums text-muted-foreground">
-                                                                    {k + 1}
-                                                                </span>
-                                                                <Flag cc={cc} />
-                                                                <span className="min-w-0 flex-1 truncate">
-                                                                    {plainName(nd?.name) || `узел ${idx + 1}`}
-                                                                </span>
-                                                                <IconBtn label={`локация ${k + 1} выше`} onClick={() => moveNode(b.sub, k, -1)} disabled={k === 0}>
-                                                                    <ArrowUp className="h-3.5 w-3.5" />
-                                                                </IconBtn>
-                                                                <IconBtn label={`локация ${k + 1} ниже`} onClick={() => moveNode(b.sub, k, 1)} disabled={k === b.nodes.length - 1}>
-                                                                    <ArrowDown className="h-3.5 w-3.5" />
-                                                                </IconBtn>
-                                                                <IconBtn label={`убрать локацию ${k + 1}`} onClick={() => toggleNode(b.sub, idx)} danger>
-                                                                    <X className="h-3.5 w-3.5" />
-                                                                </IconBtn>
-                                                            </li>
-                                                        )
-                                                    })}
-                                                </ol>
-                                            )}
-                                        </li>
-                                    ))}
+                                            </li>
+                                        )
+                                    })}
                                 </ol>
                             )}
                             <p className="text-xs text-muted-foreground">
                                 Первая живая строка забирает трафик; когда верхняя оживает, трафик
-                                возвращается к ней сам. Строки можно тащить мышью или переставлять
-                                стрелками.
-                                {subsN > 0 && blocks.length > 1 && (
+                                возвращается к ней сам.
+                                {pools && (
                                     <>
-                                        {' '}Локации одной подписки идут одним туннелем: внутри строки их
-                                        перебирает клиент подписки, между строками — сторож движка.
+                                        {' '}Строки можно тащить мышью или переставлять стрелками, локации
+                                        разных подписок — в любом порядке.
+                                    </>
+                                )}
+                                {subsInRows.size > 0 && rows.length > 1 && pools && (
+                                    <>
+                                        {' '}Соседние локации одной подписки обслуживает один клиент и
+                                        переключается между ними за секунды; между остальными строками
+                                        переключает сторож движка, раз в минуту.
                                     </>
                                 )}
                             </p>

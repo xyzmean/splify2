@@ -321,51 +321,6 @@ function Location({ name, st, facts, note }: OutRef) {
     return <Where name={name} st={st} facts={facts} fallback={node} note={note} showIp />
 }
 
-/** Блок пула, в котором есть локации подписок.
- *
- *  Не TunnelBlock: тот показывает знак бесконечности и одно место, а у пула из двух подписок и
- *  wg0 объём считают подписки в своих блоках, и место у него — у каждой строки своё. Здесь
- *  строки в порядке предпочтения, активная отмечена словом: на вопрос «через что я сейчас
- *  выхожу и что стоит в запасе» пул отвечает сам, без имён вида «vpn-1». */
-export function PoolBlock({ name, members }: {
-    name: string
-    members: { dev: string; label: string; active: boolean; st?: OutputStatus; facts?: Facts; sub?: boolean }[]
-}) {
-    return (
-        <Card>
-            <CardHeader className="flex-row items-baseline justify-between gap-x-2 space-y-0">
-                <CardTitle>{name}</CardTitle>
-                <span className="text-xs text-muted-foreground">пул · {members.length} строк</span>
-            </CardHeader>
-            <CardContent>
-                <ol className="space-y-2">
-                    {members.map((m, i) => (
-                        <li key={m.dev} className={`flex items-start gap-2 ${m.active ? '' : 'opacity-70'}`}>
-                            <span className="w-4 shrink-0 pt-0.5 text-[11px] tabular-nums text-muted-foreground">{i + 1}</span>
-                            <div className="min-w-0 flex-1">
-                                <div className="flex items-baseline gap-2">
-                                    <span className="min-w-0 truncate text-[12px] text-muted-foreground">{m.label}</span>
-                                    {m.active && (
-                                        <span className="shrink-0 rounded-full bg-primary/10 px-1.5 text-[10px] font-medium text-primary">
-                                            сейчас
-                                        </span>
-                                    )}
-                                </div>
-                                {/* У части подписки место берётся как у локации — с именем узла
-                                    продавца запасной подписью; иначе до первого замера строка
-                                    показывала служебное имя устройства («vpn-1»). */}
-                                {m.sub
-                                    ? <Location name={m.dev} st={m.st} facts={m.facts} />
-                                    : <Where name={m.dev} st={m.st} facts={m.facts} fallback={null} />}
-                            </div>
-                        </li>
-                    ))}
-                </ol>
-            </CardContent>
-        </Card>
-    )
-}
-
 /** Блок своего туннеля: WireGuard, AmneziaWG, xsteer.
  *
  *  БЕЗ ТРАФИКА ВОВСЕ. Объём здесь не считает никто: у той стороны панели нет, а счётчик

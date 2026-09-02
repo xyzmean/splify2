@@ -82,7 +82,7 @@ describe('локации подписки: форма отметки не обе
         expect(marker(/Мобильный #2/)).toMatch(/border-\[5px\]/)
         expect(marker(/Мобильный #7/)).not.toMatch(/border-\[5px\]/)
         // Порядка предпочтения на таком движке нет вовсе — обещать его нечем.
-        expect(screen.queryByRole('button', { name: /локация 1 выше/ })).toBeNull()
+        expect(screen.queryByRole('button', { name: /строка 1 выше/ })).toBeNull()
     })
 
     it('движок с пулом: отметка квадратная, и локации набираются', async () => {
@@ -98,7 +98,7 @@ describe('локации подписки: форма отметки не обе
         screen.getByRole('button', { name: /Мобильный #2/ }).click()
         await new Promise((r) => setTimeout(r, 20))
         // Обе остались выбранными — и у выбранных есть порядок.
-        expect(screen.getByRole('button', { name: /убрать локацию 1/ })).toBeInTheDocument()
-        expect(screen.getByRole('button', { name: /убрать локацию 2/ })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /убрать строку 1/ })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /убрать строку 2/ })).toBeInTheDocument()
     })
 })

@@ -14,6 +14,11 @@ import { live } from './fixtures'
 // эту форму сам: локации одной подписки — служебный выход kind=vless с признаком part_of,
 // сам выход — пул из их устройств и своих туннелей.
 //
+// Строки стоят в том порядке, что расставил человек, и локации РАЗНЫХ подписок могут
+// чередоваться (владелец: «VPN конфигурации могут и между разными подписками
+// перемешиваться»): соседние локации одной подписки становятся одной частью, чужая локация
+// между ними — своей, и порядок исполняется дословно.
+//
 // Сторожится здесь:
 //   1. Из двух подписок и туннеля получается ОДИН выход для человека и верная форма для
 //      движка: части с part_of, пул с их устройствами по порядку.
@@ -90,9 +95,8 @@ describe('пул из двух подписок и своего туннеля',
         await click(/Германия №4/)
         await click(/Амстердам/)
         await click(/wg0/)
-        // Три строки в порядке выбора: Riot, Blue, wg0. Локации Riot — внутри своей строки.
-        expect(screen.getByRole('button', { name: 'убрать строку 3' })).toBeInTheDocument()
-        expect(screen.getByRole('button', { name: 'убрать локацию 2' })).toBeInTheDocument()
+        // Четыре строки в порядке выбора: две локации Riot, Blue, wg0.
+        expect(screen.getByRole('button', { name: 'убрать строку 4' })).toBeInTheDocument()
         await click(/Сохранить выход/)
 
         const out = saved()!.outputs
@@ -121,15 +125,16 @@ describe('пул из двух подписок и своего туннеля',
 
     it('открытый заново пул раскладывается на те же строки, перестановка не переименовывает части', async () => {
         const saved = await build(POOL, 'vpn')
-        // Три строки и две локации в первой — как было записано.
-        expect(await screen.findByRole('button', { name: 'убрать строку 3' })).toBeInTheDocument()
-        expect(screen.getByRole('button', { name: 'убрать локацию 2' })).toBeInTheDocument()
+        // Четыре строки — как было записано: две локации Riot, Blue, wg0.
+        expect(await screen.findByRole('button', { name: 'убрать строку 4' })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'убрать строку 5' })).toBeNull()
         // Слева взятое отмечено.
         await screen.findByRole('button', { name: /Германия №4/ })
         expect(screen.getByRole('button', { name: /Германия №4/ }).className).toMatch(/text-primary/)
         expect(screen.getByRole('button', { name: /Польша №2/ }).className).not.toMatch(/text-primary/)
 
         // wg0 — наверх: порядок предпочтения теперь wg0, Riot, Blue.
+        await click('строка 4 выше')
         await click('строка 3 выше')
         await click('строка 2 выше')
         await click(/Сохранить выход/)
@@ -145,15 +150,34 @@ describe('пул из двух подписок и своего туннеля',
 
     it('убранная подписка уносит свою часть, оставшаяся одна — обычный выход подписки', async () => {
         const saved = await build(POOL, 'vpn')
-        await screen.findByRole('button', { name: 'убрать строку 3' })
-        await click('убрать строку 3') // wg0
-        await click('убрать строку 2') // Blue
+        await screen.findByRole('button', { name: 'убрать строку 4' })
+        await click('убрать строку 4') // wg0
+        await click('убрать строку 3') // Blue
         await click(/Сохранить выход/)
         const out = saved()!.outputs
         // Осталась одна подписка — это выход kind=vless без частей, под своим именем.
         expect(out.vpn).toMatchObject({ kind: 'vless', sub_file: '/etc/steer/sub.txt', nodes: [0, 1] })
         expect(out['vpn-1']).toBeUndefined()
         expect(out['vpn-2']).toBeUndefined()
+    })
+
+    it('локации разных подписок чередуются: между двумя Riot встаёт Blue — три части, порядок дословный', async () => {
+        const saved = await build(POOL, 'vpn')
+        await screen.findByRole('button', { name: 'убрать строку 4' })
+        // Было: Riot №3, Riot №4, Blue, wg0. Поднять Blue между локациями Riot.
+        await click('строка 3 выше')
+        await click(/Сохранить выход/)
+        const out = saved()!.outputs
+        // Части: Riot [0] → Blue [0] → Riot [1] → wg0. Прежние имена остаются у частей с той же
+        // подпиской, новой достаётся свободное.
+        expect(out.vpn.devices).toHaveLength(4)
+        const [a, b, c, d] = out.vpn.devices!
+        expect(d).toBe('wg0')
+        expect(out[a]).toMatchObject({ sub_file: '/etc/steer/sub.txt', node: 0, part_of: 'vpn' })
+        expect(out[b]).toMatchObject({ sub_file: '/etc/steer/subs/blue.txt', node: 0, part_of: 'vpn' })
+        expect(out[c]).toMatchObject({ sub_file: '/etc/steer/sub.txt', node: 1, part_of: 'vpn' })
+        expect(new Set([a, b, c]).size).toBe(3)
+        for (const n of [a, b, c]) expect(n.length).toBeLessThanOrEqual(15)
     })
 
     it('удаление пула уносит его части', async () => {

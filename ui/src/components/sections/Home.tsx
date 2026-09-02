@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowRight, LoaderCircle, Plus, Search, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { PoolBlock, SubBlock, TunnelBlock, type Facts } from '@/components/OutputCards'
+import { SubBlock, TunnelBlock, type Facts } from '@/components/OutputCards'
 import { deadline, rpc, type SubQuota } from '@/lib/rpc'
 import { subsRemember, subsRemembered } from '@/lib/subs'
 import { human, type DiagCheck, type Live } from '@/lib/live'
@@ -635,25 +635,14 @@ function OutputsColumn({
                       />
                   ))}
             {tunnels.map(([name, st]) => {
-                /* Пул с локациями подписок — своим блоком: строки по порядку, активная отмечена,
-                   части названы подписками. Свой туннель без частей — как прежде. */
+                /* Пул, собранный из локаций подписок, своего блока НЕ получает: его локации уже
+                   стоят строками в блоках своих подписок с приписью «в пуле …», а третий блок с
+                   теми же местами владелец назвал лишним. Куда пул ведёт сейчас, говорит строка
+                   правила слева. Свой туннель без частей — блоком, как прежде. */
                 const o = spec?.outputs?.[name]
                 const devs = devList(o).length ? devList(o) : devList(st)
-                if (!devs.some((d) => isPart(spec?.outputs?.[d])))
-                    return <TunnelBlock key={name} name={name} st={st} facts={facts[name]} />
-                const members = devs.map((d) => {
-                    const p = spec?.outputs?.[d]
-                    const sub = subs?.find((x) => x.path === p?.sub_file)
-                    return {
-                        dev: d,
-                        label: p && isPart(p) ? sub?.title || sub?.name || 'подписка' : d,
-                        active: st.device === d,
-                        st: live.status?.outputs?.[d],
-                        facts: facts[d],
-                        sub: !!(p && isPart(p)),
-                    }
-                })
-                return <PoolBlock key={name} name={name} members={members} />
+                if (devs.some((d) => isPart(spec?.outputs?.[d]))) return null
+                return <TunnelBlock key={name} name={name} st={st} facts={facts[name]} />
             })}
 
         </div>
