@@ -722,12 +722,12 @@ export default function PoolEditor({
                                                     {i + 1}
                                                 </span>
                                                 {r.kind === 'node' && <Flag cc={cc} />}
-                                                <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
-                                                    {label}
-                                                    {hint && (
-                                                        <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">{hint}</span>
-                                                    )}
-                                                </span>
+                                                <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{label}</span>
+                                                {hint && (
+                                                    <span className="hidden max-w-[9rem] shrink-0 truncate text-[11px] text-muted-foreground sm:inline">
+                                                        {hint}
+                                                    </span>
+                                                )}
                                                 {pools && (
                                                     <>
                                                         <IconBtn label={`строка ${i + 1} выше`} onClick={() => move(i, i - 1)} disabled={i === 0}>

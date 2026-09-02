@@ -289,7 +289,7 @@ export function SubBlock({ outs = [], sub }: {
                 <ul className={`space-y-2.5 ${v || kind === 'url' ? 'mt-3 border-t border-border pt-3' : ''}`}>
                     {outs.map((o) => (
                         <li key={o.name}>
-                            <Location name={o.name} st={o.st} facts={o.facts} />
+                            <Location name={o.name} st={o.st} facts={o.facts} note={o.note} />
                         </li>
                     ))}
                 </ul>
@@ -311,7 +311,9 @@ function Location({ name, st, facts, note }: OutRef) {
         let stop = false
         rpc.vlessNodes(name)
             .then((r) => {
-                const n = (r.nodes || []).find((x) => x.index === r.node)
+                /* Выбранный узел: у списка `chosen` первый, у прежнего поля — `node`. */
+                const want = r.chosen?.length ? r.chosen[0] : r.node
+                const n = (r.nodes || []).find((x) => x.index === want)
                 if (!stop && n?.name) setNode(n.name)
             })
             .catch(() => {})
