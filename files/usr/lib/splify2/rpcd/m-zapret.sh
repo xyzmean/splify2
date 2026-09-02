@@ -41,6 +41,23 @@ case "$2" in
         # Выключатель обхода всего роутера — по ссылке автозапуска. «Не запущен» и «выключен»
         # для человека разные состояния: первое — поломка, второе — его собственное решение.
         zp_enabled   && json_add_boolean enabled 1   || json_add_boolean enabled 0
+        # Игровой фильтр (Gv) всего роутера — состояние тем же ответом: три grep по конфигурации,
+        # а вкладка без него не знает, что показывать в карточке. `gv`: '' — нет, 0 — встроенный
+        # фильтр стратегии Flowseal (у менеджера «GvF»), 1..4 — свой. `fakes` — что менеджер
+        # предлагает подделкой и есть ли файл: без файла nfqws молча ничего не подменяет.
+        json_add_object game
+        json_add_string gv "$(zp_game_gv 2>/dev/null)"
+        zp_game_xtreme && json_add_boolean xtreme 1 || json_add_boolean xtreme 0
+        json_add_string fake "$(zp_game_fake 2>/dev/null)"
+        json_add_array fakes
+        for _gf in $ZP_GV_FAKES; do
+            json_add_object
+            json_add_string name "$_gf"
+            [ -s "$ZP_FAKE_DIR/$_gf" ] && json_add_boolean present 1 || json_add_boolean present 0
+            json_close_object
+        done
+        json_close_array
+        json_close_object
         json_add_string version "$(zp_version 2>/dev/null)"
         # Чем проверять стратегии. Без curl проверка невозможна, и сказать об этом надо ДО
         # того, как человек нажмёт кнопку: ключи, которыми меряет Zapret Manager (сроки,
@@ -306,6 +323,43 @@ case "$2" in
         json_add_boolean ok 1
         zp_enabled && json_add_boolean enabled 1 || json_add_boolean enabled 0
         zp_running && json_add_boolean running 1 || json_add_boolean running 0
+        json_dump
+        ;;
+
+    # Игровой фильтр всего роутера: номер (0 снимает), подделка, Xtreme — любое подмножество
+    # одним вызовом, в этом порядке, и один перезапуск обхода. Выхода kind=zapret у него нет и
+    # не нужно: он ловит весь игровой UDP роутера, как у менеджера (владелец).
+    zapret_game_set)
+        need_zapret
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var gv gv
+        json_get_var fake fake
+        json_get_var xtreme xtreme
+        zp_installed || fail "обход DPI не установлен"
+        [ -s "$ZP_CONF" ] || fail "нет $ZP_CONF"
+        [ -n "$gv$fake$xtreme" ] || fail "нечего менять: нужен gv, fake или xtreme"
+        if [ -n "$gv" ]; then
+            case "$gv" in 0|1|2|3|4) ;; *) fail "gv: ожидается 0..4" ;; esac
+            zp_game_set "$gv" || fail "игровая стратегия не записалась в $ZP_CONF"
+        fi
+        if [ -n "$fake" ]; then
+            [ -n "$(zp_game_gv)" ] || fail "подделку не к чему применить: игровой блок не стоит"
+            zp_game_fake_set "$fake" || fail "подделка $fake: нет в списке или нет файла"
+        fi
+        if [ -n "$xtreme" ]; then
+            case "$xtreme" in
+                1|true)  zp_game_xtreme_on  || fail "Xtreme не к чему включать: игровой блок не стоит" ;;
+                0|false) zp_game_xtreme_off || fail "нет файла восстановления $ZP_GV_XTREME_FILE — снять Xtreme нечем" ;;
+                *) fail "xtreme: ожидается true или false" ;;
+            esac
+        fi
+        zp_restart || fail "записано, но обход не перезапустился"
+        json_init
+        json_add_boolean ok 1
+        json_add_string gv "$(zp_game_gv 2>/dev/null)"
+        zp_game_xtreme && json_add_boolean xtreme 1 || json_add_boolean xtreme 0
+        json_add_string fake "$(zp_game_fake 2>/dev/null)"
         json_dump
         ;;
 

@@ -279,9 +279,21 @@ zp_dry_run() {  # ФАЙЛ_КЛЮЧЕЙ
 # Порты дописываются, если их там нет: стратегии Flowseal ловят игровые порты и порты
 # Discord, а в NFQWS_PORTS_* пакета их нет. Без этого стратегия применяется и не действует
 # на половине того, для чего написана.
+#
+# Игровой фильтр (блок #GvN в хвосте, см. ниже) при смене основной стратегии СОХРАНЯЕТСЯ:
+# запоминается до перезаписи и дописывается заново. Менеджер в ручном режиме его теряет, а в
+# автоподборе восстанавливает (NEED_GV → fix_GAME) — мы делаем как автоподбор: человек выбрал
+# игровую стратегию один раз, и смена основной не повод молча её снять. Встроенный фильтр
+# Flowseal (#Gv0) не восстанавливается — он часть самой стратегии general и приезжает с ней.
 zp_apply_global() {  # ИМЯ
     zp_has "${1:-}" || return 1
     [ -s "$ZP_CONF" ] || return 1
+    _zg_gv="$(zp_game_gv)"; _zg_fake="$(zp_game_fake)"; _zg_x=0
+    # Xtreme снимается ДО перезаписи: его признак — метка в хвосте, а хвост сейчас уйдёт, и
+    # расширенные порты NFQWS_PORTS_* остались бы без того, кто их оправдывал и кто умеет
+    # их вернуть. Файл восстановления при этом убирается — заново режим ставится ниже.
+    zp_game_xtreme && { _zg_x=1; zp_game_xtreme_off; }
+    case "$_zg_gv" in 1|2|3|4) ;; *) _zg_gv="" ;; esac
     _zg_tmp="$ZP_CONF.splify2.tmp"
     sed "/option NFQWS_OPT '/,\$d" "$ZP_CONF" > "$_zg_tmp" || { rm -f "$_zg_tmp"; return 1; }
     {
@@ -293,6 +305,13 @@ zp_apply_global() {  # ИМЯ
     mv "$_zg_tmp" "$ZP_CONF" || return 1
     zp_ports_add NFQWS_PORTS_TCP "2053,2083,2087,2096,8443"
     zp_ports_add NFQWS_PORTS_UDP "19294-19344,50000-50100"
+    zp_game_mark_flowseal "$1"
+    if [ -n "$_zg_gv" ]; then
+        zp_game_set "$_zg_gv"
+        [ -n "$_zg_fake" ] && zp_game_fake_set "$_zg_fake"
+        [ "$_zg_x" = 1 ] && zp_game_xtreme_on
+    fi
+    return 0
 }
 
 # Дописать порты в список, если их там ещё нет. Тот же приём, что add_ports_if_missing у
@@ -301,6 +320,190 @@ zp_apply_global() {  # ИМЯ
 zp_ports_add() {  # КЛЮЧ ПОРТЫ
     grep -q "option $1 .*$2" "$ZP_CONF" 2>/dev/null && return 0
     sed -i "/^[[:space:]]*option $1 '/s/'\$/,$2'/" "$ZP_CONF"
+}
+
+# ---- игровой фильтр (Gv) --------------------------------------------------------------
+#
+# «Стратегия для игр» Zapret Manager (fix_GAME, GV_FAKE, Gv_Xtreme) — повторена буква в букву,
+# потому что читать и править её будут оба инструмента на одном роутере:
+#   - блок стоит В ХВОСТЕ NFQWS_OPT, начинается строкой `#GvN` (N = 1..4), за ней UDP-часть
+#     (strategy_Gv1/strategy_Gv) и общая TCP-часть (strategy_TCP_common), а игровые порты
+#     дописаны в NFQWS_PORTS_UDP/TCP по одному;
+#   - `#Gv0` — метка, которую менеджер ставит в стратегиях Flowseal general перед их
+#     СОБСТВЕННЫМ игровым блоком (тот начинается `--new` + `--filter-tcp=2802,…`); в его меню
+#     это «GvF». Установка GvN режет хвост от этой метки, то есть заменяет встроенный фильтр;
+#   - fake для игрового блока — файл в `--dpi-desync-fake-unknown-udp=`, меняется первое
+#     вхождение;
+#   - Xtreme: `#GvN` → `#GvNXtreme`, порты фильтра и NFQWS_PORTS_* расширяются почти на всё,
+#     а прежние значения лежат в файле восстановления — ТОМ ЖЕ, что у менеджера
+#     (/opt/zapret/tmp/GvXtreme), чтобы включённое одним инструментом выключалось другим.
+#
+# Проверкой стратегий игровой фильтр не меряется (владелец: «их тестить не надо»): это
+# выключатель с вариантами, а не кандидат в каталог.
+ZP_GV_XTREME_FILE=${ZP_GV_XTREME_FILE:-/opt/zapret/tmp/GvXtreme}
+ZP_GV_XTREME_PORTS="80,88,444-65535"
+ZP_GV_XTREME_NFQWS_PORTS="80,88,443-65535"
+# Подделки, которые менеджер предлагает игровому блоку (GV_FAKE), в его порядке.
+ZP_GV_FAKES="stun.bin stun2.bin quic_initial_4pda_to.bin quic_initial_tencent_com.bin \
+tls_clienthello_sochi_park.bin quic_initial_www_google_com.bin quic_initial_steamcommunity_com.bin \
+quic_initial_5ka_ru.bin quic_initial_rutube_ru.bin"
+
+# Номер игровой стратегии: 1..4 — своя, 0 — встроенная Flowseal (GvF), пусто — нет.
+zp_game_gv() {
+    [ -s "$ZP_CONF" ] || return 1
+    sed -n 's/^#Gv\([0-9][0-9]*\)\(Xtreme\)\{0,1\}$/\1/p' "$ZP_CONF" | head -n1
+}
+zp_game_xtreme() { grep -q '^#Gv[0-9][0-9]*Xtreme$' "$ZP_CONF" 2>/dev/null; }
+# Имя файла-подделки игрового блока (пусто — блока с подделкой нет).
+zp_game_fake() {
+    grep -m1 -- '--dpi-desync-fake-unknown-udp=' "$ZP_CONF" 2>/dev/null | sed 's|.*/||'
+}
+
+# Тело игровой стратегии — дословно strategy_Gv1 / strategy_Gv + strategy_TCP_common.
+zp_gv_block() {  # N
+    case "${1:-}" in
+        1) printf '%s\n' "#Gv1" "--new" "--filter-udp=$ZP_PORTS_UDP" "--dpi-desync=fake" \
+                "--dpi-desync-cutoff=d2" "--dpi-desync-any-protocol=1" \
+                "--dpi-desync-fake-unknown-udp=/opt/zapret/files/fake/stun.bin" ;;
+        2|3|4) printf '%s\n' "#Gv$1" "--new" "--filter-udp=$ZP_PORTS_UDP" "--dpi-desync=fake" \
+                "--dpi-desync-repeats=10" "--dpi-desync-any-protocol=1" \
+                "--dpi-desync-fake-unknown-udp=/opt/zapret/files/fake/stun.bin" \
+                "--dpi-desync-cutoff=n$1" ;;
+        *) return 1 ;;
+    esac
+    printf '%s\n' "--new" "--filter-tcp=$ZP_PORTS_TCP" "--dpi-desync-any-protocol=1" \
+        "--dpi-desync-cutoff=n5" "--dpi-desync=multisplit" "--dpi-desync-split-seqovl=582" \
+        "--dpi-desync-split-pos=1" \
+        "--dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/stun.bin"
+}
+
+# Порты по одному, как add_ports_if_missing / remove_ports_if_present у менеджера, но
+# сравнением целых элементов: его `s#,80##g` откусил бы «,80» от «,8085». Итог тот же —
+# те же элементы в том же порядке, — а соседние порты целы.
+zp_ports_add_each() {  # КЛЮЧ ПОРТЫ
+    grep -q "option $1 '" "$ZP_CONF" 2>/dev/null || return 0
+    awk -v name="$1" -v q="'" -v add="$2" '
+        index($0, "option " name " " q) {
+            line = $0; line = substr(line, index(line, q) + 1); line = substr(line, 1, index(line, q) - 1)
+            n = split(line, have, ","); m = split(add, want, ",")
+            for (i = 1; i <= m; i++) {
+                seen = 0
+                for (j = 1; j <= n; j++) if (have[j] == want[i]) seen = 1
+                if (!seen && want[i] != "") line = (line == "" ? want[i] : line "," want[i])
+            }
+            print "\toption " name " " q line q; next
+        }
+        { print }' "$ZP_CONF" > "$ZP_CONF.splify2.tmp" && mv "$ZP_CONF.splify2.tmp" "$ZP_CONF"
+}
+zp_ports_del_each() {  # КЛЮЧ ПОРТЫ
+    grep -q "option $1 '" "$ZP_CONF" 2>/dev/null || return 0
+    awk -v name="$1" -v q="'" -v del="$2" '
+        index($0, "option " name " " q) {
+            line = $0; line = substr(line, index(line, q) + 1); line = substr(line, 1, index(line, q) - 1)
+            n = split(line, have, ","); m = split(del, gone, ","); out = ""
+            for (j = 1; j <= n; j++) {
+                drop = 0
+                for (i = 1; i <= m; i++) if (have[j] == gone[i]) drop = 1
+                if (!drop && have[j] != "") out = (out == "" ? have[j] : out "," have[j])
+            }
+            print "\toption " name " " q out q; next
+        }
+        { print }' "$ZP_CONF" > "$ZP_CONF.splify2.tmp" && mv "$ZP_CONF.splify2.tmp" "$ZP_CONF"
+}
+
+# Срезать хвост NFQWS_OPT так, как это делает fix_GAME: от последней строки `#Gv` (или от
+# закрывающей кавычки, если блока нет) до конца файла. Кавычку дописывает вызывающий.
+zp_game_strip() {
+    _zgs_q="$(grep -n "^'\$" "$ZP_CONF" | tail -n1 | cut -d: -f1)"
+    if grep -q '^#Gv' "$ZP_CONF"; then
+        _zgs_l="$(grep -n '^#Gv' "$ZP_CONF" | tail -n1 | cut -d: -f1)"
+        sed -i "${_zgs_l},\$d" "$ZP_CONF"
+    elif [ -n "$_zgs_q" ]; then
+        sed -i "${_zgs_q},\$d" "$ZP_CONF"
+    fi
+}
+
+# Метка #Gv0 перед собственным игровым блоком стратегии Flowseal — как ставит менеджер
+# после установки general (sed по паре `--new` + `--filter-tcp=2802`). Без неё его fix_GAME
+# дописал бы GvN ПОД встроенный фильтр, и два блока ловили бы одни порты.
+zp_game_mark_flowseal() {  # ИМЯ_СТРАТЕГИИ
+    case "${1:-}" in general*) ;; *) return 0 ;; esac
+    grep -q '^#Gv0$' "$ZP_CONF" && return 0
+    sed -i '/^--new$/{N;/\n--filter-tcp=2802/{s/^--new/#Gv0\n--new/;};}' "$ZP_CONF"
+}
+
+# Поставить игровую стратегию N (1..4) или снять её (0). Xtreme перед этим снимается — иначе
+# расширенные порты NFQWS_PORTS_* остались бы без блока, который их оправдывал.
+zp_game_set() {  # N
+    case "${1:-}" in 0|1|2|3|4) ;; *) return 1 ;; esac
+    [ -s "$ZP_CONF" ] && grep -q "option NFQWS_OPT '" "$ZP_CONF" || return 1
+    zp_game_xtreme && zp_game_xtreme_off
+    _zgt_had="$(zp_game_gv)"
+    zp_game_strip
+    if [ "$1" = 0 ]; then
+        printf "'\n" >> "$ZP_CONF"
+        if [ -n "$_zgt_had" ]; then
+            zp_ports_del_each NFQWS_PORTS_UDP "$ZP_PORTS_UDP"
+            zp_ports_del_each NFQWS_PORTS_TCP "$ZP_PORTS_TCP"
+        fi
+    else
+        zp_gv_block "$1" >> "$ZP_CONF"
+        printf "'\n" >> "$ZP_CONF"
+        zp_ports_add_each NFQWS_PORTS_UDP "$ZP_PORTS_UDP"
+        zp_ports_add_each NFQWS_PORTS_TCP "$ZP_PORTS_TCP"
+    fi
+}
+
+# Сменить подделку игрового блока (GV_FAKE): только из списка менеджера и только если файл
+# есть — nfqws с несуществующим fake поднимается и молча ничего не подменяет.
+zp_game_fake_set() {  # ФАЙЛ
+    case " $(printf '%s' "$ZP_GV_FAKES" | tr '\n' ' ') " in *" ${1:-} "*) ;; *) return 1 ;; esac
+    [ -s "$ZP_FAKE_DIR/$1" ] || return 1
+    grep -q -- '--dpi-desync-fake-unknown-udp=' "$ZP_CONF" 2>/dev/null || return 1
+    awk -v new="$1" 'BEGIN{done=0}
+        !done && /--dpi-desync-fake-unknown-udp=/ {
+            sub(/\/opt\/zapret\/files\/fake\/[^ ]+/, "/opt/zapret/files/fake/" new); done=1 }
+        { print }' "$ZP_CONF" > "$ZP_CONF.splify2.tmp" && mv "$ZP_CONF.splify2.tmp" "$ZP_CONF"
+}
+
+# Xtreme — дословно Gv_Xtreme менеджера, включая формат файла восстановления (пять строк:
+# метка, --filter-udp, --filter-tcp, option NFQWS_PORTS_TCP, option NFQWS_PORTS_UDP).
+zp_game_xtreme_on() {
+    [ -n "$(zp_game_gv)" ] || return 1
+    zp_game_xtreme && return 0
+    mkdir -p "$(dirname "$ZP_GV_XTREME_FILE")" 2>/dev/null || return 1
+    awk '/^#Gv[0-9]+$/ {gv=$0; found=1; next}
+         found && /^--filter-udp=/ {udp=$0}
+         found && /^--filter-tcp=/ {tcp=$0}
+         /^[[:space:]]*option NFQWS_PORTS_TCP / {tcp_option=$0}
+         /^[[:space:]]*option NFQWS_PORTS_UDP / {udp_option=$0}
+         END {print gv; print udp; print tcp; print tcp_option; print udp_option}' \
+        "$ZP_CONF" > "$ZP_GV_XTREME_FILE" || return 1
+    sed -i -e "s|^[[:space:]]*option NFQWS_PORTS_TCP .*|\toption NFQWS_PORTS_TCP '$ZP_GV_XTREME_NFQWS_PORTS'|" \
+           -e "s|^[[:space:]]*option NFQWS_PORTS_UDP .*|\toption NFQWS_PORTS_UDP '$ZP_GV_XTREME_NFQWS_PORTS'|" \
+           "$ZP_CONF"
+    sed -i "s/^#\(Gv[0-9][0-9]*\)\$/#\1Xtreme/" "$ZP_CONF"
+    awk -v ports="$ZP_GV_XTREME_PORTS" '
+        /^#Gv[0-9]+Xtreme$/ {gv=1; print; next}
+        gv && /^--filter-udp=/ {print "--filter-udp=" ports; next}
+        gv && /^--filter-tcp=/ {print "--filter-tcp=" ports; gv=0; next}
+        {print}' "$ZP_CONF" > "$ZP_CONF.splify2.tmp" && mv "$ZP_CONF.splify2.tmp" "$ZP_CONF"
+}
+zp_game_xtreme_off() {
+    zp_game_xtreme || return 0
+    [ -s "$ZP_GV_XTREME_FILE" ] || return 1
+    _zx_gv="$(sed -n 1p "$ZP_GV_XTREME_FILE")"; _zx_udp="$(sed -n 2p "$ZP_GV_XTREME_FILE")"
+    _zx_tcp="$(sed -n 3p "$ZP_GV_XTREME_FILE")"
+    _zx_tcpo="$(sed -n 4p "$ZP_GV_XTREME_FILE")"; _zx_udpo="$(sed -n 5p "$ZP_GV_XTREME_FILE")"
+    awk -v gv="$_zx_gv" -v udp="$_zx_udp" -v tcp="$_zx_tcp" '
+        /^#Gv[0-9]+Xtreme$/ {print gv; restore=1; next}
+        restore && /^--filter-udp=/ {print udp; next}
+        restore && /^--filter-tcp=/ {print tcp; restore=0; next}
+        {print}' "$ZP_CONF" > "$ZP_CONF.splify2.tmp" && mv "$ZP_CONF.splify2.tmp" "$ZP_CONF"
+    [ -n "$_zx_tcpo" ] && sed -i "s|^[[:space:]]*option NFQWS_PORTS_TCP .*|$_zx_tcpo|" "$ZP_CONF"
+    [ -n "$_zx_udpo" ] && sed -i "s|^[[:space:]]*option NFQWS_PORTS_UDP .*|$_zx_udpo|" "$ZP_CONF"
+    rm -f "$ZP_GV_XTREME_FILE"
+    return 0
 }
 
 # Перезапустить обход. Отдельной функцией, потому что зовут её из трёх мест, а «применил и

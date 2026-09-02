@@ -793,7 +793,9 @@ jget() {  # ПОЛЕ < JSON
     python3 -c 'import json,sys
 try: d = json.load(sys.stdin)
 except Exception: print("НЕ JSON"); raise SystemExit
-v = d.get(sys.argv[1])
+v = d
+for k in sys.argv[1].split("."):   # вложенное поле — через точку: game.gv
+    v = v.get(k) if isinstance(v, dict) else None
 print("" if v is None else json.dumps(v, ensure_ascii=False) if isinstance(v,(list,dict,bool)) else v)' "$1"
 }
 
@@ -2308,6 +2310,31 @@ out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_enable '{"on":true}')"
 check "включение принято" "true" "$(printf '%s' "$out" | jget enabled)"
 check "служба поставлена на автозапуск и запущена" "enable start" \
       "$(tr '\n' ' ' < "$T/initd-zapret.log" | sed 's/ $//')"
+
+# Игровой фильтр (Gv): состояние в zapret_state, правка одним методом, выхода у него нет.
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_state)"
+check "игрового блока нет — gv пуст" "" "$(printf '%s' "$out" | jget game.gv)"
+check "список подделок отдаётся с признаком файла" "yes" \
+      "$(printf '%s' "$out" | grep -q '"name":"stun2.bin","present":' && echo yes || echo no)"
+out="$(rpcd zapret_game_set '{"gv":2}')"
+check "игровой фильтр без обхода — отказ" "false" "$(printf '%s' "$out" | jget ok)"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_game_set '{"gv":9}')"
+check "чужой номер отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_game_set '{"fake":"stun2.bin"}')"
+check "подделка без блока — отказ с причиной" "yes" \
+      "$(printf '%s' "$out" | grep -q 'блок не стоит' && echo yes || echo no)"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_game_set '{"gv":3}')"
+check "Gv3 поставлен" "3" "$(printf '%s' "$out" | jget gv)"
+check "в конфигурации метка Gv3" "1" "$(grep -c '^#Gv3$' "$T/etc/config-zapret")"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_state)"
+check "состояние видит Gv3" "3" "$(printf '%s' "$out" | jget game.gv)"
+check "подделка по умолчанию" "stun.bin" "$(printf '%s' "$out" | jget game.fake)"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" ZP_GV_XTREME_FILE="$T/zapret/GvXtreme" rpcd zapret_game_set '{"xtreme":true}')"
+check "Xtreme включён" "true" "$(printf '%s' "$out" | jget xtreme)"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" ZP_GV_XTREME_FILE="$T/zapret/GvXtreme" rpcd zapret_game_set '{"gv":0}')"
+check "снятие вместе с Xtreme" "" "$(printf '%s' "$out" | jget gv)"
+check "и Xtreme снят" "false" "$(printf '%s' "$out" | jget xtreme)"
+check "метки не осталось" "0" "$(grep -c '^#Gv' "$T/etc/config-zapret")"
 
 # Одна стратегия целиком: её ключи, по строке на ключ, без служебного заголовка «#Имя».
 # Интерфейс показывает их человеку, чтобы тот видел, ЧТО применяет.

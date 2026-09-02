@@ -806,7 +806,16 @@ export const rpc = {
          *  отметки нет: так выглядит свежий пакет zapret со своей стандартной стратегией. */
         active: string
         drifted: boolean
+        /** Игровой фильтр (Gv) всего роутера — «стратегия для игр» Zapret Manager. */
+        game: ZapretGame
     }>('zapret_state'),
+
+    /** Игровой фильтр: номер (0 снимает), подделка, Xtreme — любое подмножество одним вызовом.
+     *  Пропущенные поля не уезжают (undefined выпадает из JSON). Выхода kind=zapret у него нет:
+     *  он ловит весь игровой UDP роутера, как в оригинале. */
+    zapretGameSet: declare<{ ok: boolean; error?: string; gv?: string; xtreme?: boolean; fake?: string }>(
+        'zapret_game_set', ['gv', 'fake', 'xtreme'],
+    ),
 
     zapretInstall: declare<{
         ok: boolean; error?: string; note?: string
@@ -880,6 +889,16 @@ export const rpc = {
      *  целей; строка результата называет свой набор и то, что в нём открылось. Верхние
      *  `targets` и `baseline` — про общий набор, для файла постарше. */
     zapretResults: declare<ZapretResults>('zapret_results'),
+}
+
+/** Состояние игрового фильтра. `gv`: '' — блока нет, '0' — встроенный фильтр стратегии
+ *  Flowseal (у менеджера «GvF»), '1'..'4' — свой. `fakes` — что менеджер предлагает подделкой
+ *  для UDP и есть ли файл на роутере. */
+export type ZapretGame = {
+    gv: string
+    xtreme: boolean
+    fake: string
+    fakes: { name: string; present: boolean }[]
 }
 
 export type ZapretFamily = 'flowseal' | 'v' | 'yv' | 'other'

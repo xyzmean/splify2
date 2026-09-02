@@ -491,6 +491,103 @@ export default function Zapret() {
                 </CardContent>
             </Card>
 
+            {/* ---- игровой фильтр (Gv) ---------------------------------------------------
+                «Стратегия для игр» Zapret Manager: выключатель с вариантами, а не кандидат в
+                каталог — проверкой не меряется (владелец: «тестить не надо»), выхода не имеет
+                («покрывает весь UDP-трафик, как в оригинале»). Читает и пишет тот же блок #GvN в
+                /etc/config/zapret, что и менеджер, поэтому включённое там видно здесь и наоборот. */}
+            {st.game && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="text-base">
+                            {t('Игровой фильтр')}
+                            <span className="ml-2 text-xs font-normal text-muted-foreground">
+                                {t('на весь роутер · игровой UDP и порты игр, как Gv в Zapret Manager')}
+                            </span>
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3 text-sm">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                            {(['0', '1', '2', '3', '4'] as const).map((n) => {
+                                const on = n === '0' ? st.game.gv === '' : st.game.gv === n
+                                return (
+                                    <button
+                                        key={n}
+                                        type="button"
+                                        disabled={busy !== ''}
+                                        aria-pressed={on}
+                                        onClick={() => on ? undefined : void act(
+                                            'game',
+                                            () => rpc.zapretGameSet(Number(n)),
+                                            n === '0' ? t('Игровой фильтр снят') : `${t('Игровой фильтр')}: Gv${n}`,
+                                        )}
+                                        className={[
+                                            'rounded-lg border px-3 py-1.5 text-sm',
+                                            on ? 'border-primary bg-primary/10 font-medium text-primary'
+                                               : 'border-border hover:bg-accent',
+                                        ].join(' ')}
+                                    >
+                                        {n === '0' ? t('Выкл') : `Gv${n}`}
+                                    </button>
+                                )
+                            })}
+                            {st.game.gv === '0' && (
+                                <span className="text-xs text-muted-foreground">
+                                    {t('сейчас — встроенный фильтр стратегии Flowseal (GvF); Gv1–Gv4 встанут вместо него')}
+                                </span>
+                            )}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                            {t('Gv1 — одна подделка на первые два пакета; Gv2–Gv4 — по десять подделок, обрыв после 2, 3 или 4 пакетов. Что подойдёт, зависит от провайдера — пробуйте по очереди прямо в игре.')}
+                        </div>
+                        {st.game.gv !== '' && (
+                            <div className="flex flex-wrap items-center gap-3">
+                                <label className="flex items-center gap-2">
+                                    <span className="text-xs text-muted-foreground">{t('подделка для UDP')}</span>
+                                    <select
+                                        value={st.game.fake}
+                                        disabled={busy !== ''}
+                                        aria-label={t('подделка для UDP')}
+                                        onChange={(e) => {
+                                            const f = e.currentTarget.value
+                                            if (f && f !== st.game.fake)
+                                                void act('game', () => rpc.zapretGameSet(undefined, f), `${t('Подделка')}: ${f}`)
+                                        }}
+                                        className="h-8 rounded-lg border border-border bg-background px-2 text-sm"
+                                    >
+                                        {/* Текущая может быть не из списка менеджера (правили руками) —
+                                            тогда она добавляется, иначе select показал бы чужое. */}
+                                        {st.game.fake && !st.game.fakes.some((f) => f.name === st.game.fake) && (
+                                            <option value={st.game.fake}>{st.game.fake}</option>
+                                        )}
+                                        {st.game.fakes.map((f) => (
+                                            <option key={f.name} value={f.name} disabled={!f.present}>
+                                                {f.name}{f.present ? '' : ` — ${t('нет файла')}`}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <Button
+                                    variant={st.game.xtreme ? 'default' : 'outline'}
+                                    size="sm"
+                                    disabled={busy !== ''}
+                                    onClick={() => void act(
+                                        'game',
+                                        () => rpc.zapretGameSet(undefined, undefined, !st.game.xtreme),
+                                        st.game.xtreme ? t('Xtreme выключен') : t('Xtreme включён'),
+                                    )}
+                                >
+                                    {st.game.xtreme ? t('Выключить Xtreme') : t('Включить Xtreme')}
+                                </Button>
+                                <span className="text-xs text-warning-fg">
+                                    {t('Xtreme расширяет фильтр почти на все порты — может мешать приложениям и соединениям; только чтобы проверить игру.')}
+                                </span>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+            )}
+
             {/* ---- список стратегий ----------------------------------------------------- */}
             <Card>
                 <CardHeader>

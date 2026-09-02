@@ -21,10 +21,15 @@ import { pending } from '@/lib/pending'
 //      Flowseal · v · YouTube» стоял дважды — фильтром списка и набором проверки, — и человек,
 //      нажав «Flowseal» в списке, получал проверку всех 58 (снято с живого роутера).
 
+const game = {
+    gv: '', xtreme: false, fake: '',
+    fakes: [{ name: 'stun.bin', present: true }, { name: 'stun2.bin', present: true },
+            { name: 'quic_initial_rutube_ru.bin', present: false }],
+}
 const state = {
     installed: true, running: true, enabled: true, version: '72.20260307', curl: true,
     strategies: 3, updated: Math.floor(Date.now() / 1000) - 3600,
-    active: 'v5', drifted: false,
+    active: 'v5', drifted: false, game,
 }
 
 const cat = {
@@ -171,6 +176,54 @@ describe('вкладка Zapret', () => {
         expect(document.body.textContent).toMatch(/выходы обхода ниже работают/)
         fireEvent.click(btn)
         await waitFor(() => expect(en).toHaveBeenCalledWith(true))
+    })
+
+    // Игровой фильтр — «стратегия для игр» Zapret Manager: выключатель с вариантами Gv1–Gv4,
+    // подделка для UDP и Xtreme. Проверкой не меряется и выхода не имеет (владелец: «тестить не
+    // надо», «покрывает весь UDP-трафик как в оригинале, выход для него свой тоже не нужен»).
+    it('игровой фильтр: варианты Gv, без блока нет подделки и Xtreme', async () => {
+        mockAll()
+        const set = vi.spyOn(rpc, 'zapretGameSet').mockResolvedValue({ ok: true, gv: '2' })
+        render(<Zapret />)
+        const gv2 = await screen.findByRole('button', { name: 'Gv2' })
+        // Блока нет: «Выкл» нажат, подделку и Xtreme выбирать нечему.
+        expect(screen.getByRole('button', { name: 'Выкл' }).getAttribute('aria-pressed')).toBe('true')
+        expect(screen.queryByLabelText('подделка для UDP')).toBeNull()
+        expect(screen.queryByText('Включить Xtreme')).toBeNull()
+        fireEvent.click(gv2)
+        await waitFor(() => expect(set).toHaveBeenCalledWith(2))
+    })
+
+    it('игровой фильтр стоит: подделка и Xtreme доступны, недоступный файл отключён', async () => {
+        mockAll({ st: { ...state, game: { ...game, gv: '3', fake: 'stun.bin' } } })
+        const set = vi.spyOn(rpc, 'zapretGameSet').mockResolvedValue({ ok: true, gv: '3' })
+        render(<Zapret />)
+        const sel = (await screen.findByLabelText('подделка для UDP')) as HTMLSelectElement
+        expect(screen.getByRole('button', { name: 'Gv3' }).getAttribute('aria-pressed')).toBe('true')
+        expect(sel.value).toBe('stun.bin')
+        const missing = Array.from(sel.options).find((o) => o.value === 'quic_initial_rutube_ru.bin')!
+        expect(missing.disabled).toBe(true)
+        expect(missing.textContent).toMatch(/нет файла/)
+        // Событие change НАПРЯМУЮ: обёртка fireEvent.change переименовывает его в input, а
+        // preact/compat у <select> слушает именно change (см. backup-card.test.tsx).
+        sel.value = 'stun2.bin'
+        sel.dispatchEvent(new Event('change', { bubbles: true }))
+        await waitFor(() => expect(set).toHaveBeenCalledWith(undefined, 'stun2.bin'))
+        // Пока действие идёт, остальные кнопки выключены — дождаться, когда отпустит.
+        await waitFor(() => expect(screen.getByText('Включить Xtreme')).not.toBeDisabled())
+        fireEvent.click(screen.getByText('Включить Xtreme'))
+        await waitFor(() => expect(set).toHaveBeenCalledWith(undefined, undefined, true))
+        // Снять — gv:0.
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Выкл' })).not.toBeDisabled())
+        fireEvent.click(screen.getByRole('button', { name: 'Выкл' }))
+        await waitFor(() => expect(set).toHaveBeenCalledWith(0))
+    })
+
+    it('встроенный фильтр Flowseal назван GvF, Gv1–Gv4 встают вместо него', async () => {
+        mockAll({ st: { ...state, game: { ...game, gv: '0', fake: 'stun.bin' } } })
+        render(<Zapret />)
+        await waitFor(() => expect(screen.getByText(/встроенный фильтр стратегии Flowseal/)).toBeInTheDocument())
+        expect(screen.getByRole('button', { name: 'Выкл' }).getAttribute('aria-pressed')).toBe('false')
     })
 
     it('и ВЫХОДУ, когда выход выбран', async () => {

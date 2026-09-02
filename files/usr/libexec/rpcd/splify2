@@ -621,6 +621,8 @@ list)
     json_add_object zapret_apply; json_add_string name; json_add_string out; json_close_object
     # Выключатель обхода всего роутера: служба zapret, а не стратегия (та остаётся отмеченной).
     json_add_object zapret_enable; json_add_boolean on; json_close_object
+    # Игровой фильтр (Gv) всего роутера: номер 0..4, подделка, Xtreme — любое подмножество.
+    json_add_object zapret_game_set; json_add_int gv; json_add_string fake; json_add_boolean xtreme; json_close_object
     json_add_object zapret_test_start; json_add_string scope; json_close_object
     json_add_object zapret_test_stop; json_close_object
     # Ход проверки отдельным методом, а не полем zapret_state: состояние спрашивает пакетный
@@ -662,7 +664,7 @@ call)
         backup_get|backup_put) _grp=backup ;;
         xsteer_link|xsteer_link_put) _grp=xsteer ;;
         doh_state|doh_set|doh_off|doh_tunnel_set) _grp=doh ;;
-        zapret_state|zapret_install|zapret_remove|zapret_sync|zapret_strategies|zapret_strategy|zapret_apply|zapret_enable|zapret_test_start|zapret_test_stop|zapret_test|zapret_results) _grp=zapret ;;
+        zapret_state|zapret_install|zapret_remove|zapret_sync|zapret_strategies|zapret_strategy|zapret_apply|zapret_enable|zapret_game_set|zapret_test_start|zapret_test_stop|zapret_test|zapret_results) _grp=zapret ;;
         *) fail "неизвестный метод" ;;
     esac
     . "$RPCD_LIB/common.sh"

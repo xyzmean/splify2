@@ -160,6 +160,76 @@ zp_apply_global v2 >/dev/null 2>&1
 check "повторное применение не дублирует порты" "1" \
     "$(grep -c "option NFQWS_PORTS_TCP '80,443,2053,2083,2087,2096,8443'" "$ZP_CONF")"
 check "остальная конфигурация цела" "1" "$(grep -c "option FWTYPE 'nftables'" "$ZP_CONF")"
+
+# ---- игровой фильтр (Gv) -----------------------------------------------------------------
+# Повторяет fix_GAME / GV_FAKE / Gv_Xtreme менеджера: блок #GvN в хвосте, порты по одному,
+# подделка первым вхождением, Xtreme с его же файлом восстановления. Проверяется не «похоже»,
+# а обратимостью: поставить и снять — та же конфигурация байт в байт.
+ZP_GV_XTREME_FILE="$tmp/GvXtreme"
+check "игрового блока нет" "" "$(zp_game_gv)"
+cp "$ZP_CONF" "$tmp/conf.nogame"
+zp_game_set 2
+check "Gv2 поставлен" "2" "$(zp_game_gv)"
+check "метка в хвосте, одна" "1" "$(grep -c '^#Gv' "$ZP_CONF")"
+check "UDP-часть с cutoff n2" "1" "$(grep -c '^--dpi-desync-cutoff=n2$' "$ZP_CONF")"
+check "общая TCP-часть на месте" "1" "$(grep -c "^--filter-tcp=$ZP_PORTS_TCP\$" "$ZP_CONF")"
+check "игровые порты UDP дописаны по одному" "1" \
+      "$(grep -c "option NFQWS_PORTS_UDP '443,19294-19344,50000-50100,88,1024-2407," "$ZP_CONF")"
+check "игровые порты TCP дописаны" "1" "$(grep -c "option NFQWS_PORTS_TCP '.*,60442'" "$ZP_CONF")"
+check "файл закрыт кавычкой" "'" "$(tail -n1 "$ZP_CONF")"
+check "основная стратегия не тронута" "v2" "$(zp_active_global)"
+check "подделка по умолчанию stun.bin" "stun.bin" "$(zp_game_fake)"
+# Подделка: только из списка менеджера и только если файл есть.
+: > "$ZP_FAKE_DIR/stun2.bin"; printf x > "$ZP_FAKE_DIR/stun2.bin"
+check "смена подделки на stun2" "0" "$(zp_game_fake_set stun2.bin; echo $?)"
+check "подделка сменилась" "stun2.bin" "$(zp_game_fake)"
+check "а в TCP-части pattern остался stun.bin" "1" \
+      "$(grep -c 'seqovl-pattern=/opt/zapret/files/fake/stun.bin$' "$ZP_CONF")"
+check "чужая подделка отвергается" "1" "$(zp_game_fake_set evil.bin; echo $?)"
+check "подделка без файла отвергается" "1" "$(zp_game_fake_set quic_initial_rutube_ru.bin; echo $?)"
+# Xtreme: расширенные порты, метка с суффиксом, файл восстановления в формате менеджера.
+cp "$ZP_CONF" "$tmp/conf.noxtreme"
+check "Xtreme включается" "0" "$(zp_game_xtreme_on; echo $?)"
+check "Xtreme отмечен" "0" "$(zp_game_xtreme; echo $?)"
+check "метка Gv2Xtreme" "1" "$(grep -c '^#Gv2Xtreme$' "$ZP_CONF")"
+check "порты nfqws расширены" "2" "$(grep -c "option NFQWS_PORTS_[TU][CD]P '80,88,443-65535'" "$ZP_CONF")"
+check "фильтр блока расширен" "2" "$(grep -c '^--filter-[ut][dc]p=80,88,444-65535$' "$ZP_CONF")"
+check "файл восстановления — пять строк" "5" "$(wc -l < "$ZP_GV_XTREME_FILE")"
+check "номер читается и под Xtreme" "2" "$(zp_game_gv)"
+zp_game_xtreme_off
+check "после выключения Xtreme конфигурация та же байт в байт" "1" \
+      "$(cmp -s "$ZP_CONF" "$tmp/conf.noxtreme" && echo 1 || echo 0)"
+check "файл восстановления убран" "0" "$([ -e "$ZP_GV_XTREME_FILE" ] && echo 1 || echo 0)"
+# Смена основной стратегии игровой фильтр не теряет (как автоподбор менеджера).
+zp_game_xtreme_on
+zp_apply_global v1 >/dev/null 2>&1
+check "основная сменилась" "v1" "$(zp_active_global)"
+check "игровая осталась" "2" "$(zp_game_gv)"
+check "подделка осталась" "stun2.bin" "$(zp_game_fake)"
+check "Xtreme остался" "0" "$(zp_game_xtreme; echo $?)"
+check "метка одна" "1" "$(grep -c '^#Gv' "$ZP_CONF")"
+zp_game_xtreme_off
+check "Xtreme снимается и после смены основной" "1" "$(zp_game_xtreme; echo $?)"
+# Снять: хвост срезан, порты убраны — как до установки (основная — снова v2 для сравнения).
+zp_apply_global v2 >/dev/null 2>&1
+zp_game_set 0
+check "игровой блок снят" "" "$(zp_game_gv)"
+check "снятие возвращает конфигурацию байт в байт" "1" \
+      "$(cmp -s "$ZP_CONF" "$tmp/conf.nogame" && echo 1 || echo 0)"
+check "чужой номер отвергается" "1" "$(zp_game_set 7; echo $?)"
+# Стратегия Flowseal несёт свой игровой фильтр — менеджер метит его #Gv0 («GvF»), и GvN
+# ставится ВМЕСТО него, а не под ним.
+zp_apply_global general >/dev/null 2>&1
+check "встроенный фильтр Flowseal помечен Gv0" "0" "$(zp_game_gv)"
+check "метка стоит перед --new + --filter-tcp=2802" "1" \
+      "$(awk '/^#Gv0$/{g=NR} g&&NR==g+1&&/^--new$/{n=1} n&&NR==g+2&&/^--filter-tcp=2802/{print 1; exit}' "$ZP_CONF")"
+zp_game_set 1
+check "Gv1 заменил встроенный" "1" "$(zp_game_gv)"
+check "меток по-прежнему одна" "1" "$(grep -c '^#Gv' "$ZP_CONF")"
+check "встроенного TCP-блока Flowseal больше нет" "1" "$(grep -c '^--filter-tcp=2802' "$ZP_CONF")"
+# Дальше стенд ждёт v2 без игрового блока — как было до этого раздела.
+zp_game_set 0
+zp_apply_global v2 >/dev/null 2>&1
 zp_apply_global 'нет такой' >/dev/null 2>&1
 check "неизвестная стратегия — отказ" "1" "$?"
 check "и конфигурация не тронута" "v2" "$(zp_active_global)"

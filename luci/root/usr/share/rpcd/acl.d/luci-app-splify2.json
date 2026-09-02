@@ -79,6 +79,7 @@
           "zapret_install",
           "zapret_remove",
           "zapret_enable",
+          "zapret_game_set",
           "zapret_sync",
           "zapret_apply",
           "zapret_test_start",
