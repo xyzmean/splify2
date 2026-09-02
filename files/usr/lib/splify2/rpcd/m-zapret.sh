@@ -38,6 +38,9 @@ case "$2" in
         json_init
         zp_installed && json_add_boolean installed 1 || json_add_boolean installed 0
         zp_running   && json_add_boolean running 1   || json_add_boolean running 0
+        # Выключатель обхода всего роутера — по ссылке автозапуска. «Не запущен» и «выключен»
+        # для человека разные состояния: первое — поломка, второе — его собственное решение.
+        zp_enabled   && json_add_boolean enabled 1   || json_add_boolean enabled 0
         json_add_string version "$(zp_version 2>/dev/null)"
         # Чем проверять стратегии. Без curl проверка невозможна, и сказать об этом надо ДО
         # того, как человек нажмёт кнопку: ключи, которыми меряет Zapret Manager (сроки,
@@ -268,12 +271,41 @@ case "$2" in
             fi
         else
             zp_apply_global "$name" || fail "стратегия $name не записалась в $ZP_CONF"
+            # Выбрать стратегию выключенному обходу значит захотеть его включить: иначе
+            # «Применить» отвечает успехом, а стратегия не действует, и человек ищет поломку.
+            zp_enabled || "$ZP_INIT" enable >/dev/null 2>&1
             zp_restart || fail "стратегия записана, но обход не перезапустился"
         fi
         json_init
         json_add_boolean ok 1
         json_add_string name "$name"
         [ -n "$out" ] && json_add_string out "$out"
+        json_dump
+        ;;
+
+    # Выключатель обхода всего роутера. Стратегия при этом не стирается — снимается и
+    # останавливается служба (см. zp_disable в zapret.sh): Zapret Manager видит свою
+    # конфигурацию, а обработчики выходов kind=zapret продолжают работать своими экземплярами.
+    zapret_enable)
+        need_zapret
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var on on
+        case "$on" in
+            1|true)  _on=1 ;;
+            0|false) _on=0 ;;
+            *) fail "on: ожидается true или false" ;;
+        esac
+        zp_installed || fail "обход DPI не установлен"
+        if [ "$_on" = 1 ]; then
+            zp_enable  || fail "нет init-скрипта $ZP_INIT — включать нечего"
+        else
+            zp_disable || fail "нет init-скрипта $ZP_INIT — выключать нечего"
+        fi
+        json_init
+        json_add_boolean ok 1
+        zp_enabled && json_add_boolean enabled 1 || json_add_boolean enabled 0
+        zp_running && json_add_boolean running 1 || json_add_boolean running 0
         json_dump
         ;;
 

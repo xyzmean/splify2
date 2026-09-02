@@ -78,6 +78,7 @@
           "doh_tunnel_set",
           "zapret_install",
           "zapret_remove",
+          "zapret_enable",
           "zapret_sync",
           "zapret_apply",
           "zapret_test_start",

@@ -60,6 +60,20 @@ ZP_CONF="$tmp/zapret.conf"
 ZP_NFQWS="$tmp/nfqws-none"
 ZP_FAKE_DIR="$tmp/fake"
 mkdir -p "$ZP_FAKE_DIR"
+# Служба zapret стенда: init-скрипт записывает команды, а ссылка автозапуска — настоящая,
+# в своём rc.d. Так проверяется и порядок команд, и то, что «выключен» читается по ссылке.
+ZP_INIT="$tmp/init-zapret"
+ZP_RCD="$tmp/rcd"
+mkdir -p "$ZP_RCD"
+cat > "$ZP_INIT" <<EOF
+#!/bin/sh
+echo "\$1" >> "$tmp/init.log"
+case "\$1" in
+    enable)  ln -sf "$ZP_INIT" "$ZP_RCD/S21zapret" ;;
+    disable) rm -f "$ZP_RCD/S21zapret" ;;
+esac
+EOF
+chmod +x "$ZP_INIT"
 . "$LIB"
 
 # ---- сборка каталога ---------------------------------------------------------
@@ -300,5 +314,27 @@ check "проверка ключей: обычный файл с перевод�
 ZP_NFQWS="$tmp/nfqws-none"
 
 printf '\n%d проверок пройдено' "$pass"
+# ---- выключатель обхода всего роутера -------------------------------------------------
+# «Как мне отключить стратегию на весь роутер?» — владелец. Выключается СЛУЖБА, а не
+# стирается стратегия: отметка `#Имя` остаётся на месте, Zapret Manager видит свою
+# конфигурацию, а обработчики выходов kind=zapret это не трогает.
+zp_apply_global v2 >/dev/null 2>&1
+: > "$tmp/init.log"
+"$ZP_INIT" enable >/dev/null
+check "включённый автозапуск виден по ссылке" "0" "$(zp_enabled; echo $?)"
+: > "$tmp/init.log"
+zp_disable
+check "выключение снимает автозапуск и останавливает — в этом порядке" "disable stop" \
+      "$(tr '\n' ' ' < "$tmp/init.log" | sed 's/ $//')"
+check "после выключения автозапуск снят" "1" "$(zp_enabled; echo $?)"
+check "а стратегия осталась отмеченной" "v2" "$(zp_active_global)"
+: > "$tmp/init.log"
+zp_enable
+check "включение ставит автозапуск и запускает" "enable start" \
+      "$(tr '\n' ' ' < "$tmp/init.log" | sed 's/ $//')"
+check "и автозапуск снова включён" "0" "$(zp_enabled; echo $?)"
+ZP_INIT="$tmp/нет-такого"
+check "без init-скрипта выключать нечего — отказ" "1" "$(zp_disable; echo $?)"
+
 if [ "$fail" -gt 0 ]; then printf ', %d ПРОВАЛЕНО\n' "$fail"; exit 1; fi
 printf '\nвсе проверки прошли\n'

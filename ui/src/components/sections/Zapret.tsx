@@ -259,9 +259,13 @@ export default function Zapret() {
                 <CardContent className="space-y-2 text-sm">
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
                         <span>
+                            {/* Три состояния, а не два: «выключен» — решение человека
+                                (кнопка в строке «Весь роутер»), «не запущен» — поломка. */}
                             {st.running
                                 ? <span className="text-success">{t('работает')}</span>
-                                : <span className="text-muted-foreground">{t('не запущен')}</span>}
+                                : !st.enabled
+                                    ? <span className="text-muted-foreground">{t('выключен')}</span>
+                                    : <span className="text-warning-fg">{t('не запущен')}</span>}
                         </span>
                         {st.version && <span className="text-muted-foreground">{st.version}</span>}
                         <span className="text-muted-foreground">
@@ -389,19 +393,45 @@ export default function Zapret() {
             <Card>
                 <CardHeader><CardTitle className="text-base">{t('Куда применить')}</CardTitle></CardHeader>
                 <CardContent className="space-y-1.5">
-                    <button
-                        type="button"
-                        onClick={() => setTarget('')}
-                        className={[
-                            'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm',
-                            target === '' ? 'bg-primary/10 font-medium text-primary' : 'hover:bg-accent',
-                        ].join(' ')}
-                    >
-                        <span className="min-w-0 flex-1">{t('Весь роутер')}</span>
-                        <span className="text-xs text-muted-foreground">
-                            {st.active || t('стратегия не отмечена')}
-                        </span>
-                    </button>
+                    {/* Выключатель стоит РЯДОМ с местом применения, а не в шапке: вопрос
+                        человека — «как отключить стратегию на весь роутер», и ответ должен быть
+                        в той строке, где эта стратегия названа. Выключается служба, а не
+                        стирается стратегия: отметка остаётся, Zapret Manager видит своё, а
+                        выходы обхода (свои обработчики) продолжают работать. */}
+                    <div className="flex items-center gap-1">
+                        <button
+                            type="button"
+                            onClick={() => setTarget('')}
+                            className={[
+                                'flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-2 text-left text-sm',
+                                target === '' ? 'bg-primary/10 font-medium text-primary' : 'hover:bg-accent',
+                            ].join(' ')}
+                        >
+                            <span className="min-w-0 flex-1">{t('Весь роутер')}</span>
+                            <span className="text-xs text-muted-foreground">
+                                {!st.enabled && <span className="mr-1 rounded bg-accent px-1.5 py-0.5">{t('выключен')}</span>}
+                                {st.active || t('стратегия не отмечена')}
+                            </span>
+                        </button>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={busy !== ''}
+                            className="shrink-0"
+                            onClick={() => void act(
+                                'enable',
+                                () => rpc.zapretEnable(!st.enabled),
+                                st.enabled ? t('Обход на весь роутер выключен') : t('Обход на весь роутер включён'),
+                            )}
+                        >
+                            {busy === 'enable' ? '…' : st.enabled ? t('Выключить обход') : t('Включить обход')}
+                        </Button>
+                    </div>
+                    {!st.enabled && (
+                        <div className="px-3 text-xs text-muted-foreground">
+                            {t('Обход на весь роутер выключен: стратегия выше не действует, а выходы обхода ниже работают своими обработчиками. «Применить» стратегию всему роутеру включит его обратно.')}
+                        </div>
+                    )}
                     {outs.map((o) => (
                         <button
                             key={o.name}

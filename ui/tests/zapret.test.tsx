@@ -22,7 +22,7 @@ import { pending } from '@/lib/pending'
 //      нажав «Flowseal» в списке, получал проверку всех 58 (снято с живого роутера).
 
 const state = {
-    installed: true, running: true, version: '72.20260307', curl: true,
+    installed: true, running: true, enabled: true, version: '72.20260307', curl: true,
     strategies: 3, updated: Math.floor(Date.now() / 1000) - 3600,
     active: 'v5', drifted: false,
 }
@@ -141,6 +141,36 @@ describe('вкладка Zapret', () => {
         const rows = screen.getAllByText('Применить')
         fireEvent.click(rows[rows.length - 1])
         await waitFor(() => expect(ap).toHaveBeenCalledWith('Yv01', ''))
+    })
+
+    // «Как мне отключить стратегию на весь роутер?» — владелец, со скрина вкладки: строка
+    // «Весь роутер» показывала стратегию и не давала её выключить. Выключается СЛУЖБА, а не
+    // стирается стратегия: отметка остаётся (Zapret Manager видит своё), выходы обхода работают.
+    it('обход на весь роутер выключается кнопкой в строке «Весь роутер»', async () => {
+        mockAll()
+        const en = vi.spyOn(rpc, 'zapretEnable').mockResolvedValue({ ok: true, enabled: false, running: false })
+        render(<Zapret />)
+        const btn = await screen.findByRole('button', { name: 'Выключить обход' })
+        fireEvent.click(btn)
+        await waitFor(() => expect(en).toHaveBeenCalledWith(false))
+        // Стратегия при этом не «снята»: applyи не звались.
+        expect(screen.queryByText('Включить обход')).toBeNull() // до перечитывания состояния
+    })
+
+    it('выключенный обход назван выключенным, а не сломанным, и включается обратно', async () => {
+        mockAll({ st: { ...state, running: false, enabled: false } })
+        const en = vi.spyOn(rpc, 'zapretEnable').mockResolvedValue({ ok: true, enabled: true, running: true })
+        render(<Zapret />)
+        const btn = await screen.findByRole('button', { name: 'Включить обход' })
+        // В шапке — «выключен», не «не запущен»: это решение человека, а не поломка.
+        expect(screen.getAllByText('выключен').length).toBeGreaterThan(0)
+        expect(screen.queryByText('не запущен')).toBeNull()
+        // Стратегия по-прежнему названа в строке: она не стёрта.
+        expect(screen.getAllByText('v5').length).toBeGreaterThan(0)
+        // И сказано, что выходы обхода продолжают работать.
+        expect(document.body.textContent).toMatch(/выходы обхода ниже работают/)
+        fireEvent.click(btn)
+        await waitFor(() => expect(en).toHaveBeenCalledWith(true))
     })
 
     it('и ВЫХОДУ, когда выход выбран', async () => {

@@ -84,6 +84,22 @@ EOF
 # Обход DPI: объект проверяет только исполнимость файла (zp_installed), поэтому заглушке
 # достаточно быть исполняемой. Ключи nfqws проверяет стенд zapretmatch, а не эта.
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/nfqws"
+# Служба zapret: init-скрипт записывает команды, ссылка автозапуска — настоящая, в своём rc.d:
+# по ней объект и отвечает `enabled`. Функцией, потому что раздел обхода ниже заводит
+# заглушку заново.
+zapret_initd_stub() {
+    mkdir -p "$T/rcd-zapret"
+    cat > "$T/bin/initd-zapret" <<EOF
+#!/bin/sh
+echo "\$1" >> "$T/initd-zapret.log"
+case "\$1" in
+    enable)  ln -sf "$T/bin/initd-zapret" "$T/rcd-zapret/S21zapret" ;;
+    disable) rm -f "$T/rcd-zapret/S21zapret" ;;
+esac
+EOF
+    chmod +x "$T/bin/initd-zapret"
+}
+zapret_initd_stub
 
 cat > "$T/bin/initd-rpcd" <<'EOF'
 #!/bin/sh
@@ -691,7 +707,7 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         ZP_RESULTS="$T/zapret/results.json" ZP_RESULTS_DIR="$T/zapret/results.d" ZP_STAMP="$T/zapret/updated" \
         ZP_PROGRESS="$T/zapret/progress" ZP_PIDFILE="$T/zapret/pid" \
         ZP_OPTS_DIR="$T/etc/steer-zapret" ZP_CONF="$T/etc/config-zapret" \
-        ZP_NFQWS="${ZP_NFQWS_FIXTURE:-$T/bin/nfqws-missing}" ZP_INIT="$T/bin/initd-zapret" \
+        ZP_NFQWS="${ZP_NFQWS_FIXTURE:-$T/bin/nfqws-missing}" ZP_INIT="$T/bin/initd-zapret" ZP_RCD="$T/rcd-zapret" \
         DOH_CONF="$T/etc/config-doh" DOH_INIT="$T/bin/initd-doh" \
         DOH_LIST="$ROOT/files/usr/share/splify2/doh-providers.conf" \
         DOH_STEER="$T/bin/steer" DOH_SPEC="$T/etc/spec.json" \
@@ -2200,7 +2216,7 @@ check "чужое значение отвергается" "false" "$(printf '%s
 # правило «через туннель».
 mkdir -p "$T/etc" "$T/zapret"
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/initd-doh"; chmod +x "$T/bin/initd-doh"
-printf '#!/bin/sh\nexit 0\n' > "$T/bin/initd-zapret"; chmod +x "$T/bin/initd-zapret"
+zapret_initd_stub
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/zapret-test"; chmod +x "$T/bin/zapret-test"
 printf "config https-dns-proxy\n\toption resolver_url 'https://dns.comss.one/dns-query'\n" \
     > "$T/etc/config-doh"
@@ -2263,6 +2279,35 @@ check "семейство считает бэкенд, а не интерфей�
 out="$(rpcd zapret_apply '{"name":"v1"}')"
 check "применение без установленного обхода отвергается" "false" \
       "$(printf '%s' "$out" | jget ok)"
+
+# Выключатель обхода всего роутера («как мне отключить стратегию на весь роутер?» — владелец).
+# Выключается служба, стратегия остаётся отмеченной; без пакета выключать нечего.
+out="$(rpcd zapret_enable '{"on":false}')"
+check "выключатель без установленного обхода — отказ" "false" "$(printf '%s' "$out" | jget ok)"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_enable '{"on":"мусор"}')"
+check "чужое значение выключателя отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+"$T/bin/initd-zapret" enable
+: > "$T/initd-zapret.log"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_enable '{"on":false}')"
+check "выключение принято" "true" "$(printf '%s' "$out" | jget ok)"
+check "и ответ говорит, что выключено" "false" "$(printf '%s' "$out" | jget enabled)"
+check "служба снята с автозапуска и остановлена, в этом порядке" "disable stop" \
+      "$(tr '\n' ' ' < "$T/initd-zapret.log" | sed 's/ $//')"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_state)"
+check "состояние показывает выключенный обход" "false" "$(printf '%s' "$out" | jget enabled)"
+# Применить стратегию выключенному обходу — значит включить его: иначе «Применить» отвечает
+# успехом, а стратегия не действует.
+printf "config zapret 'config'\n\toption NFQWS_OPT '\n--filter-tcp=443\n'\n" > "$T/etc/config-zapret"
+: > "$T/initd-zapret.log"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_apply '{"name":"v1"}')"
+check "стратегия выключенному обходу применяется" "true" "$(printf '%s' "$out" | jget ok)"
+check "и обход при этом включается" "yes" \
+      "$(grep -qx enable "$T/initd-zapret.log" && echo yes || echo no)"
+: > "$T/initd-zapret.log"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_enable '{"on":true}')"
+check "включение принято" "true" "$(printf '%s' "$out" | jget enabled)"
+check "служба поставлена на автозапуск и запущена" "enable start" \
+      "$(tr '\n' ' ' < "$T/initd-zapret.log" | sed 's/ $//')"
 
 # Одна стратегия целиком: её ключи, по строке на ключ, без служебного заголовка «#Имя».
 # Интерфейс показывает их человеку, чтобы тот видел, ЧТО применяет.

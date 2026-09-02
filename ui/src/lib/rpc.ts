@@ -789,7 +789,11 @@ export const rpc = {
     /** ---- обход DPI ------------------------------------------------------------------ */
     zapretState: declare<{
         installed: boolean
+        /** Работает ли служба zapret ВСЕГО РОУТЕРА (обработчики выходов kind=zapret — не она). */
         running: boolean
+        /** Включён ли её автозапуск. «Не запущен» и «выключен» — разные состояния: первое —
+         *  поломка, второе — решение человека (zapretEnable). */
+        enabled: boolean
         version: string
         /** Есть ли curl. Без него проверка стратегий невозможна, и сказать это надо ДО
          *  нажатия кнопки: ключи, которыми меряет Zapret Manager, у uclient-fetch выразить
@@ -834,6 +838,13 @@ export const rpc = {
      *  kind=zapret. Два места применения одной и той же стратегии. */
     zapretApply: declare<{ ok: boolean; error?: string; name?: string; out?: string }>(
         'zapret_apply', ['name', 'out'],
+    ),
+
+    /** Выключатель обхода всего роутера: служба zapret, а не стратегия — та остаётся
+     *  отмеченной, и Zapret Manager видит свою конфигурацию. Обработчики выходов kind=zapret
+     *  живут своими экземплярами, их это не касается. */
+    zapretEnable: declare<{ ok: boolean; error?: string; enabled?: boolean; running?: boolean }>(
+        'zapret_enable', ['on'],
     ),
 
     /** Набор: `all`, семейство (`flowseal`, `v`, `yv`) либо одна стратегия — `one:<имя>`.
