@@ -20,6 +20,11 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT="$ROOT/files/usr/libexec/rpcd/splify2"
+# Объект разнесён по файлам: диспетчер (SCRIPT), общие помощники и группы методов в
+# usr/lib/splify2/rpcd. Проверки по ТЕКСТУ объекта смотрят во все его файлы разом.
+RPCD_DIR="$ROOT/files/usr/lib/splify2/rpcd"
+RPCD_ALL="$SCRIPT $RPCD_DIR/common.sh $RPCD_DIR/m-*.sh"
+rpcd_src() { cat $RPCD_ALL; }  # shellcheck disable=SC2086
 T="$(mktemp -d /tmp/rpcdmatch.XXXXXX)"
 trap 'rm -rf "$T"' EXIT INT TERM
 
@@ -680,6 +685,7 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         FAST_SH="$ROOT/files/usr/lib/splify2/fast.sh" \
         ZAPRET_SH="$ROOT/files/usr/lib/splify2/zapret.sh" \
         DOH_SH="$ROOT/files/usr/lib/splify2/doh.sh" \
+        RPCD_LIB="$ROOT/files/usr/lib/splify2/rpcd" \
         ZAPRET_TEST="$T/bin/zapret-test" \
         ZP_DIR="$T/zapret" ZP_CATALOG="$T/zapret/strategies.txt" \
         ZP_RESULTS="$T/zapret/results.json" ZP_RESULTS_DIR="$T/zapret/results.d" ZP_STAMP="$T/zapret/updated" \
@@ -1173,7 +1179,7 @@ out="$( { printf '%s\n' '{"name":"bytes","kind":"prefixes","offset":0}'; } | env
         ZAPRET_SH="$ROOT/files/usr/lib/splify2/zapret.sh" \
         DOH_SH="$ROOT/files/usr/lib/splify2/doh.sh" \
     STEER="$T/bin/steer" SPEC="$T/etc/spec.json" LISTS="$T/lists" \
-    SUB="$T/etc/sub.txt" MANIFEST="$T/etc/manifest.json" \
+    SUB="$T/etc/sub.txt" MANIFEST="$T/etc/manifest.json" RPCD_LIB="$RPCD_DIR" \
     LIST_CHUNK=11 sh "$SCRIPT" call list_get 2>/dev/null)"
 check "первый кусок ровно в предел и с переводом строки на конце" "10.0.0.0/8" \
       "$(printf '%s' "$out" | jget text | tr -d '\n')"
@@ -1459,9 +1465,9 @@ check "прямых путей /etc/config/splify2 в коде не остало
 # методами, которые пишут в uci, — и это ровно тот случай, когда барьер должен ломаться:
 # новый метод обязан заводить файл той же функцией.
 check "файл заводится одной функцией на все места" "7" \
-      "$(grep -c '^ *uci_file ||' "$SCRIPT")"
+      "$(rpcd_src | grep -c '^ *uci_file ||')"
 check "перенаправлением файл больше не заводится" "0" \
-      "$(grep -c ': > "\?/etc/config' "$SCRIPT")"
+      "$(rpcd_src | grep -c ': > "\?/etc/config')"
 # И поведением: на недоступном каталоге метод обязан ОТВЕТИТЬ отказом, а не умереть.
 out="$(UCI_SPLIFY2_FIXTURE=/proc/nonexistent/splify2 rpcd sub_set '{"url":"vless://k@h:443#n"}')"
 check "недоступный файл настройки — отказ с причиной, а не тишина" "yes" \
@@ -1754,25 +1760,26 @@ rm -f "$T/var/vless-dirty" "$T/var/obfs-dirty"
 # человек видел ошибку применения там, где ничего не применял. Проверяется поэтому не наличие
 # загрузки, а её место: перед каждой проверкой.
 check "доскачивание вынесено в общую функцию" "yes" \
-      "$(grep -q '^fetch_missing_lists()' "$SCRIPT" && echo yes || echo no)"
+      "$(rpcd_src | grep -q '^fetch_missing_lists()' && echo yes || echo no)"
 # Мест стало три: к spec_set и apply добавилось восстановление из архива (backup_put) —
 # оно тоже проверяет спеку компилятором, а на чистом роутере зеркал категорий ещё нет, и в
 # архив они намеренно не едут. Проверка на число, а не на перечень имён: имена ниже.
 check "функция вызывается трижды: spec_set, apply, backup_put" "3" \
-      "$(grep -c 'fetch_missing_lists "' "$SCRIPT")"
-set_line=$(grep -n 'set_warn="$(fetch_missing_lists' "$SCRIPT" | cut -d: -f1)
-dry_line=$(grep -n 'apply --dry-run --spec "$tmp"' "$SCRIPT" | cut -d: -f1)
+      "$(rpcd_src | grep -c 'fetch_missing_lists "')"
+# spec_set и apply живут в группе spec, восстановление — в группе backup.
+set_line=$(grep -n 'set_warn="$(fetch_missing_lists' "$RPCD_DIR/m-spec.sh" | cut -d: -f1)
+dry_line=$(grep -n 'apply --dry-run --spec "$tmp"' "$RPCD_DIR/m-spec.sh" | cut -d: -f1)
 check "в spec_set загрузка идёт ДО проверки движком" "yes" \
       "$([ -n "$set_line" ] && [ -n "$dry_line" ] && [ "$set_line" -lt "$dry_line" ] && echo yes || echo no)"
 # Порядок ищется ВНУТРИ ветки, а не по всему файлу: `fetch_warn=` встречается и в apply, и
 # в backup_put, и общий `grep -n` отдал бы два номера строк, на которых `[` спотыкается о
 # «Illegal number». Расхождение такого рода стенд однажды уже прятал.
-apply_body="$(sed -n '/^    apply)/,/^        ;;/p' "$SCRIPT")"
+apply_body="$(sed -n '/^    apply)/,/^        ;;/p' "$RPCD_DIR/m-spec.sh")"
 apply_fetch=$(printf '%s\n' "$apply_body" | grep -n 'fetch_missing_lists' | head -1 | cut -d: -f1)
 apply_run=$(printf '%s\n' "$apply_body" | grep -n 'apply --spec "$SPEC" 2>&1)"; rc=' | head -1 | cut -d: -f1)
 check "в apply загрузка идёт ДО применения" "yes" \
       "$([ -n "$apply_fetch" ] && [ -n "$apply_run" ] && [ "$apply_fetch" -lt "$apply_run" ] && echo yes || echo no)"
-put_body="$(sed -n '/^    backup_put)/,/^        ;;/p' "$SCRIPT")"
+put_body="$(sed -n '/^    backup_put)/,/^        ;;/p' "$RPCD_DIR/m-backup.sh")"
 put_fetch=$(printf '%s\n' "$put_body" | grep -n 'fetch_missing_lists' | head -1 | cut -d: -f1)
 put_dry=$(printf '%s\n' "$put_body" | grep -n 'apply --dry-run --spec "$D/spec"' | head -1 | cut -d: -f1)
 check "в восстановлении загрузка идёт ДО проверки движком" "yes" \
@@ -1780,7 +1787,7 @@ check "в восстановлении загрузка идёт ДО прове
 # Сообщение об отказе обязано называть ПРИЧИНУ, а не только следствие: «cannot read a
 # channel's list» отправляет искать испорченный файл, которого никогда не было.
 check "при неудачной загрузке причина ставится перед ошибкой движка" "yes" \
-      "$(grep -q 'fail "${set_warn:+$set_warn; }' "$SCRIPT" && echo yes || echo no)"
+      "$(rpcd_src | grep -q 'fail "${set_warn:+$set_warn; }' && echo yes || echo no)"
 
 # ---- R-005: архив настроек ----------------------------------------------------
 # Бекапа и переноса настроек не было вовсе, а штатный архив системы настройки splify2 не
@@ -2029,11 +2036,12 @@ check "свой же архив принимается обратно (круг 
 check "бэкенд определяет менеджер пакетов" "yes" \
       "$(grep -q 'elif command -v opkg' "$SCRIPT" && echo yes || echo no)"
 check "версия пакета читается обоими способами" "yes" \
-      "$(grep -q 'opkg list-installed' "$SCRIPT" && echo yes || echo no)"
+      "$(rpcd_src | grep -q 'opkg list-installed' && echo yes || echo no)"
+pkg_src="$(grep -l '^pkg_install()' $RPCD_ALL | head -1)"
 check "установка идёт через обёртку, а не через apk напрямую" "0" \
-      "$(sed -n '/^pkg_install()/,$p' "$SCRIPT" | grep -c 'apk add\|apk del')"
+      "$(sed -n '/^pkg_install()/,$p' "$pkg_src" | grep -c 'apk add\|apk del')"
 check "имена файлов пакетов зависят от менеджера" "yes" \
-      "$(grep -q 'pkg_ext)' "$SCRIPT" && grep -q 'pkg_noarch)' "$SCRIPT" && echo yes || echo no)"
+      "$(rpcd_src | grep -q 'pkg_ext)' && rpcd_src | grep -q 'pkg_noarch)' && echo yes || echo no)"
 
 # ---- заголовки об устройстве чистит ДВИЖОК ---------------------------------------
 #

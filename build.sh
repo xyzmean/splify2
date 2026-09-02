@@ -166,6 +166,12 @@ cp files/usr/share/splify2/dpi-suite.json "$PKG/usr/share/splify2/dpi-suite.json
 # ниже сверяет пакет с тем, что скрипты на самом деле подключают.
 mkdir -p "$PKG/usr/lib/splify2"
 cp files/usr/lib/splify2/*.sh "$PKG/usr/lib/splify2/"
+# Объект rpcd разнесён по файлам: диспетчер в libexec, общие помощники и группы методов —
+# здесь. Разбор одного файла в 4500 строк стоил 110 мс на каждый вызов; теперь разбирается
+# диспетчер, common.sh и одна группа. Забыть каталог — значит объект, отвечающий отказом на
+# всё, кроме круга опроса; барьер ниже сверяет группы диспетчера с файлами.
+mkdir -p "$PKG/usr/lib/splify2/rpcd"
+cp files/usr/lib/splify2/rpcd/*.sh "$PKG/usr/lib/splify2/rpcd/"
 # Домены GitHub для фикса Zapret Manager. Едут В ПАКЕТЕ, а не скачиваются: список нужен ровно
 # тогда, когда до GitHub не дойти, и качать его оттуда же было бы замкнутым кругом.
 mkdir -p "$PKG/etc/steer/lists"
@@ -177,7 +183,7 @@ chmod 0755 "$PKG/etc/uci-defaults/99-splify2"
 chmod 0755 "$PKG/usr/libexec/rpcd/splify2" "$PKG/usr/sbin/splify2-update-lists" \
            "$PKG/usr/sbin/splify2-zapret-test"
 chmod 0644 "$PKG/usr/share/splify2/doh-providers.conf" "$PKG/usr/share/splify2/dpi-suite.json"
-chmod 0644 "$PKG"/usr/lib/splify2/*.sh
+chmod 0644 "$PKG"/usr/lib/splify2/*.sh "$PKG"/usr/lib/splify2/rpcd/*.sh
 
 # Протокол xsteer: обработчик netifd и страница LuCI.
 #
@@ -339,6 +345,14 @@ for _need in $(grep -ho '/usr/lib/splify2/[a-z0-9_-]*\.sh' \
     test -s "$PKG$_need" || {
         echo "в пакете нет ${_need#/} — подключающая его половина не запустится"; exit 1; }
 done
+# Каждая группа, которую называет диспетчер (`_grp=имя`), обязана лежать файлом рядом с
+# common.sh — иначе метод отвечает «файл не найден» вместо ответа.
+for _g in $(sed -n 's/.*) _grp=\([a-z]*\) ;;$/\1/p' files/usr/libexec/rpcd/splify2 | sort -u); do
+    test -s "$PKG/usr/lib/splify2/rpcd/m-$_g.sh" || {
+        echo "в пакете нет usr/lib/splify2/rpcd/m-$_g.sh — методы группы $_g не ответят"; exit 1; }
+done
+test -s "$PKG/usr/lib/splify2/rpcd/common.sh" || {
+    echo "в пакете нет usr/lib/splify2/rpcd/common.sh — ни один метод объекта не ответит"; exit 1; }
 # Без списка фикс Zapret Manager молча превращается в ничто: канал не заводится, домены
 # GitHub идут напрямую, и человек упирается ровно в то, ради чего фикс и сделан.
 test -s "$PKG/etc/steer/lists/zm-github.lst" || {

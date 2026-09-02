@@ -315,7 +315,8 @@ check "post-install сеть не перезапускает" "0" \
 # post-install печатает в stdout менеджера пакетов, а тот попадает в $PKG_OUT. Пока
 # $PKG_OUT отдавался только в отказе, единственная просьба post-install («перезапустите
 # сеть») существовала лишь в терминале того, кто ставит пакет руками.
-RPCD=files/usr/libexec/rpcd/splify2
+# Метод splify2_install живёт в группе engine объекта rpcd (см. files/usr/lib/splify2/rpcd).
+RPCD=files/usr/lib/splify2/rpcd/m-engine.sh
 check "self_update отдаёт вывод установщика и на успехе" "1" \
     "$(grep -c 'json_add_string output "\$PKG_OUT"' "$RPCD")"
 # Окно шире двух строк: у объявления появились ещё поля (`via` — путь, которым приехал
