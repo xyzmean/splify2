@@ -109,6 +109,8 @@ export function rate(bytes: number, ms: number) {
 }
 
 const PERIOD_MS = 5000
+/** Как долго верить запомненным версиям выпусков. Шесть часов — как у памяти бэкенда. */
+const VERSIONS_TTL_MS = 6 * 3600 * 1000
 
 /** Снимок прошлого открытия. Держится в памяти браузера ради одного: страница открывается
  *  внутри LuCI, и до первого ответа ubus проходят секунды — сначала грузится сама LuCI, потом
@@ -136,8 +138,13 @@ export function useLive(): Live {
     const [devs, setDevs] = useState<Record<string, { rx: string; tx: string }> | null>(null)
     const [speed, setSpeed] = useState<Live['speed']>({ ch: {}, dev: {} })
     const [build, setBuild] = useState<Build | null>(saved.current?.build ?? null)
-    const [releases, setReleases] = useState<Releases | null>(null)
-    const [selfUpdate, setSelfUpdate] = useState<SelfUpdateInfo | null>(null)
+    /* Версии — из памяти браузера: за ними роутер ходит на GitHub (или по обходным путям),
+     * и полторы секунды на каждый из двух вопросов при каждом открытии окна — ради чисел,
+     * которые меняются раз в неделю. Запомненное рисуется сразу; свежее спрашивается, когда
+     * запомненному больше шести часов. */
+    const versionsSaved = useRef(cacheGet<{ at: number; releases: Releases | null; selfUpdate: SelfUpdateInfo | null }>('versions'))
+    const [releases, setReleases] = useState<Releases | null>(versionsSaved.current?.releases ?? null)
+    const [selfUpdate, setSelfUpdate] = useState<SelfUpdateInfo | null>(versionsSaved.current?.selfUpdate ?? null)
     const [net, setNet] = useState<{ uptime: number; active_clients: number } | null>(null)
     const prev = useRef<{
         t: number
@@ -409,12 +416,18 @@ export function useLive(): Live {
 
     /* Отдельным эффектом: этот ответ добывается запуском движка, и в общем круге он стоил бы
      * процесса каждые пять секунд. */
+    /* И НЕ В ПЕРВОМ ПАКЕТЕ. uhttpd исполняет вызовы одного пакета подряд, поэтому всё, что
+     * выпущено в один такт с `live`, стоит между человеком и первым вердиктом. Полсекунды
+     * задержки уводят этот вызов в следующий пакет: экран рисуется по `live` и снимку из
+     * памяти (сборка движка там уже есть), а свежий ответ дописывается следом. */
     useEffect(() => {
         let stop = false
-        rpc.engine()
-            .then((b) => { if (!stop) setBuild(b) })
-            .catch(() => { if (!stop) setBuild(null) })
-        return () => { stop = true }
+        const t = setTimeout(() => {
+            rpc.engine()
+                .then((b) => { if (!stop) setBuild(b) })
+                .catch(() => { if (!stop) setBuild(null) })
+        }, 500)
+        return () => { stop = true; clearTimeout(t) }
     }, [nonce])
 
     /* Список релизов — тоже раз на круг обновления, а не в пятисекундном опросе: запрос
@@ -437,13 +450,21 @@ export function useLive(): Live {
      * setTimeout(0) успевал попасть в тот же пакет. Проверено на роутере пакет за пакетом. */
     useEffect(() => {
         let stop = false
+        /* refresh() (nonce) — после установки, когда версии и меняются: тогда спрашиваем всегда. */
+        const fresh = versionsSaved.current && Date.now() - versionsSaved.current.at < VERSIONS_TTL_MS
+        if (fresh && nonce === 0) return
         const t = setTimeout(() => {
-            rpc.steerVersions()
-                .then((r) => { if (!stop) setReleases(r) })
-                .catch(() => { if (!stop) setReleases(null) })
-            rpc.splify2Versions()
-                .then((r) => { if (!stop) setSelfUpdate(r) })
-                .catch(() => { if (!stop) setSelfUpdate(null) })
+            Promise.allSettled([rpc.steerVersions(), rpc.splify2Versions()]).then(([r, u]) => {
+                if (stop) return
+                const rel = r.status === 'fulfilled' ? r.value : null
+                const up = u.status === 'fulfilled' ? u.value : null
+                setReleases(rel)
+                setSelfUpdate(up)
+                if (rel || up) {
+                    versionsSaved.current = { at: Date.now(), releases: rel, selfUpdate: up }
+                    cacheSet('versions', versionsSaved.current)
+                }
+            })
         }, 1200)
         return () => { stop = true; clearTimeout(t) }
     }, [nonce])

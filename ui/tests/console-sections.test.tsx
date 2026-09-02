@@ -133,7 +133,9 @@ describe('рельс разделов вместо вкладок (Andromeda 26.
         render(<Console />)
         // Кнопка тоже в двух местах: подвал колонки и блок под содержимым для узкого экрана.
         await screen.findByRole('heading', { name: 'Маршрутизация работает' })
-        expect(screen.getAllByRole('button', { name: /Остановить всё/ }).length).toBeGreaterThan(0)
+        // Сборка движка спрашивается следующим пакетом после `live` (см. live.ts), поэтому
+        // кнопка появляется чуть позже заголовка — ждём её, а не требуем сразу.
+        expect((await screen.findAllByRole('button', { name: /Остановить всё/ })).length).toBeGreaterThan(0)
         nav(/Настройки/).click()
         await waitFor(() =>
             expect(screen.getAllByRole('button', { name: /Остановить всё/ }).length).toBeGreaterThan(0),

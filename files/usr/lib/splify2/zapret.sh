@@ -100,11 +100,23 @@ zp_installed() { [ -x "$ZP_NFQWS" ]; }
 # Версия пакета. Двумя менеджерами: apk на 24.10+ и opkg на 23.05 и старше. Тишина здесь
 # законна — пакета может не быть.
 zp_version() {
-    if command -v apk >/dev/null 2>&1; then
+    # С памятью до смены базы пакетов — тот же довод и тот же приём, что у pkg_version в
+    # объекте rpcd: перебор базы стоит триста миллисекунд, а спрашивают его на каждом
+    # открытии вкладки.
+    _zv_c="/tmp/splify2-pkgver-zapret"
+    _zv_db=/lib/apk/db/installed
+    command -v apk >/dev/null 2>&1 || _zv_db=/usr/lib/opkg/status
+    if [ -f "$_zv_db" ] && [ -f "$_zv_c" ] && [ "$_zv_c" -nt "$_zv_db" ]; then
+        cat "$_zv_c"
+        return 0
+    fi
+    _zv_v="$(if command -v apk >/dev/null 2>&1; then
         apk list -I 2>/dev/null | sed -n 's/^zapret-\([0-9][^ ]*\)-r[0-9]* .*/\1/p' | head -1
     else
         opkg list-installed zapret 2>/dev/null | awk '{sub(/-r[0-9]+$/,"",$3); print $3}'
-    fi
+    fi)"
+    [ -f "$_zv_db" ] && printf '%s' "$_zv_v" > "$_zv_c" 2>/dev/null
+    printf '%s' "$_zv_v"
 }
 
 # Работает ли обход СЕЙЧАС. По процессам, а не по init-скрипту: `enabled` и «запущен» —

@@ -579,7 +579,10 @@ function OutputsColumn({
     >(() => subsRemembered())
     useEffect(() => {
         let stop = false
-        rpc.subList()
+        /* Не в первом пакете: uhttpd исполняет вызовы пакета подряд, и перечень подписок
+         * (треть секунды на роутере) стоял ПЕРЕД `live`, задерживая первый вердикт. Блоки
+         * рисуются с запомненного, свежий перечень приезжает следующим пакетом. */
+        const t = setTimeout(() => rpc.subList()
             .then((r) => {
                 if (stop) return
                 setSubs(r.subs || [])
@@ -588,8 +591,8 @@ function OutputsColumn({
             /* Бэкенд постарше перечня не знает — подписка одна, и блок ей рисуется прежним
              * способом. Запомненное при этом снимается: иначе страница рисовала бы блоки
              * подписок, о которых этот роутер рассказать уже не может. */
-            .catch(() => { if (!stop) { setSubs(null); subsRemember([]) } })
-        return () => { stop = true }
+            .catch(() => { if (!stop) { setSubs(null); subsRemember([]) } }), 500)
+        return () => { stop = true; clearTimeout(t) }
     }, [])
 
     /* Ни подписки, ни туннеля — столбца нет вовсе. Пустой столбец с заголовком «Выходы»
