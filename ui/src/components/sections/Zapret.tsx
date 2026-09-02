@@ -191,8 +191,15 @@ export default function Zapret() {
             const out: Output = { name: n, kind: 'zapret', on_fail: 'drop' }
             pending.edit({ ...spec, outputs: { ...spec.outputs, [n]: out } })
             setNewOut('')
-            notify(`${t('Выход заведён')}: ${n}. ${t('Осталось применить')}`)
+            /* Выход обязан появиться в списке «Куда применить» СРАЗУ, а не после «Применить»
+               (владелец: «новый выход должен появиться тут по нажатию «Завести выход»»).
+               Список строит бэкенд по сохранённой спеке, а правка уезжает туда через
+               полсекунды тишины — значит дождаться записи, потом перечитать. И сразу выбрать
+               новый выход местом применения: за стратегией для него человек и пришёл. */
+            await pending.flush()
             await reloadState()
+            setTarget(n)
+            notify(`${t('Выход заведён')}: ${n}. ${t('Выберите ему стратегию ниже; заработает после «Применить»')}`)
         } catch (e) {
             notify(String(e instanceof Error ? e.message : e), 'error')
         } finally {
@@ -444,10 +451,13 @@ export default function Zapret() {
                         >
                             <span className="min-w-0 flex-1 truncate">
                                 {t('выход')} {o.name}
+                                {/* Не применённый выход — не поломка: его обработчик и не
+                                    должен быть запущен, пока спеку не применили. Предупреждение
+                                    оставлено тому, что применено и всё равно не поднялось. */}
                                 {!o.up && (
-                                    <span className="ml-2 text-xs text-warning-fg">
-                                        {t('обработчик не запущен')}
-                                    </span>
+                                    pending.applied && !pending.applied.outputs?.[o.name]
+                                        ? <span className="ml-2 text-xs text-muted-foreground">{t('не применён')}</span>
+                                        : <span className="ml-2 text-xs text-warning-fg">{t('обработчик не запущен')}</span>
                                 )}
                             </span>
                             <span className="text-xs text-muted-foreground">
@@ -476,7 +486,7 @@ export default function Zapret() {
                         </Button>
                     </div>
                     <div className="text-xs text-muted-foreground">
-                        {t('Выход — это то, во что ведёт правило. Заведите его здесь, выберите ему стратегию ниже, а правило «эти домены — сюда» создайте во вкладке «Правила».')}
+                        {t('Выход — это то, во что ведёт правило. Заведите его здесь — он сразу появится в списке выше, — выберите ему стратегию ниже, а правило «эти домены — сюда» создайте во вкладке «Правила». Заработает после «Применить».')}
                     </div>
                 </CardContent>
             </Card>

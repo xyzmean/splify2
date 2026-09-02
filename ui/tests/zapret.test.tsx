@@ -284,6 +284,15 @@ describe('вкладка Zapret', () => {
         const spec = { outputs: { direct: { name: 'direct', kind: 'direct' as const } }, channels: [] }
         vi.spyOn(pending, 'load').mockResolvedValue(spec as never)
         const edit = vi.spyOn(pending, 'edit').mockImplementation(() => undefined)
+        // Запись на роутер дожидается, потом список перечитывается: бэкенд строит его по
+        // сохранённой спеке, и новый выход обязан появиться в «Куда применить» СРАЗУ, а не
+        // после «Применить» (владелец, со скрина). Применённого выхода yt2 нет — он «не
+        // применён», а не «обработчик не запущен».
+        const flush = vi.spyOn(pending, 'flush').mockResolvedValue(undefined)
+        pending.applied = spec as never
+        vi.spyOn(rpc, 'zapretStrategies').mockResolvedValue({
+            ...cat, outputs: [...cat.outputs, { name: 'yt2', strategy: '', queue: 0, up: false }],
+        })
         render(<Zapret />)
         await waitFor(() => expect(screen.getByLabelText('имя нового выхода')).toBeInTheDocument())
         fireEvent.input(screen.getByLabelText('имя нового выхода'), { target: { value: 'yt2' } })
@@ -291,6 +300,13 @@ describe('вкладка Zapret', () => {
         await waitFor(() => expect(edit).toHaveBeenCalled())
         const next = edit.mock.calls[0][0] as { outputs: Record<string, { kind: string; on_fail: string }> }
         expect(next.outputs.yt2.kind).toBe('zapret')
+        await waitFor(() => expect(flush).toHaveBeenCalled())
+        await waitFor(() => expect(screen.getByText('выход yt2')).toBeInTheDocument())
+        // Новый выход сразу выбран местом применения — за стратегией для него и пришли.
+        await waitFor(() => expect(screen.getByText(/для выхода yt2/)).toBeInTheDocument())
+        expect(screen.getByText('не применён')).toBeInTheDocument()
+        expect(screen.queryByText('обработчик не запущен')).toBeNull()
+        pending.applied = null
         // Умолчание общее для всех выходов — «остановить трафик»: канал заводят ради обхода,
         // и молча вернуть трафик на открытый путь в момент, когда обход умер, — значит
         // нарушить единственное обещание выхода ровно тогда, когда это важнее всего.
