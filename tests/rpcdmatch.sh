@@ -2251,6 +2251,12 @@ check "и число стратегий при этом ноль" "0" "$(printf 
 out="$(rpcd zapret_test_start '{"scope":"all"}')"
 check "проверка без обхода не запускается" "false" "$(printf '%s' "$out" | jget ok)"
 
+# Запрос от rpcd приходит БЕЗ перевода строки: `read` возвращает ненулевой код, уже заполнив
+# переменную, и `|| input='{}'` затирал набор пустым — любая проверка шла по всем 58 (снято с
+# роутера владельца). Набор обязан доехать и в такой форме.
+out="$(rpcd_raw zapret_test_start '{"scope":"one:nope"}')"
+check "набор без перевода строки не теряется" "yes" \
+      "$(printf '%s' "$out" | grep -q 'nope' && echo yes || echo no)"
 out="$(rpcd zapret_test_start '{"scope":"чужой"}')"
 check "чужой набор отвергается" "false" "$(printf '%s' "$out" | jget ok)"
 check "и отказ называет допустимые наборы, включая одиночный" "yes" \
