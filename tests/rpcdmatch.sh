@@ -3323,5 +3323,192 @@ uci_set splify2.main.sub_url ''
 out="$(BUILD_ID_FILE="$T/etc/build-id.txt" rpcd support_report)"
 rep="$(printf '%s' "$out" | jget text)"
 check "отсутствие подписки названо словами" "yes" "$(has 'подписок нет')"
+
+# ---- источники трафика: свой исходящий туннель источником быть не может ---------------
+# Перечень сетей клиентов (splify2#16, выше по файлу) отдавал ВСЁ, что нашлось в /sys, кроме
+# lo и портов моста. А в /sys лежат и наши СОБСТВЕННЫЕ исходящие туннели: устройство выхода
+# kind=vless, wg-клиент до провайдера, туннель xsteer. Отметить такое устройство «сетью
+# клиентов» человек мог прямо на экране — и получал попытку забрать трафик из того самого
+# туннеля, через который сам уходит наружу, ожидая ровно обратного. Подпись экрана обещает
+# «тех, кто ко мне приходит», и в этом вся ловушка: она не врёт, врёт список под ней.
+#
+# Два вида туннелей надо РАЗЛИЧАТЬ, и различие содержательное:
+#  * через который МЫ уходим наружу (tun-vless, wg до провайдера, xsteer) — источником быть
+#    не может;
+#  * через который к НАМ приходят чужие устройства (сервер wireguard, Tailscale, ZeroTier) —
+#    законный источник, ради него перечень и заведён.
+# В /sys они выглядят одинаково (оба ARPHRD_NONE, у обоих бывает адрес /32), поэтому ниже —
+# по проверке на каждый признак, которым они всё-таки различаются.
+#
+# НЕГОДНОЕ ОСТАЁТСЯ В ОТВЕТЕ, и это проверяется первым. Выкинутое устройство человек ищет
+# глазами, не находит и решает, что перечень сломан («куда делся мой wg0») — тот же довод, по
+# которому и wan помечается, а не прячется.
+#
+# Фикстура своя (шов SYSNET_FIXTURE): набор устройств здесь другой, чем у раздела выше, и
+# дописать его туда значило бы менять ожидания уже написанных проверок. Помощники names,
+# netof и flagof — оттуда же: вопрос к ответу тот же, и второй их набор разошёлся бы с первым.
+mkdir -p "$T/sysnet-src/lo" "$T/sysnet-src/br-lan" "$T/sysnet-src/lan1" "$T/sysnet-src/wan" \
+         "$T/sysnet-src/tun-vless" "$T/sysnet-src/wg-prov" "$T/sysnet-src/wg-b" \
+         "$T/sysnet-src/wg-vpn" "$T/sysnet-src/wg-home" "$T/sysnet-src/xs-hub" \
+         "$T/sysnet-src/xs-dc9" "$T/sysnet-src/tun-def" "$T/sysnet-src/tailscale0"
+ln -s ../br-lan "$T/sysnet-src/lan1/master"
+for d in lo br-lan lan1 wan tun-vless wg-prov wg-b wg-vpn wg-home xs-hub xs-dc9 tun-def \
+         tailscale0; do
+    printf 'up\n' > "$T/sysnet-src/$d/operstate"
+done
+
+# Спека с выходами всех трёх видов, у которых есть устройство. Каждый выход здесь закрывает
+# свой путь, которым устройство попадает в ответ движка:
+#  * tun-vless — kind=vless БЕЗ явного device: имя устройства выводится из имени выхода, и
+#    знает об этом только движок, в спеке такого поля нет вовсе;
+#  * vpn — kind=interface с явным `device`: wg-клиент до провайдера, самый частый выход;
+#  * pool — kind=interface с `devices`: движок печатает у выхода ОДНО устройство (devices[0]),
+#    поэтому второй член пула виден только в самой спеке. Он такое же наше исходящее.
+cat > "$T/etc/spec.json" <<'EOF'
+{ "schema": 1,
+  "outputs": {
+    "tun-vless": { "kind": "vless", "sub_file": "/etc/steer/sub.txt" },
+    "vpn":       { "kind": "interface", "device": "wg-prov" },
+    "pool":      { "kind": "interface", "devices": ["wg-prov", "wg-b"] },
+    "plain":     { "kind": "direct" }
+  },
+  "channels": [] }
+EOF
+
+# Настройки сети: что наружу и какие интерфейсы поднимает наш обработчик netifd. Имя
+# устройства у proto=xsteer берётся из `device_name`, а без него выводится приставкой
+# `xs-` из имени интерфейса — ровно так его создаёт files/lib/netifd/proto/xsteer.sh, и
+# проверяются оба пути: секция hub без device_name даёт xs-hub, секция dc9 — своё имя.
+uci_set network.wan.device wan
+uci_set network.hub.proto xsteer
+uci_set network.dc9.proto xsteer
+uci_set network.dc9.device_name xs-dc9
+
+# `ip` для этого раздела: адреса И МАРШРУТ ПО УМОЛЧАНИЮ. Общая заглушка выше на `route`
+# молчит — там маршруты никого не интересовали; здесь маршрут по умолчанию как раз и
+# опознаёт туннель, через который роутер уходит наружу, когда о нём не сказано больше
+# ничего: ни выхода в спеке, ни proto=xsteer, ни утилиты wg. Форма строки списана с живой
+# машины: `default via 10.0.0.1 dev ens3 onlink`. Заглушка ставится в конце файла и после
+# этого раздела ничего не проверяется — иначе её пришлось бы возвращать на место.
+cat > "$T/bin/ip" <<'EOF'
+#!/bin/sh
+args=" $* "
+case "$args" in
+    *" rule "*) exit 0 ;;
+    *" route "*)
+        case "$args" in
+            *" default "*)
+                [ -n "${IP_DEFAULT_DEV:-}" ] &&
+                    printf 'default via 192.0.2.1 dev %s onlink\n' "$IP_DEFAULT_DEV" ;;
+        esac
+        exit 0 ;;
+esac
+# Адреса — с хвостом после префикса, как у настоящего `ip -4 -o addr show`: разбор обязан
+# брать второе поле после `inet`, а не всю строку.
+echo "3: br-lan    inet 192.168.1.1/24 brd 192.168.1.255 scope global br-lan"
+echo "4: wan    inet 46.42.17.15/22 brd 46.42.19.255 scope global wan"
+echo "9: tailscale0    inet 100.64.1.5/32 scope global tailscale0"
+echo "11: wg-home    inet 10.9.0.1/24 scope global wg-home"
+echo "12: wg-vpn    inet 10.66.0.2/32 scope global wg-vpn"
+exit 0
+EOF
+chmod +x "$T/bin/ip"
+
+# `wg show all allowed-ips`: устройство, ключ пира и разрешённые сети через ТАБУЛЯЦИЮ, сети
+# между собой — через пробел. Форма проверена на живой машине (wireguard-tools, ядерный
+# wireguard): у пира-клиента там стоит 0.0.0.0/0, у пиров сервера — по адресу на пира.
+#
+# WG_SILENT=1 — «утилита есть, а сказать ей нечего»: нет ядерного модуля, нет прав, нет ни
+# одного интерфейса. Признака тогда не существует, и перечень обязан это пережить. Случай
+# «wg не установлен вовсе» стендом не проверяется: заглушка живёт в PATH, а отсутствие в
+# PATH означало бы, что находится настоящий wg машины разработчика, — то есть проверка
+# зависела бы от того, что поднято на ней. В объекте эта ветка закрыта `command -v wg`.
+cat > "$T/bin/wg" <<'EOF'
+#!/bin/sh
+[ -n "${WG_SILENT:-}" ] && exit 1
+case "$*" in
+    "show all allowed-ips")
+        printf 'wg-vpn\tKCLIENT=\t0.0.0.0/0 ::/0\n'
+        printf 'wg-home\tKPEER1=\t10.9.0.2/32\n'
+        printf 'wg-home\tKPEER2=\t10.9.0.3/32 192.168.5.0/24\n'
+        ;;
+esac
+exit 0
+EOF
+chmod +x "$T/bin/wg"
+
+# Причина — СТРОКОЙ, как её прочитает человек: flagof печатает JSON-значение (в кавычках),
+# а здесь проверяется, что в тексте есть нужное слово.
+whyof() { printf '%s' "$1" | python3 -c 'import json,sys
+n=[d for d in json.load(sys.stdin)["nets"] if d["name"]==sys.argv[1]]
+print(n[0].get("why", "ПОЛЯ НЕТ") if n else "НЕТ")' "$2"; }
+
+out="$(IP_DEFAULT_DEV=tun-def SYSNET_FIXTURE="$T/sysnet-src" rpcd client_nets)"
+
+check "негодные в источники из перечня НЕ выброшены" \
+      "br-lan tailscale0 tun-def tun-vless wan wg-b wg-home wg-prov wg-vpn xs-dc9 xs-hub" \
+      "$(names "$out")"
+# ---- признак 1: устройство названо в спеке устройством нашего выхода (точный) ----
+check "устройство выхода kind=vless источником не годится" "false" \
+      "$(flagof "$out" tun-vless usable)"
+check "и причина названа словами, а не кодом" "yes" \
+      "$(whyof "$out" tun-vless | grep -q 'выход' && echo yes || echo no)"
+check "явно названное устройство выхода kind=interface — тоже" "false" \
+      "$(flagof "$out" wg-prov usable)"
+check "и второе устройство пула, которого движок не печатает" "false" \
+      "$(flagof "$out" wg-b usable)"
+# ---- признак 2: маршрут по умолчанию ----
+# Туннель, поднятый руками и никак не названный в наших настройках, опознаётся только так.
+check "через устройство идёт маршрут по умолчанию — значит наружу" "false" \
+      "$(flagof "$out" tun-def usable)"
+check "и про маршрут в причине сказано" "yes" \
+      "$(whyof "$out" tun-def | grep -q 'маршрут' && echo yes || echo no)"
+# ---- признак 3: proto=xsteer в /etc/config/network ----
+check "туннель proto=xsteer с выведенным именем устройства — наш" "false" \
+      "$(flagof "$out" xs-hub usable)"
+check "и он же, названный device_name" "false" "$(flagof "$out" xs-dc9 usable)"
+# ---- признак 4: пиры wireguard ----
+# ГЛАВНОЕ РАЗЛИЧЕНИЕ. Оба устройства — ядерный wireguard, в /sys неотличимы; разница в том,
+# КУДА разрешён трафик пирам: весь мир (мы клиент) против адреса на пира (мы сервер).
+check "wg-клиент до провайдера (у пира 0.0.0.0/0) источником не годится" "false" \
+      "$(flagof "$out" wg-vpn usable)"
+check "сервер wireguard для своих устройств — ЗАКОННЫЙ источник" "true" \
+      "$(flagof "$out" wg-home usable)"
+# ---- wan и обычные сети ----
+# Забирать трафик С wan значило бы заворачивать в туннель то, что из туннеля и вышло.
+check "wan источником не предлагается" "false" "$(flagof "$out" wan usable)"
+check "домашний мост годится" "true" "$(flagof "$out" br-lan usable)"
+check "tailscale0 годится: через него к нам как раз приходят" "true" \
+      "$(flagof "$out" tailscale0 usable)"
+check "у годного причины отказа нет" "" "$(whyof "$out" br-lan)"
+# Причина нужна на КАЖДОМ негодном: пустая строка на экране — это серая строка без
+# объяснения, то есть ровно то «куда делся мой wg0», от которого перечень и защищает.
+check "у каждого негодного причина непустая" "" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys
+print(" ".join(d["name"] for d in json.load(sys.stdin)["nets"]
+                if not d.get("usable", True) and not d.get("why")))')"
+# ---- прежние поля не сломаны: их читает вкладка ----
+check "wan по-прежнему помечен своим полем" "true" "$(flagof "$out" wan wan)"
+check "подсеть моста на месте" "192.168.1.0/24" "$(netof "$out" br-lan)"
+check "поднятость на месте" "true" "$(flagof "$out" br-lan up)"
+
+# ---- wg молчит: признака нет, а перечень есть ----
+out="$(WG_SILENT=1 IP_DEFAULT_DEV=tun-def SYSNET_FIXTURE="$T/sysnet-src" rpcd client_nets)"
+check "без ответа wg перечень всё равно собирается" "true" "$(flagof "$out" br-lan usable)"
+check "и законный источник не запрещён заодно" "true" "$(flagof "$out" wg-home usable)"
+# Обратная сторона названа здесь честно: без wg клиент до провайдера ничем не отличается от
+# сервера, и перечень его предложит. Запрещать всё ядерное wireguard «на всякий случай»
+# хуже: это отняло бы у человека тот самый случай, ради которого перечень заведён. Точный
+# признак остаётся на месте — заведите на этот туннель выход, и он уйдёт из источников.
+check "wg-клиента без wg отличить нечем — и он остаётся предложенным" "true" \
+      "$(flagof "$out" wg-vpn usable)"
+# А то, что названо в спеке, молчание wg не спасает: признак спеки от wg не зависит.
+check "устройство выхода негодно и без wg" "false" "$(flagof "$out" wg-prov usable)"
+
+# ---- бэкенд старее приговора: поля просто нет ----
+# Проверять здесь нечего кроме того, что поле ПЕЧАТАЕТСЯ ВСЕГДА: «поля нет» и «поле false»
+# вкладка обязана различать, иначе на старом объекте она покрасила бы серым весь список.
+check "приговор печатается и у годного устройства, а не только у негодного" "true" \
+      "$(flagof "$out" br-lan usable)"
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo "ЕСТЬ ПРОВАЛЫ: $fails")"
 [ "$fails" -eq 0 ]
