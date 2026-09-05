@@ -88,7 +88,12 @@ case "$2" in
         # depends нет самого движка (см. шапку build.sh).
         zp_installed && { json_init; json_add_boolean ok 1
                           json_add_string note "обход DPI уже установлен"; json_dump; exit 0; }
-        arch="$(awk -F\' '/DISTRIB_ARCH/ { print $2 }' /etc/openwrt_release 2>/dev/null)"
+        # Через шов OPENWRT_RELEASE, а не литеральным путём: диспетчер объявляет его ровно
+        # для этого («по второму выбирается архитектура пакета»), им же читает архитектуру
+        # pkg_arch в группе движка, и второй читатель мимо шва означал бы установку обхода,
+        # которую нечем проверить стендом. Значение шва по умолчанию — тот же
+        # /etc/openwrt_release, так что на роутере не меняется ничего.
+        arch="$(awk -F\' '/DISTRIB_ARCH/ { print $2 }' "$OPENWRT_RELEASE" 2>/dev/null)"
         [ -n "$arch" ] || fail "не определилась архитектура роутера"
         ver="${ZAPRET_VERSION:-72.20260307}"
         url="https://github.com/remittor/zapret-openwrt/releases/download/v$ver/zapret_v${ver}_${arch}.zip"
