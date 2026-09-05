@@ -419,6 +419,137 @@ check "проверка ключей: обычный файл с перевод�
     "$(grep -c -- '--dpi-desync=fake' "$zp_nfqws_args" 2>/dev/null; true)"
 ZP_NFQWS="$tmp/nfqws-none"
 
+# ---- СБОРКА ПАЧКИ: слои переживают смену основной стратегии --------------------------
+#
+# У Zapret Manager значение `option NFQWS_OPT` — не одна стратегия, а пачка блоков: слой
+# YouTube первым, основная, внутри неё подмена блока discord.media, в хвосте игровой. Слои
+# не конкурируют с основной (у них разные hostlist'ы), поэтому менеджер после применения
+# победителя восстанавливает все три — restore_yv_number, restore_dv_number, fix_GAME.
+#
+# У нас до запуска 65 сохранялся только игровой. Значит выбор основной стратегии МОЛЧА
+# снимал выбор человека по YouTube и discord.media: он один раз настроил Yv05, потом
+# поменял основную — и Yv05 больше нет, ни строки об этом.
+#
+# Каталог здесь свой, с полным набором семейств: слои проверяются на настоящих блоках, а не
+# на выдуманных, потому что весь разбор границ блока стоит на их форме.
+cat > "$ZP_CATALOG" <<'CATEOF'
+#v1
+--filter-tcp=443
+--hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt
+--dpi-desync=split2
+
+#v2
+--filter-tcp=443
+--hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt
+--dpi-desync=multisplit
+--new
+--filter-tcp=2053,2083,2087,2096,8443
+--hostlist-domains=discord.media
+--dpi-desync=multisplit
+
+#general1
+--filter-tcp=443
+--hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
+--dpi-desync=multisplit
+--new
+--filter-tcp=2802
+--dpi-desync=multisplit
+
+#Yv01
+--filter-tcp=443
+--hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
+--ip-id=zero
+--dpi-desync=multisplit
+
+#Yv02
+--filter-tcp=443
+--hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
+--dpi-desync=fake
+
+#Dv1
+--filter-tcp=2053,2083,2087,2096,8443
+--hostlist-domains=discord.media
+--dpi-desync=multisplit
+--dpi-desync-split-seqovl=652
+
+#Dv2
+--filter-tcp=2053,2083,2087,2096,8443
+--hostlist-domains=discord.media
+--dpi-desync=fake,multisplit
+--dpi-desync-split-seqovl=681
+CATEOF
+printf "config zapret 'config'\n\toption NFQWS_OPT '\n#v1\n--filter-tcp=443\n'\n\toption NFQWS_PORTS_TCP '80,443'\n\toption NFQWS_PORTS_UDP '443'\n" > "$ZP_CONF"
+
+zp_apply_global v1 >/dev/null 2>&1
+check "слой: основная применена" "v1" "$(zp_active_global)"
+zp_yv_set 01 >/dev/null 2>&1
+check "слой YouTube поставлен" "01" "$(zp_yv_get)"
+# Слой узкий и обязан стоять РАНЬШЕ широкой основной, иначе та заберёт хосты Google себе.
+check "и стоит ПЕРЕД основной" "yes" \
+    "$([ "$(grep -n '^#Yv01$' "$ZP_CONF" | cut -d: -f1)" -lt \
+        "$(grep -n '^#v1$' "$ZP_CONF" | cut -d: -f1)" ] && echo yes || echo no)"
+check "и заканчивается --new, иначе слипнется с основной" "yes" \
+    "$(awk '/^#Yv01$/{f=1;next} f&&/^#v1$/{print "no";exit} f&&/^--new$/{print "yes";exit}' "$ZP_CONF")"
+# Активной обязана считаться ОСНОВНАЯ, а не первая метка: слой стоит первым, и прежняя
+# редакция zp_active_global отвечала на этот вопрос «Yv01» — то есть в интерфейсе выбранной
+# оказывалась стратегия для YouTube, а настоящая основная не показывалась вовсе.
+check "активной считается основная, а не слой" "v1" "$(zp_active_global)"
+
+zp_apply_global v2 >/dev/null 2>&1
+check "смена основной: она применилась" "v2" "$(zp_active_global)"
+check "смена основной: слой YouTube ВЫЖИЛ" "01" "$(zp_yv_get)"
+check "и по-прежнему один, а не два" "1" "$(grep -c '^#Yv' "$ZP_CONF")"
+
+zp_dv_set 2 >/dev/null 2>&1
+check "слой discord поставлен" "2" "$(zp_dv_get)"
+check "блок портов discord ровно один" "1" \
+    "$(grep -c -- '^--filter-tcp=2053,2083,2087,2096,8443$' "$ZP_CONF")"
+check "и это блок ИЗ КАТАЛОГА, а не прежний" "1" \
+    "$(grep -c -- '--dpi-desync-split-seqovl=681' "$ZP_CONF")"
+
+zp_apply_global v2 >/dev/null 2>&1
+check "смена основной: оба слоя выжили (YouTube)" "01" "$(zp_yv_get)"
+check "смена основной: оба слоя выжили (discord)" "2" "$(zp_dv_get)"
+
+# Слой YouTube НЕ ставится на стратегию со своим блоком Google: иначе два блока на одни
+# хосты, и обрабатывать будет первый, а человек считает, что выбрал второй.
+zp_apply_global general1 >/dev/null 2>&1
+check "general: применена" "general1" "$(zp_active_global)"
+check "general: слой YouTube не дублирует её собственный блок Google" "0" \
+    "$(grep -c '^#Yv' "$ZP_CONF")"
+check "и блок Google в значении ровно один" "1" \
+    "$(grep -c -- '^--hostlist=/opt/zapret/ipset/zapret-hosts-google.txt$' "$ZP_CONF")"
+# И собственный блок general НЕ СЪЕДЕН снятием слоя. Первая редакция zp_yv_clear опознавала
+# блок по форме (`--filter-tcp=443` плюс hostlist Google) и съедала его: у general он
+# выглядит ровно так же. Теперь опознаётся по метке.
+check "general: её собственный блок Google на месте" "1" \
+    "$(grep -c -- '^--ip-id=zero$' "$ZP_CONF" | grep -c '^0$')"
+check "general: и её второй блок тоже" "1" "$(grep -c -- '^--filter-tcp=2802$' "$ZP_CONF")"
+
+printf "config zapret 'config'\n\toption NFQWS_OPT '\n#v1\n--filter-tcp=443\n'\n" > "$ZP_CONF"
+zp_apply_global v1 >/dev/null 2>&1
+zp_yv_set 01 >/dev/null 2>&1
+zp_yv_set 0 >/dev/null 2>&1
+check "снятие слоя: метки нет" "" "$(zp_yv_get)"
+check "снятие слоя: блока Google тоже нет" "0" \
+    "$(grep -c -- 'zapret-hosts-google' "$ZP_CONF")"
+check "снятие слоя: основная на месте" "v1" "$(zp_active_global)"
+
+zp_yv_set 01 >/dev/null 2>&1
+zp_yv_set 02 >/dev/null 2>&1
+check "замена слоя: номер новый" "02" "$(zp_yv_get)"
+check "замена слоя: метка одна" "1" "$(grep -c '^#Yv' "$ZP_CONF")"
+check "замена слоя: блок Google один" "1" \
+    "$(grep -c -- '^--hostlist=/opt/zapret/ipset/zapret-hosts-google.txt$' "$ZP_CONF")"
+check "замена слоя: это блок нового номера" "1" "$(grep -c -- '^--dpi-desync=fake$' "$ZP_CONF")"
+
+# Слой на стратегию БЕЗ его блока не ставится, и это отказ, а не тишина: у разных стратегий
+# разный состав блоков, и притворяться, что поставили, нельзя.
+printf "config zapret 'config'\n\toption NFQWS_OPT '\n#v1\n--filter-tcp=443\n'\n" > "$ZP_CONF"
+zp_apply_global v1 >/dev/null 2>&1
+check "discord на стратегию без его блока — отказ" "1" "$(zp_dv_set 2 >/dev/null 2>&1; echo $?)"
+check "и метки не появилось" "" "$(zp_dv_get)"
+
 printf '\n%d проверок пройдено' "$pass"
 # ---- выключатель обхода всего роутера -------------------------------------------------
 # «Как мне отключить стратегию на весь роутер?» — владелец. Выключается СЛУЖБА, а не

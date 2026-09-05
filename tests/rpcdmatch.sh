@@ -2588,6 +2588,49 @@ out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_state)"
 check "пропавшая из каталога не выдаётся за расхождение" "false" \
       "$(printf '%s' "$out" | jget drifted)"
 
+
+# ---- слой применяется как слой, а не как основная стратегия ---------------------------
+#
+# Значение `option NFQWS_OPT` — пачка блоков: слой YouTube, основная, подмена блока
+# discord.media внутри неё, игровой в хвосте. Слои не конкурируют с основной (у них разные
+# hostlist'ы), и применять их надо ВСТАВКОЙ в уже собранное значение.
+#
+# Проверяется здесь самое дорогое: что применение слоя НЕ подменяет основную. До запуска 65
+# каталог был плоским списком, `zapret_apply {"name":"Yv01"}` уходил в zp_apply_global, тот
+# срезал всё от открывающей кавычки до конца файла и писал один блок — Google начинал
+# работать, а весь остальной трафик тихо оставался без обхода.
+printf '#v1\n--filter-tcp=443\n--hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt\n\n#Yv01\n--filter-tcp=443\n--hostlist=/opt/zapret/ipset/zapret-hosts-google.txt\n--ip-id=zero\n\n#Dv2\n--filter-tcp=2053,2083,2087,2096,8443\n--hostlist-domains=discord.media\n--dpi-desync=fake,multisplit\n' \
+    > "$T/zapret/strategies.txt"
+printf "config zapret 'config'\n\toption NFQWS_OPT '\n#v1\n--filter-tcp=443\n'\n" > "$T/etc/config-zapret"
+
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_apply '{"name":"v1"}')"
+check "основная применена" "true" "$(printf '%s' "$out" | jget ok)"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_apply '{"name":"Yv01"}')"
+check "слой YouTube применён" "true" "$(printf '%s' "$out" | jget ok)"
+check "и ответ называет его слоем, а не стратегией" "youtube" "$(printf '%s' "$out" | jget layer)"
+# САМОЕ ГЛАВНОЕ: основная осталась на месте.
+check "основная НЕ подменена слоем" "v1" "$(printf '%s' "$out" | jget active)"
+check "и в конфигурации она есть" "1" "$(grep -c '^#v1$' "$T/etc/config-zapret")"
+check "а слой стоит рядом" "1" "$(grep -c '^#Yv01$' "$T/etc/config-zapret")"
+
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_state)"
+check "состояние показывает слой YouTube" "01" "$(printf '%s' "$out" | jget layers.youtube)"
+check "и активной по-прежнему основную" "v1" "$(printf '%s' "$out" | jget active)"
+
+# Слой к выходу kind=zapret не применяется: у выхода своя стратегия целиком, и «слой поверх»
+# там означал бы файл ключей, собранный из двух источников.
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_apply '{"name":"Yv01","out":"zt"}')"
+check "слой к выходу — отказ" "false" "$(printf '%s' "$out" | jget ok)"
+check "и причина названа" "yes" \
+      "$(printf '%s' "$out" | grep -q 'ко всему роутеру' && echo yes || echo no)"
+
+# Слой, которому не к чему прикрепиться, отвергается С ПРИЧИНОЙ, а не молча: у стратегии v1
+# нет блока портов discord.media, подменять нечего.
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_apply '{"name":"Dv2"}')"
+check "слой discord без своего блока — отказ" "false" "$(printf '%s' "$out" | jget ok)"
+check "и сказано, чего не хватает" "yes" \
+      "$(printf '%s' "$out" | grep -q 'discord.media' && echo yes || echo no)"
+
 # Игровой блок дописан ПОВЕРХ стратегии соседней функцией, в каталоге его нет и быть не
 # может (zp_block обрывается на следующем `#`). Без оговорки про него каждый роутер с
 # игровым фильтром выглядел бы разошедшимся всегда.
