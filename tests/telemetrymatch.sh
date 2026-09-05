@@ -115,6 +115,14 @@ printf 'Xiaomi "AX3000T" \\ v1\n' > "$T/etc/model"
 printf "DISTRIB_RELEASE='24.10.0'\nDISTRIB_DESCRIPTION='OpenWrt 24.10.0 r28427'\n" \
     > "$T/etc/openwrt_release"
 
+# Ответ собственного объекта rpcd — и печатает его НЕ движок, а jshn (`json_dump`), то есть
+# С ПРОБЕЛОМ ПОСЛЕ ДВОЕТОЧИЯ и булевыми `true`/`false`, а не единицами. Форма здесь взята с
+# живого роутера дословно: пока стенд подставлял вместо объекта несуществующий файл, разбор
+# этого ответа не проверялся ни разу — и не совпадал ни разу, отчего пакет говорил «движка на
+# роутере нет» на каждом роутере, где движок есть.
+engine_says() { printf '#!/bin/sh\nprintf %%s %s\n' "$(printf '%s' "$1" | sed "s/'/'\\\\''/g; s/^/'/; s/\$/'/")" > "$T/rpcd-obj"; chmod +x "$T/rpcd-obj"; }
+engine_says '{ "present": true, "vless": true, "enabled": false, "running": true, "arch": "aarch64_cortex-a53", "version": "1.3.0" }'
+
 # ---- СНАЧАЛА ПРОВЕРЯЕТСЯ САМА ФИКСТУРА ---------------------------------------------------
 # Иначе ниже проверялась бы не защита пакета, а собственная опечатка в песочнице: запрет
 # «секрета в пакете нет» зелен и тогда, когда секрета нет и в песочнице.
@@ -138,7 +146,7 @@ build() {
     STEER="$STEER_BIN" SPEC="$T/etc/spec.json" LISTS="$T/lists" GEO_DIR="$T/var" \
     SYSINFO_MODEL="$T/etc/model" OPENWRT_RELEASE="$T/etc/openwrt_release" \
     BUILD_ID_FILE="$T/etc/build-id" TM_BOOT_FILE="$T/var/boot" TM_EVENTS="$T/var/events" \
-    RPCD_OBJ="$T/none" TM_NET_FILE="$T/var/net" UCI_SPLIFY2="$T/etc/config-splify2" \
+    RPCD_OBJ="$T/rpcd-obj" TM_NET_FILE="$T/var/net" UCI_SPLIFY2="$T/etc/config-splify2" \
     ZAPRET_SH="$ROOT/files/usr/lib/splify2/zapret.sh" \
     DOH_SH="$ROOT/files/usr/lib/splify2/doh.sh" \
     ZP_DIR="$T/zapret" ZP_CATALOG="$T/zapret/strategies.txt" ZP_CONF="$T/etc/config-zapret" \
@@ -192,6 +200,25 @@ check "домен панели подписки — две последние м
 check "и признак «меток было больше» поднят" "True" "$(j 'd["subs"][0]["deep"]')"
 check "вторая подписка тоже без логина и порта" "example.com" "$(j 'd["subs"][1]["host"]')"
 check "приговоры проверок — тремя списками" "['fail', 'warn', 'note']" "$(j 'list(d["diag"].keys())')"
+# ---- ответ СОБСТВЕННОГО объекта rpcd ----
+# Форма ответа тут другая, чем у движка: пробел после двоеточия и настоящие булевы значения.
+# Каждая проверка ниже была бы зелена на пустом ответе — потому и стоит рядом с ними та, что
+# требует НЕ absent: именно absent приходил на каждом живом роутере.
+check "архитектура из ответа объекта" "aarch64_cortex-a53" "$(j 'd["dev"]["arch"]')"
+check "версия движка из ответа объекта" "1.3.0" "$(j 'd["ver"]["steer"]')"
+check "вид сборки движка — расширенная" "extended" "$(j 'd["ver"]["steer_kind"]')"
+check "и движок назван работающим" "True" "$(j 'd["ver"]["steer_up"]')"
+engine_says '{ "present": true, "vless": false, "enabled": true, "running": false, "arch": "mipsel_24kc", "version": "1.2.9" }'
+pkt="$(build)"
+check "базовая сборка отличается от расширенной" "base" "$(j 'd["ver"]["steer_kind"]')"
+check "и остановленный движок виден" "False" "$(j 'd["ver"]["steer_up"]')"
+engine_says '{ "present": false, "vless": false, "enabled": false, "running": false }'
+pkt="$(build)"
+check "движка нет — так и сказано" "absent" "$(j 'd["ver"]["steer_kind"]')"
+check "и архитектуры тогда нет вовсе" "yes" \
+      "$(printf '%s' "$pkt" | python3 -c 'import json,sys; print("yes" if "arch" not in json.load(sys.stdin)["dev"] else "нет")')"
+engine_says '{ "present": true, "vless": true, "enabled": false, "running": true, "arch": "aarch64_cortex-a53", "version": "1.3.0" }'
+pkt="$(build)"
 check "счётчики событий на месте" "0" "$(j 'd["ev"]["wan_down"]')"
 
 # ---- согласие ----------------------------------------------------------------------------
@@ -365,7 +392,7 @@ send() {  # АРГУМЕНТЫ команды отправки
     STEER="$STEER_BIN" SPEC="$T/etc/spec.json" LISTS="$T/lists" GEO_DIR="$T/var" \
     SYSINFO_MODEL="$T/etc/model" OPENWRT_RELEASE="$T/etc/openwrt_release" \
     BUILD_ID_FILE="$T/etc/build-id" TM_BOOT_FILE="$T/var/boot" TM_EVENTS="$T/var/events" \
-    RPCD_OBJ="$T/none" TM_NET_FILE="$T/var/net" UCI_SPLIFY2="$T/etc/config-splify2" \
+    RPCD_OBJ="$T/rpcd-obj" TM_NET_FILE="$T/var/net" UCI_SPLIFY2="$T/etc/config-splify2" \
     TM_CURL="$T/bin/curl" \
     ZAPRET_SH="$ROOT/files/usr/lib/splify2/zapret.sh" \
     DOH_SH="$ROOT/files/usr/lib/splify2/doh.sh" \
@@ -406,10 +433,12 @@ check "и адрес у curl ровно один" "1" \
       "$(grep -c '^https://panel.example/ingest$' "$T/curl.argv" || true)"
 check "ключа отдельным словом среди аргументов нет" "0" \
       "$(grep -cx 'K3Y SECRET' "$T/curl.argv" || true)"
-# Без ключа заголовка нет вовсе — а не пустой заголовок.
+# Ключа нет НИГДЕ — ни в настройке, ни зашитого: тогда заголовка нет вовсе, а не пустой.
+# Пустой заголовок панель прочла бы как «ключ прислали, и он неверный», ответила бы 401, а по
+# 401 роутер гасит телеметрию сам себе — то есть сборка без ключа выключала бы её у всех.
 sed -i '/^splify2.main.telemetry_key=/d' "$T/uci.db"
-send --send >/dev/null 2>&1
-check "без ключа заголовка нет вовсе" "0" \
+TM_KEY_DEF='' send --send >/dev/null 2>&1
+check "ключа нет нигде — заголовка нет вовсе" "0" \
       "$(grep -c 'X-Splify2-Key' "$T/curl.argv" || true)"
 uset splify2.main.telemetry_key "K3Y SECRET"
 
@@ -482,11 +511,29 @@ mv "$T/bin/curl" "$T/curl.hidden"
 send --send >/dev/null 2>&1
 check "без curl отправка — честный отказ" "1" "$?"
 mv "$T/curl.hidden" "$T/bin/curl"
-# И адрес панели: без него отправлять некуда, и это тоже отказ, а не тишина.
-sed -i '/^splify2.main.telemetry_url=/d' "$T/uci.db"
+# ---- адрес панели и ключ: умолчание зашито, настройка ПЕРЕОПРЕДЕЛЯЕТ ----
+#
+# Зашитое умолчание — это то, с чем пакет уезжает людям, и оно обязано работать на роутере,
+# где ключей настройки нет вовсе: `uci-defaults` отрабатывает один раз при установке, а
+# восстановление из архива и правка руками его не повторяют. Проверяется по следствию: что
+# именно увидел curl в аргументах.
+sed -i '/^splify2.main.telemetry_url=/d; /^splify2.main.telemetry_key=/d' "$T/uci.db"
 send --send >/dev/null 2>&1
-check "без адреса панели — честный отказ" "1" "$?"
+check "без ключей настройки отправка всё равно уходит" "0" "$?"
+check "и уходит по ЗАШИТОМУ адресу панели" "1" \
+      "$(grep -cx 'https://splify2-telemetry-panel.vercel.app/api/ingest' "$T/curl.argv" || true)"
+check "и с ЗАШИТЫМ ключом записи" "1" \
+      "$(grep -cx 'X-Splify2-Key: 3056a9de05e4085a4f57b0410fc45cb0' "$T/curl.argv" || true)"
+# Своя панель поднимается одной строкой в настройке и без правки пакета.
 uset splify2.main.telemetry_url "https://panel.example/ingest"
+uset splify2.main.telemetry_key "K3Y SECRET"
+send --send >/dev/null 2>&1
+check "настройка переопределяет зашитый адрес" "1" \
+      "$(grep -cx 'https://panel.example/ingest' "$T/curl.argv" || true)"
+check "и зашитого адреса среди аргументов тогда нет" "0" \
+      "$(grep -c 'vercel.app' "$T/curl.argv" || true)"
+check "настройка переопределяет и ключ" "1" \
+      "$(grep -cx 'X-Splify2-Key: K3Y SECRET' "$T/curl.argv" || true)"
 
 # Пакет с настройками роутера не остаётся лежать в /tmp.
 send --send >/dev/null 2>&1
