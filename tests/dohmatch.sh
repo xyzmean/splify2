@@ -114,6 +114,80 @@ printf "config https-dns-proxy\n\toption resolver_url 'https://dns.example/dns-q
 check "чужая ссылка не выдаётся за пункт каталога" "1" "$(doh_active >/dev/null; echo $?)"
 check "но сама ссылка отдаётся" "https://dns.example/dns-query" "$(doh_urls)"
 
+# ---- копия чужой настройки ----------------------------------------------------
+# ГЛАВНОЕ, ЧТО СТОРОЖИТ ЭТОТ РАЗДЕЛ. Файл /etc/config/https-dns-proxy принадлежит чужому
+# пакету, и человек мог вписать в него свой резолвер руками. Наша запись переписывает файл
+# целиком, поэтому перед первой записью с него снимается копия — и она обязана уцелеть при
+# любом порядке вызовов. Опасен здесь не отказ, а успех: переснятая копия выглядит как копия,
+# но содержит уже НАШУ настройку, и оригинал после этого не вернуть ничем.
+alien_write() {
+    cat > "$DOH_CONF" <<'ALIEN'
+config main 'config'
+	option force_dns '1'
+	option dnsmasq_config_update '*'
+
+config https-dns-proxy
+	option resolver_url 'https://dns.example/dns-query'
+	option listen_port '5053'
+# свой резолвер, вписан руками: don't touch
+ALIEN
+}
+# Сравнение — с оригиналом БЕЗ пустых строк: пустая строка в uci-файле только оформление, и в
+# копию она не берётся нарочно (см. doh_backup_save).
+alien_diff() { grep -v '^[[:space:]]*$' "$tmp/alien" | diff - "$DOH_CONF"; }
+
+alien_write
+cp "$DOH_CONF" "$tmp/alien"
+doh_write cloudflare
+check "наш резолвер записан поверх чужого" "cloudflare" "$(doh_active)"
+check "чужая ссылка больше не действует" "0" "$(doh_urls | grep -c 'dns.example')"
+check "копия чужой настройки снята" "saved" "$(doh_backup_state)"
+check "в копии лежит чужая ссылка" "1" \
+    "$(doh_backup_lines | grep -c "resolver_url 'https://dns.example/dns-query'")"
+# Комментарии и апострофы — не мелочь: в чужом файле руками пишут именно их, а копия хранится
+# в uci-значениях, где апостроф — разделитель.
+check "комментарий с апострофом уцелел" "1" "$(doh_backup_lines | grep -c "don't touch")"
+
+# Вторая запись копию НЕ переснимает — то самое падение между копией и восстановлением.
+doh_write default
+check "копия не переснимается второй записью" "1" "$(doh_backup_lines | grep -c 'dns.example')"
+check "нашей настройки в копии нет" "0" "$(doh_backup_lines | grep -c 'heartbeat')"
+check "и выбранный резолвер читается по-прежнему" "default" "$(doh_active)"
+
+doh_restore
+check "восстановление отдало чужой файл как был" "" "$(alien_diff)"
+check "копии после восстановления нет" "" "$(doh_backup_state)"
+# Второе восстановление обязано быть ничем: файл уже чужой, и «вернуть оригинал» повторно
+# означало бы затереть его тем, чего в копии больше нет.
+doh_restore
+check "повторное восстановление ничего не портит" "" "$(alien_diff)"
+
+# Конфига до нас не было вовсе — это тоже состояние, и восстановить его значит удалить наш.
+rm -f "$DOH_CONF"
+doh_write cloudflare
+check "конфига не было — так и записано" "none" "$(doh_backup_state)"
+doh_write comss
+check "и это состояние переносится дальше" "none" "$(doh_backup_state)"
+doh_restore
+check "восстановление пустоты — наш файл удаляется" "1" \
+    "$([ -e "$DOH_CONF" ] && echo 0 || echo 1)"
+
+# Первая наша запись в этот файл — не обязательно doh_write: force_dns правится и из apply, и
+# из установки пакета, то есть задолго до того, как человек выберет резолвер на вкладке.
+alien_write
+doh_backup_save
+check "копия снимается и до выбора резолвера" "saved" "$(doh_backup_state)"
+check "чужая настройка при этом на месте" "1" "$(doh_urls | grep -c 'dns.example')"
+doh_write xbox
+check "снятая раньше копия записью не переснимается" "1" "$(doh_backup_lines | grep -c 'dns.example')"
+
+# Файл, которого мы не касались, восстановлению не подлежит: копии нет — значит и оригинал
+# никто не забирал, а удалить его здесь значило бы снести чужую настройку под видом отката.
+alien_write
+doh_restore
+check "чужой файл без копии не удаляется" "1" "$([ -s "$DOH_CONF" ] && echo 1 || echo 0)"
+check "и остаётся дословно как был" "" "$(diff "$tmp/alien" "$DOH_CONF")"
+
 printf '\n%d проверок пройдено' "$pass"
 if [ "$fail" -gt 0 ]; then printf ', %d ПРОВАЛЕНО\n' "$fail"; exit 1; fi
 printf '\nвсе проверки прошли\n'

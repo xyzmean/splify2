@@ -255,8 +255,17 @@ EOF
     echo '{"outputs":{}}' > "$T/etc/steer/spec.applied.json"
     echo 'https://panel.example/sub' > "$T/etc/steer/sub.txt"
     printf "config splify2 'main'\n\toption sub 'x'\n" > "$T/etc/config/splify2"
-    printf "config main 'config'\n\toption force_dns '%s'\n\nconfig https-dns-proxy\n\toption resolver_url 'https://cloudflare-dns.com/dns-query'\n" \
-        "$_fd" > "$T/etc/config/https-dns-proxy"
+    # Конфиг DoH — в том виде, в каком его оставляет doh_write: наша настройка плюс СЕКЦИЯ
+    # КОПИИ с чужой редакцией. Признаком «писали мы» служит именно метка копии, а не
+    # значение force_dns: тот правит и Zapret Manager, и после его правки purge посчитал бы
+    # файл чужим и оставил бы нашу настройку на роутере навсегда.
+    {
+        printf "config main 'config'\n\toption force_dns '%s'\n\n" "$_fd"
+        printf "config https-dns-proxy\n\toption resolver_url 'https://cloudflare-dns.com/dns-query'\n\n"
+        printf "config splify2_backup 'splify2'\n"
+        printf "\toption splify2_state 'saved'\n"
+        printf "\tlist splify2_orig 'option resolver_url https://dns.foreign/dns-query'\n"
+    } > "$T/etc/config/https-dns-proxy"
     printf '%s\n%s\n' '0 3 * * * /usr/bin/чужое-обновление' \
         '17 5 * * * /usr/sbin/splify2-update-lists' > "$T/etc/crontabs/root"
     : > "$T/var/run/splify2-vless-dirty"
@@ -273,6 +282,7 @@ run_purge() {  # КЛЮЧИ СКРИПТА
     STEER_DIR="$T/etc/steer" \
     UCI_SPLIFY2="$T/etc/config/splify2" \
     DOH_CONF="$T/etc/config/https-dns-proxy" \
+    DOH_LIB="${PURGE_DOH_LIB:-$ROOT/files/usr/lib/splify2/doh.sh}" \
     CRONTAB="$T/etc/crontabs/root" \
     CRON_INITD="$T/bin/initd-cron" \
     INITD="$T/bin/initd-steer" \
@@ -344,7 +354,18 @@ check "срок вызова rpcd снят" "no" "$(has 'rpcd.@rpcd[0].timeout=1
 # Ключ ЧУЖОГО пакета не удаляется, а возвращается к его умолчанию: ноль в нём — это наше
 # «обход выключен», и уйти, оставив человека без автозапуска обхода, значило бы наследить.
 check "run_on_boot возвращён zapret-у" "1" "$(val 'zapret\.config\.run_on_boot')"
-check "конфиг DoH удалён" "no" "$(exists "$T/etc/config/https-dns-proxy")"
+# КОНФИГ DoH НЕ УДАЛЯЕТСЯ, А ВОССТАНАВЛИВАЕТСЯ. `doh_write` переписывает этот файл чужого
+# пакета целиком, и до запуска 65 чужая настройка терялась безвозвратно; теперь она лежит
+# копией в том же файле. Уйти, не вернув её, значило бы наследить ровно тем, чего эта
+# команда и призвана не делать.
+check "конфиг DoH на месте — он восстановлен, а не удалён" "yes" \
+    "$(exists "$T/etc/config/https-dns-proxy")"
+check "и в нём чужая редакция" "1" \
+    "$(grep -c 'dns.foreign' "$T/etc/config/https-dns-proxy")"
+check "нашей настройки в нём не осталось" "0" \
+    "$(grep -c 'cloudflare-dns' "$T/etc/config/https-dns-proxy")"
+check "и метки копии тоже" "0" \
+    "$(grep -c 'splify2_state' "$T/etc/config/https-dns-proxy")"
 check "каталог /etc/splify2 удалён" "no" "$(exists "$T/etc/splify2")"
 check "каталог настроек движка удалён" "no" "$(exists "$T/etc/steer")"
 check "настройка splify2 удалена" "no" "$(exists "$T/etc/config/splify2")"
@@ -444,6 +465,22 @@ run_purge --yes-please
 check "неизвестный ключ — отказ" "2" "$rc"
 check "и ничего не удалено" "" "$(del_seq)"
 check "и спека на месте" "yes" "$(exists "$T/etc/steer/spec.json")"
+
+# ---- нечем восстановить — не сносим -------------------------------------------------
+#
+# Команду зовут и ПОСЛЕ снятия пакетов, когда /usr/lib/splify2/doh.sh на роутере уже нет.
+# Копия чужой настройки при этом в файле лежит, а вернуть её нечем. Удалить файл в такой
+# ситуации значило бы снести чужой резолвер безвозвратно — а оставленный наш человек хотя
+# бы увидит и уберёт сам. Необратимое хуже заметного.
+setup
+PURGE_DOH_LIB="$T/нет-такой-библиотеки"
+export PURGE_DOH_LIB
+run_purge --yes
+unset PURGE_DOH_LIB
+check "без библиотеки конфиг DoH оставлен" "yes" "$(exists "$T/etc/config/https-dns-proxy")"
+check "и сказано, почему" "yes" "$(outhas 'восстановить нечем')"
+check "чужая редакция в копии цела" "1" \
+    "$(grep -c 'dns.foreign' "$T/etc/config/https-dns-proxy")"
 
 printf '\n%d проверок пройдено' "$pass"
 if [ "$fail" -gt 0 ]; then printf ', %d ПРОВАЛЕНО\n' "$fail"; exit 1; fi
