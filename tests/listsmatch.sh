@@ -40,32 +40,42 @@ mkdir -p "$T/bin" "$T/lists/domains" "$T/etc" "$T/var"
 # jsonfilter: поддерживаются ровно те выражения, которые использует скрипт.
 cat > "$T/bin/jsonfilter" <<'EOF'
 #!/bin/sh
-file=""; expr=""
+# НЕСКОЛЬКО -e В ОДНОМ ВЫЗОВЕ, как это делает настоящий jsonfilter. Прежняя заглушка
+# запоминала только последнее выражение, и вызов `-e prefixes_files -e domains_files`
+# (именно так спрашивает fetch_missing_lists) отдавал одни доменные списки. Из-за этого
+# стенд не видел половину работы: адресные файлы спеки в цикл доскачивания не попадали
+# вовсе, и проверка на них была бы зелена при любом поведении кода.
+file=""
+exprs=""
 while [ $# -gt 0 ]; do
     case "$1" in
         -i) file="$2"; shift 2 ;;
-        -e) expr="$2"; shift 2 ;;
+        # Выражения СКЛАДЫВАЮТСЯ в аргументы, а не в stdin: тело заглушки приходит сюда
+        # heredoc-ом, то есть stdin занят, и прочитанное оттуда было бы исходником python.
+        -e) exprs="$exprs $2"; shift 2 ;;
         *) shift ;;
     esac
 done
-python3 - "$file" "$expr" <<'PY'
+# shellcheck disable=SC2086
+python3 - "$file" $exprs <<'PY'
 import json, sys
-path, expr = sys.argv[1], sys.argv[2]
+path = sys.argv[1]
 try:
     d = json.load(open(path, encoding='utf-8'))
 except Exception:
     sys.exit(1)
-if expr == '@.base_url':
+for expr in sys.argv[2:]:
+  if expr == '@.base_url':
     print(d.get('base_url', ''))
-elif expr in ('@.categories[*].file', '@.domain_lists[*].file'):
+  elif expr in ('@.categories[*].file', '@.domain_lists[*].file'):
     key = 'categories' if 'categories' in expr else 'domain_lists'
     for e in d.get(key, []):
         print(e['file'])
-elif expr in ('@.aliases[*].from', '@.aliases[*].to'):
+  elif expr in ('@.aliases[*].from', '@.aliases[*].to'):
     field = expr.rsplit('.', 1)[1]
     for e in d.get('aliases', []):
         print(e[field])
-elif expr.endswith('prefixes_files[*]') or expr.endswith('domains_files[*]'):
+  elif expr.endswith('prefixes_files[*]') or expr.endswith('domains_files[*]'):
     field = 'prefixes_files' if 'prefixes' in expr else 'domains_files'
     for ch in d.get('channels', []):
         for f in ch.get('match', {}).get(field, []):
@@ -685,12 +695,17 @@ check "«обновлён» с пустым числом записей в жу�
 #
 # Один издатель — один способ добычи. Вторая реализация того же скачивания в объекте
 # разошлась бы с ночной на первом же изменении: этим проект уже болел (см. шапку fetch.sh).
-srs_rpcd() {  # МЕТОД ВХОД
-    printf '%s\n' "$2" | env SANDBOX="$T" PATH="$T/bin:$PATH" SRS_TAG="$AD_TAG" \
+srs_rpcd() {  # МЕТОД ВХОД   (тег издателя переопределяется через SRS_TAG_NOW)
+    printf '%s\n' "$2" | env SANDBOX="$T" PATH="$T/bin:$PATH" SRS_TAG="${SRS_TAG_NOW:-$AD_TAG}" \
         JSHN_SH="$ROOT/tests/stub/jshn.sh" RPCD_LIB="$ROOT/files/usr/lib/splify2/rpcd" \
         FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
+        ZAPRET_SH="$ROOT/files/usr/lib/splify2/zapret.sh" \
+        DOH_SH="$ROOT/files/usr/lib/splify2/doh.sh" \
+        ZP_DIR="$T/zapret" ZP_CONF="$T/etc/config-zapret" ZP_NFQWS="$T/bin/nfqws-missing" \
+        ZP_INIT="$T/bin/initd-zapret" ZP_RCD="$T/rcd" DOH_CONF="$T/etc/config-doh" \
+        INITD="$T/bin/initd-steer" \
         AD_SH="$ROOT/files/usr/share/splify2/allow-domains.sh" \
-        AD_TAG_DEFAULT="$AD_TAG" \
+        AD_TAG_DEFAULT="${SRS_TAG_NOW:-$AD_TAG}" \
         AD_BASE="https://github.com/itdoginfo/allow-domains/releases/download" \
         AD_STAMP="$T/etc/allow-domains.tag" \
         STEER="$T/bin/steer" SPEC="$T/etc/spec.json" LISTS="$T/lists" \
@@ -728,6 +743,88 @@ check "list_fetch отвергает выход за каталог списко
       "$(printf '%s' "$out" | grep -q '"ok": *false' && echo yes || echo no)"
 check "и файла за каталогом не появилось" "yes" \
       "$([ ! -e "$T/etc/passwd" ] && echo yes || echo no)"
+
+# ---- недостающий список второго издателя доскачивается ПО ТРЕБОВАНИЮ ------------------
+#
+# ЗАЧЕМ ЭТА ПРОВЕРКА. Движок умирает на отсутствующем файле списка, поэтому объект rpcd
+# доскачивает недостающее перед каждой проверкой спеки (см. fetch_missing_lists). Знание «где
+# живёт второй издатель» в эту функцию не завозили, и потому путь `itdog/telegram.lst` уезжал
+# ПЕРВОМУ издателю: у него такого файла нет, спека применялась, а канал стоял пустым до
+# первого срабатывания ночного расписания — то есть до суток. Молча.
+#
+# Проверяется по СЛЕДСТВИЮ, а не по тексту функции: появился ли файл и по какому адресу за
+# ним ходили. Адрес здесь и есть суть находки.
+srs_lists_reset
+rm -f "$T/requested"
+# Спека ссылается на набор второго издателя, которого на диске нет.
+rm -f "$T/lists/itdog/domains/telegram.lst" "$T/lists/itdog/telegram.lst"
+out="$(srs_rpcd apply '{}')"
+
+check "недостающий набор второго издателя доскачался" "20" \
+      "$(grep -c . "$T/lists/itdog/domains/telegram.lst" 2>/dev/null)"
+check "и второй вид того же набора тоже" "10" \
+      "$(grep -c . "$T/lists/itdog/telegram.lst" 2>/dev/null)"
+# Оба вида отсутствовали, а набор один — значит скачан он обязан быть РАЗ. Второй круг цикла
+# берёт уже разобранное из памяти прогона (ad_get).
+check "набор скачан один раз на оба недостающих вида" "1" \
+      "$(grep -c "/$AD_TAG/telegram.srs" "$T/requested" 2>/dev/null || true)"
+# И разбор за собой убран. Проверка отдельная, потому что цена у неё своя: /tmp на роутере —
+# tmpfs, то есть ОПЕРАТИВНАЯ память, и оставленный разбор двадцати пяти наборов её и занимает.
+# Мусор в /tmp сам себя не показывает: он не ломает ничего до того дня, когда памяти не хватило.
+check "разбор набора после вызова не остался" "0" \
+      "$(ls -d /tmp/splify2-srs.* 2>/dev/null | grep -c . || true)"
+# ГЛАВНАЯ ПРОВЕРКА РАЗДЕЛА: за ним ходили к ЕГО издателю, а не к нашему манифесту. Без
+# развилки запрос уходил на base_url первого издателя с путём itdog/domains/telegram.lst.
+check "ходили к релизу второго издателя, а не к манифесту первого" "yes" \
+      "$(grep -q "/releases/download/$AD_TAG/telegram.srs" "$T/requested" && echo yes || echo no)"
+# Число берётся `grep -c ... || true`, а не `|| echo 0`: у grep без совпадений код 1, и
+# подстановка «или ноль» дописала бы ВТОРОЙ нуль к уже напечатанному — сравнение получало
+# «0\n0». Стенд ловил на этом сам себя.
+check "к первому издателю за этим файлом не ходили вовсе" "0" \
+      "$(grep -c 'itdog/domains/telegram.lst' "$T/requested" 2>/dev/null || true)"
+# Отметка тега ставится и здесь: иначе ночное обновление скачало бы тот же зафиксированный
+# релиз ещё раз, потому что «чем набит файл» осталось бы неизвестным.
+check "отметка тега поставлена — ночь не будет качать то же ещё раз" "yes" \
+      "$(grep -q "$AD_TAG" "$T/etc/allow-domains.tag" 2>/dev/null && echo yes || echo no)"
+# ОТСУТСТВИЕ МАНИФЕСТА БОЛЬШЕ НЕ ПРЕКРАЩАЕТ РАБОТУ ЦЕЛИКОМ, и это вторая половина находки:
+# прежде функция выходила на первой же строке, если манифеста нет, — и вместе с первым
+# издателем молча выпадал второй, которому манифест не нужен вовсе. Состояние настоящее: на
+# чистом роутере манифест появляется только после первого обращения к списку.
+mv "$T/etc/manifest.json" "$T/etc/manifest.away"
+rm -f "$T/lists/rkn.lst" "$T/lists/itdog/domains/telegram.lst" "$T/requested"
+out="$(srs_rpcd apply '{}')"
+check "без манифеста набор ВТОРОГО издателя всё равно доскачался" "20" \
+      "$(grep -c . "$T/lists/itdog/domains/telegram.lst" 2>/dev/null)"
+check "и про список первого сказано вслух, а не проглочено" "yes" \
+      "$(printf '%s' "$out" | grep -q 'манифест не загружен' && echo yes || echo no)"
+mv "$T/etc/manifest.away" "$T/etc/manifest.json"
+
+# СМЕНА ТЕГА ОБЯЗАНА ПРИВЕСТИ К НОВОЙ ЗАГРУЗКЕ, и это единственная проверка, которая ловит
+# разбор, оставленный в общем /tmp. `ad_get` помнит уже разобранное по имени файла, а не по
+# тегу: внутри одного прогона это верно и экономит загрузку второму виду того же сервиса, но
+# разбор, переживший вызов, отдал бы новому тегу СТАРОЕ содержимое — файл на месте, значит
+# качать нечего. Человек получил бы список прежней версии и ни разу об этом не услышал.
+#
+# Ровно на этом стенд однажды позеленел по неверной причине: набор не качался вовсе, а брался
+# из разбора предыдущего раздела. Поэтому проверка стоит на ДВУХ прогонах с разными тегами.
+rm -f "$T/lists/itdog/domains/telegram.lst" "$T/requested"
+SRS_TAG_NOW="$AD_TAG2" out="$(SRS_TAG_NOW="$AD_TAG2" srs_rpcd apply '{}')"
+check "после смены тега набор скачан заново, а не взят из прежнего разбора" "yes" \
+      "$(grep -q "/$AD_TAG2/telegram.srs" "$T/requested" && echo yes || echo no)"
+check "и файл на месте" "20" \
+      "$(grep -c . "$T/lists/itdog/domains/telegram.lst" 2>/dev/null)"
+check "отметка обновилась на новый тег" "yes" \
+      "$(grep -q "$AD_TAG2" "$T/etc/allow-domains.tag" 2>/dev/null && echo yes || echo no)"
+
+# Списки ПЕРВОГО издателя этой развилкой не затронуты: путь без его подкаталога идёт прежней
+# дорогой. Проверка нужна затем, что развилка стоит в общем цикле.
+cp "$T/manifest.src" "$T/etc/manifest.json"
+rm -f "$T/lists/rkn.lst" "$T/requested"
+out="$(srs_rpcd apply '{}')"
+check "список первого издателя по-прежнему качается через манифест" "yes" \
+      "$(grep -q 'rkn.lst' "$T/requested" && echo yes || echo no)"
+check "и он лёг на место" "yes" \
+      "$([ -s "$T/lists/rkn.lst" ] && echo yes || echo no)"
 
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo 'ЕСТЬ ПРОВАЛЫ')"
 [ "$fails" -eq 0 ]

@@ -726,6 +726,9 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         RPCD_LIB="$ROOT/files/usr/lib/splify2/rpcd" \
         ZAPRET_TEST="$T/bin/zapret-test" \
         ZAPRET_AUTOSEL="$T/bin/zapret-autoselect" \
+        AD_SH="${AD_SH_FIXTURE:-$ROOT/files/usr/share/splify2/allow-domains.sh}" \
+        AD_STAMP="$T/etc/allow-domains.tag" AD_TMP="$T/srs-tmp" \
+        AD_BASE="${AD_BASE_FIXTURE:-file://$T/adrel}" AD_TAG_DEFAULT="${AD_TAG_FIXTURE:-2026-08-31_16-18}" \
         ZA_PIDFILE="$T/zapret/autosel.pid" ZA_LOCK="$T/zapret/autosel.lock" \
         ZP_PREV="$T/zapret/previous.opts" ZP_AUTOSEL="$T/zapret/autoselect" \
         ZP_DIR="$T/zapret" ZP_CATALOG="$T/zapret/strategies.txt" \
