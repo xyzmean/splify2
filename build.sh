@@ -180,8 +180,25 @@ cp files/etc/steer/lists/zm-github.lst "$PKG/etc/steer/lists/zm-github.lst"
 mkdir -p "$PKG/etc/uci-defaults"
 cp files/etc/uci-defaults/99-splify2 "$PKG/etc/uci-defaults/99-splify2"
 chmod 0755 "$PKG/etc/uci-defaults/99-splify2"
+# А ЧТО ИМЕННО СОХРАНЯТЬ — объявляется отдельным файлом, и без него предыдущий шаг только
+# создаёт настройку, но не спасает её.
+#
+# sysupgrade и «Создать архив» в LuCI собирают список файлов из ТРЁХ мест: conffiles
+# установленных пакетов, /etc/sysupgrade.conf и /lib/upgrade/keep.d/*. Общего правила
+# «сохраняем /etc/config» не существует — соседние файлы там лежат потому, что ИХ пакеты
+# объявили их своими conffiles (см. Package/https-dns-proxy/conffiles). Пустая настройка
+# conffile-ом быть не может (шапка 99-splify2 объясняет, почему), поэтому остаётся keep.d —
+# у него нет ни одного из недостатков conffiles и он берёт каталоги рекурсивно.
+#
+# Второй путь в файле — расписка фаервола. Она не настройка и человеком не правится, но
+# невосстановима: потеряв её, fw_zone_sync больше никогда не уберёт свою зону, потому что
+# перестанет отличать её от чужой. Именно то накопление мусора, ради устранения которого
+# расписка и заведена.
+mkdir -p "$PKG/lib/upgrade/keep.d"
+cp files/lib/upgrade/keep.d/splify2 "$PKG/lib/upgrade/keep.d/splify2"
+chmod 0644 "$PKG/lib/upgrade/keep.d/splify2"
 chmod 0755 "$PKG/usr/libexec/rpcd/splify2" "$PKG/usr/sbin/splify2-update-lists" \
-           "$PKG/usr/sbin/splify2-zapret-test"
+           "$PKG/usr/sbin/splify2-zapret-test" "$PKG/usr/sbin/splify2-purge"
 chmod 0644 "$PKG/usr/share/splify2/doh-providers.conf" "$PKG/usr/share/splify2/dpi-suite.json"
 chmod 0644 "$PKG"/usr/lib/splify2/*.sh "$PKG"/usr/lib/splify2/rpcd/*.sh
 
