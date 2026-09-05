@@ -163,6 +163,12 @@ cp files/usr/share/splify2/doh-providers.conf "$PKG/usr/share/splify2/doh-provid
 # роутере — не отдал ни один из обходных путей), и без снимка целей оставалось 18 против шести
 # десятков у Zapret Manager. Свежий набор, если скачается, снимок перекрывает.
 cp files/usr/share/splify2/dpi-suite.json "$PKG/usr/share/splify2/dpi-suite.json"
+# Описание второго издателя списков (itdoginfo/allow-domains): где он живёт, каким ТЕГОМ
+# РЕЛИЗА зафиксирован, что публикует и как его двоичные наборы становятся нашими списками.
+# Едет файлом, а не таблицей в скрипте, по тому же доводу, что каталог резолверов выше; а
+# тег в нём — это версия списков у каждого, кто ничего не настраивал, поэтому поднимать её
+# может только новая сборка пакета, а не роутер сам себе ночью.
+cp files/usr/share/splify2/allow-domains.sh "$PKG/usr/share/splify2/allow-domains.sh"
 # Общие куски обеих половин: скачивание (fetch.sh) и быстрый путь опроса (fast.sh). Каждый
 # подключается строкой `. /usr/lib/splify2/…`, и забыть любой — значит выкатить пакет, где
 # соответствующая половина не запускается вовсе. Копируется КАТАЛОГ ЦЕЛИКОМ, а не файлы по
@@ -203,7 +209,8 @@ cp files/lib/upgrade/keep.d/splify2 "$PKG/lib/upgrade/keep.d/splify2"
 chmod 0644 "$PKG/lib/upgrade/keep.d/splify2"
 chmod 0755 "$PKG/usr/libexec/rpcd/splify2" "$PKG/usr/sbin/splify2-update-lists" \
            "$PKG/usr/sbin/splify2-zapret-test" "$PKG/usr/sbin/splify2-purge"
-chmod 0644 "$PKG/usr/share/splify2/doh-providers.conf" "$PKG/usr/share/splify2/dpi-suite.json"
+chmod 0644 "$PKG/usr/share/splify2/doh-providers.conf" "$PKG/usr/share/splify2/dpi-suite.json" \
+           "$PKG/usr/share/splify2/allow-domains.sh"
 chmod 0644 "$PKG"/usr/lib/splify2/*.sh "$PKG"/usr/lib/splify2/rpcd/*.sh
 
 # Протокол xsteer: обработчик netifd и страница LuCI.
@@ -388,6 +395,17 @@ test -x "$PKG/usr/sbin/splify2-purge" || {
 # у списка выше.
 test -s "$PKG/usr/share/splify2/doh-providers.conf" || {
     echo "в пакете нет usr/share/splify2/doh-providers.conf — во вкладке DoH нечего выбирать"
+    exit 1; }
+# Без описания источника второй издатель не работает вовсе, и молча: объект rpcd ответит
+# «пакет собран не целиком», а ночное обновление объявит каждый его список «нет в манифесте,
+# пропущен» — то есть список замрёт последней скачанной копией НАВСЕГДА, без признака
+# ошибки. Проверяется не только наличие, но и зашитый тег: без него версия списков у
+# человека определялась бы тем, когда он нажал кнопку.
+test -s "$PKG/usr/share/splify2/allow-domains.sh" || {
+    echo "в пакете нет usr/share/splify2/allow-domains.sh — списки itdoginfo/allow-domains брать нечем"
+    exit 1; }
+grep -qE '^AD_TAG_DEFAULT=\$\{AD_TAG_DEFAULT:-[0-9]' "$PKG/usr/share/splify2/allow-domains.sh" || {
+    echo "в usr/share/splify2/allow-domains.sh не зашит тег релиза — версия списков окажется плавающей"
     exit 1; }
 # Без снимка проверка стратегий на роутере с закрытым GitHub меряет 23 цели вместо шести
 # десятков, и числа с числами менеджера сравнивать нельзя.

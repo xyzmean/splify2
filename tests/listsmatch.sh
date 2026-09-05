@@ -363,5 +363,371 @@ check "порог снят — кратно поредевший список п
 check "порог снят, но файл без записей всё равно не применён" "2" \
       "$(grep -c . "$T/lists/domains/dom.lst" 2>/dev/null)"
 
+# ---- второй издатель: itdoginfo/allow-domains, наборы .srs ----------------------
+#
+# ЧТО ЗДЕСЬ ПРОВЕРЯЕТСЯ И ЗАЧЕМ. Списки этого издателя приезжают не текстом, а двоичным
+# набором sing-box (в релизе текстовых файлов нет ни одного), и раскладывает их на наши
+# два вида списка сам движок — `steer srs-read`. У управляющего слоя поэтому три новых
+# обязанности, и каждая ниже названа отдельной проверкой:
+#
+#   1. Версия зафиксирована ТЕГОМ. Плавающий `latest` означает, что состав списков у
+#      человека меняется сам собой раз в неделю, ночью, и объяснить «вчера пускало, сегодня
+#      нет» нечем: сравнивать не с чем.
+#   2. Домены и подсети — в РАЗНЫЕ файлы: у нас это два разных вида списка, и схлопывание
+#      двух списков в один проект уже проходил (I-011).
+#   3. Отказ движка с кодом 2 («понят, но не выразим») и с кодом 1 («не наш файл или
+#      испорчен») — это РАЗНЫЕ беды: первая значит «такой список нам пока не подходит»,
+#      вторая — «скачалось битое». Сказать человеку одно и то же в обоих случаях значит
+#      обвинить сеть в том, чего она не делала.
+#
+# Образцы наборов НАСТОЯЩИЕ (tests/srs — копии из стенда движка), поэтому подпись формата и
+# отказ discord проверяются на том, что издатель действительно публикует. Сети стенду при
+# этом не нужно: движок здесь заглушка, и она отвечает по тем же правилам, что настоящая
+# команда, — по СОДЕРЖИМОМУ поданного файла, а не по его имени (скачанное лежит во
+# временном файле, имени сервиса в нём нет).
+AD_TAG=2000-01-01_00-00
+AD_TAG2=2000-02-02_11-22
+
+mkdir -p "$T/srs"
+cp "$ROOT/tests/srs/"*.srs "$ROOT/tests/srs/"*.lst "$T/srs/"
+# Мусор вместо набора: подписи SRS нет, и настоящая команда отвечает на это кодом 1.
+printf 'not an srs at all\n' > "$T/srs/news.srs"
+
+# uci: хранилище файлом, только `-q get`. Прежняя заглушка отвечала отказом ВСЕГДА, и
+# проверить «тег взят из uci» ею было нечем. С пустым хранилищем поведение то же, что было.
+cat > "$T/bin/uci" <<'EOF'
+#!/bin/sh
+key=""
+for a in "$@"; do key="$a"; done
+[ -f "$SANDBOX/uci.store" ] || exit 1
+v=""
+while IFS= read -r l; do
+    case "$l" in "$key="*) v="${l#*=}" ;; esac
+done < "$SANDBOX/uci.store"
+[ -n "$v" ] || exit 1
+printf '%s\n' "$v"
+EOF
+: > "$T/uci.store"
+
+# curl: отдаёт ТОЛЬКО то, что издатель действительно опубликовал по этому адресу. На всё
+# прочее — отказ, и это важно: иначе обходные пути GitHub (зеркало, api, архив) «успешно»
+# приносили бы мусор, и проверка «набор не скачался» проходила бы на пустоте.
+cat > "$T/bin/curl" <<'EOF'
+#!/bin/sh
+out=""; url=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o) out="$2"; shift 2 ;;
+        http*) url="$1"; shift ;;
+        *) shift ;;
+    esac
+done
+echo "$url" >> "$SANDBOX/requested"
+case "$url" in
+    *categories.json) cp "$SANDBOX/manifest.src" "$out" ;;
+    */releases/download/*/*.srs)
+        tag="${url%/*}"; tag="${tag##*/}"
+        svc="${url##*/}"; svc="${svc%.srs}"
+        # Тег в адресе обязан быть тем, который зафиксирован: чужой релиз отдаёт 404,
+        # и подменять это «отдам что попросили» значило бы не проверять фиксацию вовсе.
+        [ "$tag" = "$SRS_TAG" ] || exit 1
+        [ -f "$SANDBOX/srs/$svc.srs" ] || exit 1
+        cp "$SANDBOX/srs/$svc.srs" "$out"
+        ;;
+    *rkn.lst) printf '10.0.0.0/8\n' > "$out" ;;
+    *) exit 1 ;;
+esac
+exit 0
+EOF
+
+# steer: та же команда, что на роутере, и с тем же контрактом — коды 0/1/2, домены и
+# подсети в разные файлы. Какой именно набор подан — решается сравнением с образцами, а не
+# по имени файла (см. шапку раздела).
+cat > "$T/bin/steer" <<'EOF'
+#!/bin/sh
+case "${1:-}" in
+    fit) src=""; for a in "$@"; do src="$a"; done; cat "$src"; exit 0 ;;
+    apply) exit 0 ;;
+    srs-read) ;;
+    *) exit 0 ;;
+esac
+f="$2"; shift 2
+out=""; pfx=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --out) out="$2"; shift 2 ;;
+        --prefixes-out) pfx="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+case "$(dd if="$f" bs=3 count=1 2>/dev/null)" in
+    SRS) ;;
+    *) echo 'steer: srs: это не набор правил sing-box (нет подписи SRS)' >&2; exit 1 ;;
+esac
+for s in "$SANDBOX"/srs/*.srs; do
+    cmp -s "$f" "$s" || continue
+    b="${s##*/}"; b="${b%.srs}"
+    if [ "$b" = discord ]; then
+        echo 'steer: srs: набор понят, но не выразим списком — network: у канала нет измерения «протокол»' >&2
+        exit 2
+    fi
+    [ -n "$out" ] && awk 1 "$SANDBOX/srs/$b.lst" > "$out"
+    if [ -n "$pfx" ]; then
+        if [ -f "$SANDBOX/srs/$b-subnets.lst" ]; then awk 1 "$SANDBOX/srs/$b-subnets.lst" > "$pfx"
+        else : > "$pfx"; fi
+    fi
+    exit 0
+done
+echo 'steer: srs: набор не разобрался' >&2
+exit 1
+EOF
+chmod +x "$T/bin/uci" "$T/bin/curl" "$T/bin/steer"
+
+# Манифест ПЕРВОГО издателя остаётся на месте: второй источник заведён РЯДОМ, а не вместо.
+cat > "$T/manifest.src" <<EOF
+{
+  "base_url": "https://example.invalid/lists",
+  "categories":   [ { "id": "rkn", "file": "rkn.lst" } ],
+  "domain_lists": [ ]
+}
+EOF
+
+# Спека ссылается на файлы обоих издателей. Пути второго — свой подкаталог, доменные в
+# domains/: вид списка обязан читаться из пути.
+cat > "$T/etc/spec.json" <<EOF
+{
+  "schema": 1,
+  "channels": [
+    { "name": "c1", "match": { "prefixes_files": ["$T/lists/itdog/telegram.lst",
+                                                  "$T/lists/itdog/youtube.lst",
+                                                  "$T/lists/itdog/discord.lst",
+                                                  "$T/lists/rkn.lst"],
+                               "domains_files":  ["$T/lists/itdog/domains/telegram.lst",
+                                                  "$T/lists/itdog/domains/youtube.lst",
+                                                  "$T/lists/itdog/domains/news.lst",
+                                                  "$T/lists/itdog/domains/tiktok.lst"] } }
+  ]
+}
+EOF
+
+srs_lists_reset() {
+    rm -rf "$T/lists" "$T/var/last-update" "$T/requested" "$T/etc/allow-domains.tag"
+    mkdir -p "$T/lists/itdog/domains"
+    printf '0.0.0.0/32\n'      > "$T/lists/itdog/telegram.lst"
+    printf '10.1.0.0/16\n'     > "$T/lists/itdog/youtube.lst"
+    printf '10.9.0.0/16\n'     > "$T/lists/itdog/discord.lst"
+    printf '0.0.0.0/32\n'      > "$T/lists/rkn.lst"
+    printf 'old.example\n'     > "$T/lists/itdog/domains/telegram.lst"
+    printf 'old.example\n'     > "$T/lists/itdog/domains/youtube.lst"
+    printf 'old-news.example\n'  > "$T/lists/itdog/domains/news.lst"
+    printf 'old-tiktok.example\n' > "$T/lists/itdog/domains/tiktok.lst"
+    : > "$T/syslog"
+}
+
+srs_run() {  # ТЕГ_КОТОРЫЙ_ОТДАЁТ_ИЗДАТЕЛЬ
+    SANDBOX="$T" PATH="$T/bin:$PATH" SRS_TAG="$1" \
+    STEER="$T/bin/steer" SPEC="$T/etc/spec.json" LISTS="$T/lists" \
+    MANIFEST="$T/etc/manifest.json" STAMP="$T/var/last-update" LOCK="$T/var/update.lock" \
+    FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
+    AD_SH="$ROOT/files/usr/share/splify2/allow-domains.sh" \
+    AD_TAG_DEFAULT="$AD_TAG" AD_BASE="https://github.com/itdoginfo/allow-domains/releases/download" \
+    AD_STAMP="$T/etc/allow-domains.tag" \
+    sh "$SCRIPT" > "$T/out-srs" 2>&1
+}
+
+srs_lists_reset
+srs_run "$AD_TAG"
+rc_srs=$?
+
+check "набор качается по адресу с зафиксированным тегом" \
+      "https://github.com/itdoginfo/allow-domains/releases/download/$AD_TAG/telegram.srs" \
+      "$(grep -x ".*/$AD_TAG/telegram.srs" "$T/requested" 2>/dev/null | head -1)"
+
+check "плавающего latest в запросах нет ни одного" "" \
+      "$(grep -c '/latest/' "$T/requested" 2>/dev/null | grep -v '^0$')"
+
+check "домены набора легли в доменный список" "20" \
+      "$(grep -c . "$T/lists/itdog/domains/telegram.lst" 2>/dev/null)"
+
+check "подсети того же набора легли в АДРЕСНЫЙ список" "10" \
+      "$(grep -c . "$T/lists/itdog/telegram.lst" 2>/dev/null)"
+
+check "в доменном списке нет подсетей" "0" \
+      "$(grep -c '/' "$T/lists/itdog/domains/telegram.lst" 2>/dev/null)"
+
+check "в адресном списке нет доменов" "0" \
+      "$(grep -c '[a-z]' "$T/lists/itdog/telegram.lst" 2>/dev/null)"
+
+check "один набор скачан ОДИН раз, хотя нужен обоим видам" "1" \
+      "$(grep -c "/telegram.srs$" "$T/requested" 2>/dev/null)"
+
+# Сервис без подсетей. Канал на такой файл ссылаться может — значит сказать об этом надо
+# каждую ночь, а не один раз: прежний файл остаётся, и молчание читалось бы как «обновлено».
+check "у сервиса без подсетей адресный список не подменён" "10.1.0.0/16" \
+      "$(cat "$T/lists/itdog/youtube.lst" 2>/dev/null)"
+check "про отсутствующие подсети сказано вслух" "yes" \
+      "$(grep -q 'в наборе youtube нет подсетей' "$T/syslog" && echo yes || echo no)"
+check "доменный список того же сервиса при этом обновлён" "18" \
+      "$(grep -c . "$T/lists/itdog/domains/youtube.lst" 2>/dev/null)"
+
+# Код 2 — «понят, но не выразим». Это НЕ битый файл, и говорить про порчу нельзя.
+check "набор, не выразимый списком, прежний файл не тронул" "10.9.0.0/16" \
+      "$(cat "$T/lists/itdog/discord.lst" 2>/dev/null)"
+check "про код 2 сказано «пока не подходит»" "yes" \
+      "$(grep -q 'discord.lst: такой список нам пока не подходит' "$T/syslog" && echo yes || echo no)"
+check "причина отказа движка названа дословно" "yes" \
+      "$(grep -q 'нет измерения «протокол»' "$T/syslog" && echo yes || echo no)"
+check "код 2 порчей файла НЕ назван" "" \
+      "$(grep -o 'discord.lst: скачался испорченный' "$T/syslog" 2>/dev/null | head -1)"
+
+# Код 1 — «это не наш файл». Здесь виноват путь до издателя, а не сам список.
+check "испорченный набор прежний файл не тронул" "old-news.example" \
+      "$(cat "$T/lists/itdog/domains/news.lst" 2>/dev/null)"
+check "про код 1 сказано «испорченный»" "yes" \
+      "$(grep -q 'news.lst: скачался испорченный набор' "$T/syslog" && echo yes || echo no)"
+check "код 1 «пока не подходит» НЕ назван" "" \
+      "$(grep -o 'news.lst: такой список нам пока не подходит' "$T/syslog" 2>/dev/null | head -1)"
+
+# Не отдалось вовсе — третья, отдельная беда.
+check "неотдавшийся набор прежний файл не тронул" "old-tiktok.example" \
+      "$(cat "$T/lists/itdog/domains/tiktok.lst" 2>/dev/null)"
+check "про неотдавшийся набор сказано «не скачался»" "yes" \
+      "$(grep -q 'tiktok.lst: набор tiktok.srs не скачался' "$T/syslog" && echo yes || echo no)"
+
+# Половина каталога лучше пустого списка на пустом месте: беда с одним списком не сворачивает
+# обновление целиком, и список ПЕРВОГО издателя обновляется рядом со вторым.
+check "список первого издателя обновлён рядом со вторым" "10.0.0.0/8" \
+      "$(cat "$T/lists/rkn.lst" 2>/dev/null)"
+check "правила применены, обновление не свёрнуто целиком" "yes" \
+      "$(grep -q 'правила применены' "$T/syslog" && echo yes || echo no)"
+check "неудачи подняли признак неудачи прогона" "1" "$rc_srs"
+
+# Отметка версии: по строке на ФАЙЛ. Без неё вопрос «какая у тебя версия списков» ответа не
+# имеет, а ночь качала бы одни и те же байты каждый раз.
+check "отметка версии записана по файлам" "yes" \
+      "$(grep -q "^telegram domains $AD_TAG$" "$T/etc/allow-domains.tag" &&
+         grep -q "^telegram prefixes $AD_TAG$" "$T/etc/allow-domains.tag" && echo yes || echo no)"
+check "того, чего на диске нет, в отметке тоже нет" "" \
+      "$(grep -o '^youtube prefixes' "$T/etc/allow-domains.tag" 2>/dev/null)"
+
+# ---- тот же тег: в сеть не ходим ---------------------------------------------
+# Тег зафиксирован, значит содержимое релиза то же. Двадцать пять файлов каждую ночь ради
+# одинаковых байтов — это трата на ничего.
+rm -f "$T/requested" "$T/var/last-update"
+: > "$T/syslog"
+srs_run "$AD_TAG"
+
+check "на том же теге набор повторно не качается" "0" \
+      "$(grep -c '/telegram.srs$' "$T/requested" 2>/dev/null)"
+check "и сказано, почему не качается" "yes" \
+      "$(grep -q "уже на диске" "$T/syslog" && echo yes || echo no)"
+check "жалоба про отсутствующие подсети повторяется" "yes" \
+      "$(grep -q 'в наборе youtube нет подсетей' "$T/syslog" && echo yes || echo no)"
+
+# ---- тег сменили в uci: качаем заново ------------------------------------------
+# Поднять версию списков может только человек — явным `uci set`. Ночь тег не двигает.
+rm -f "$T/requested" "$T/var/last-update"
+: > "$T/syslog"
+printf 'splify2.main.allow_domains_tag=%s\n' "$AD_TAG2" > "$T/uci.store"
+srs_run "$AD_TAG2"
+
+check "тег из uci заменяет зашитый в пакет" \
+      "https://github.com/itdoginfo/allow-domains/releases/download/$AD_TAG2/telegram.srs" \
+      "$(grep -x ".*/$AD_TAG2/telegram.srs" "$T/requested" 2>/dev/null | head -1)"
+check "смена тега перезаписала отметку версии" "yes" \
+      "$(grep -q "^telegram domains $AD_TAG2$" "$T/etc/allow-domains.tag" && echo yes || echo no)"
+
+# ---- tag=latest фиксацией не является -------------------------------------------
+# Это единственное значение, которое молча отменяет воспроизводимость, и набрать его
+# человек попробует первым. Берём зашитый тег и говорим об этом вслух.
+rm -f "$T/requested" "$T/var/last-update"
+: > "$T/syslog"
+printf 'splify2.main.allow_domains_tag=latest\n' > "$T/uci.store"
+srs_run "$AD_TAG"
+
+check "tag=latest отбит, взят зашитый тег" "yes" \
+      "$(grep -q "/$AD_TAG/telegram.srs$" "$T/requested" && echo yes || echo no)"
+check "про отбитый latest сказано вслух" "yes" \
+      "$(grep -q 'latest' "$T/syslog" && echo yes || echo no)"
+: > "$T/uci.store"
+
+# ---- зашитый в пакет тег — настоящий тег релиза, а не latest ----------------------
+# Файл описания источника едет в пакете, и значение в нём — это версия списков у каждого,
+# кто ничего не настраивал.
+AD_SRC="$ROOT/files/usr/share/splify2/allow-domains.sh"
+check "в описании источника зашит тег вида ГГГГ-ММ-ДД_ЧЧ-ММ" "yes" \
+      "$(grep -qE '^AD_TAG_DEFAULT=\$\{AD_TAG_DEFAULT:-2[0-9]{3}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}\}$' "$AD_SRC" &&
+         echo yes || echo no)"
+check "в описании источника нет ссылки на latest" "" \
+      "$(grep -o 'releases/latest' "$AD_SRC" | head -1)"
+
+# ---- список из спеки, которого на диске ещё нет ---------------------------------
+#
+# Так выглядит ПЕРВАЯ ночь после того, как человек включил список: в спеке он есть, на диске
+# его нет, и подкаталога под него тоже нет. `mkdir -p "$LISTS"` в начале скрипта создаёт
+# только корень, а списки лежат глубже — доменные в domains/, у второго издателя ещё и в
+# своём. Пока подкаталог заводил кто-то другой (объект rpcd делает mkdir перед записью),
+# этого не было видно; без него `mv` молча не срабатывал, файл не появлялся, а в журнал
+# уходило «обновлён ( записей)» — с пустым числом вместо признака беды.
+rm -rf "$T/lists" "$T/var/last-update" "$T/requested" "$T/etc/allow-domains.tag"
+mkdir -p "$T/lists"
+: > "$T/syslog"
+srs_run "$AD_TAG"
+
+check "список лёг, хотя подкаталога под него не было" "20" \
+      "$(grep -c . "$T/lists/itdog/domains/telegram.lst" 2>/dev/null)"
+check "и адресный тоже" "10" \
+      "$(grep -c . "$T/lists/itdog/telegram.lst" 2>/dev/null)"
+check "«обновлён» с пустым числом записей в журнал не попал" "" \
+      "$(grep -o 'обновлён ( записей)' "$T/syslog" 2>/dev/null | head -1)"
+
+# ---- кнопка «Загрузить» в каталоге: тот же путь через объект rpcd -----------------
+#
+# Один издатель — один способ добычи. Вторая реализация того же скачивания в объекте
+# разошлась бы с ночной на первом же изменении: этим проект уже болел (см. шапку fetch.sh).
+srs_rpcd() {  # МЕТОД ВХОД
+    printf '%s\n' "$2" | env SANDBOX="$T" PATH="$T/bin:$PATH" SRS_TAG="$AD_TAG" \
+        JSHN_SH="$ROOT/tests/stub/jshn.sh" RPCD_LIB="$ROOT/files/usr/lib/splify2/rpcd" \
+        FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
+        AD_SH="$ROOT/files/usr/share/splify2/allow-domains.sh" \
+        AD_TAG_DEFAULT="$AD_TAG" \
+        AD_BASE="https://github.com/itdoginfo/allow-domains/releases/download" \
+        AD_STAMP="$T/etc/allow-domains.tag" \
+        STEER="$T/bin/steer" SPEC="$T/etc/spec.json" LISTS="$T/lists" \
+        MANIFEST="$T/etc/manifest.json" UCI_SPLIFY2="$T/etc/config-splify2" \
+        sh "$ROOT/files/usr/libexec/rpcd/splify2" call "$1" 2>"$T/rpcd-err"
+}
+
+srs_lists_reset
+rm -f "$T/requested"
+out="$(srs_rpcd list_fetch '{"id":"itdog:telegram","kind":"domains"}')"
+
+check "list_fetch у второго издателя отвечает успехом" "yes" \
+      "$(printf '%s' "$out" | grep -q '"ok": *true' && echo yes || echo no)"
+check "list_fetch положил доменный список" "20" \
+      "$(grep -c . "$T/lists/itdog/domains/telegram.lst" 2>/dev/null)"
+check "list_fetch положил и адресный — набор один, качать его дважды незачем" "10" \
+      "$(grep -c . "$T/lists/itdog/telegram.lst" 2>/dev/null)"
+check "list_fetch вернул путь запрошенного вида" "yes" \
+      "$(printf '%s' "$out" | grep -q "$T/lists/itdog/domains/telegram.lst" && echo yes || echo no)"
+
+out="$(srs_rpcd list_fetch '{"id":"itdog:youtube","kind":"prefixes"}')"
+check "list_fetch про отсутствующий вид отвечает внятно" "yes" \
+      "$(printf '%s' "$out" | grep -q 'подсет' && echo yes || echo no)"
+
+out="$(srs_rpcd list_fetch '{"id":"itdog:discord","kind":"prefixes"}')"
+check "list_fetch про код 2 говорит «пока не подходит»" "yes" \
+      "$(printf '%s' "$out" | grep -q 'пока не подходит' && echo yes || echo no)"
+
+out="$(srs_rpcd list_fetch '{"id":"itdog:nosuchservice","kind":"domains"}')"
+check "list_fetch про неизвестный сервис не врёт, что скачивание не вышло" "yes" \
+      "$(printf '%s' "$out" | grep -q 'нет списка nosuchservice' && echo yes || echo no)"
+
+out="$(srs_rpcd list_fetch '{"id":"itdog:../../etc/passwd","kind":"domains"}')"
+check "list_fetch отвергает выход за каталог списков" "yes" \
+      "$(printf '%s' "$out" | grep -q '"ok": *false' && echo yes || echo no)"
+check "и файла за каталогом не появилось" "yes" \
+      "$([ ! -e "$T/etc/passwd" ] && echo yes || echo no)"
+
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo 'ЕСТЬ ПРОВАЛЫ')"
 [ "$fails" -eq 0 ]
