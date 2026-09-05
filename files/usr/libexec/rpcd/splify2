@@ -598,6 +598,11 @@ list)
     json_close_object
     json_add_object dev_stats; json_close_object
     json_add_object diag; json_close_object
+    # Отчёт для поддержки: один готовый к вставке в чат текст. Входа нет — состав отчёта
+    # решает бэкенд, а не вызывающий: набор полей и есть договорённость с помогающим, и
+    # право выбрать половину из них означало бы отчёты, по которым нельзя задать один и
+    # тот же вопрос.
+    json_add_object support_report; json_close_object
     json_add_object net_info; json_close_object
     json_add_object outbound_probe; json_add_string output; json_close_object
     json_add_object outbound_geo
@@ -672,7 +677,7 @@ call)
     # /usr/lib/splify2/rpcd. Метод, которого нет ни в одной группе, — отказ здесь же, до
     # чтения чего бы то ни было.
     case "$2" in
-        status|diag|dev_stats|net_info|devices|client_nets|leases|engine_state|outbound_geo|outbound_probe|explain|xsteer_state|vless_nodes|vless_probe) _grp=state ;;
+        status|diag|dev_stats|net_info|devices|client_nets|leases|engine_state|outbound_geo|outbound_probe|explain|xsteer_state|vless_nodes|vless_probe|support_report) _grp=state ;;
         spec_set|apply) _grp=spec ;;
         lists|list_fetch|lists_update|list_put|list_remove|list_custom|list_get|local_lists|fetch_mode|fetch_mode_set|zm_fix|zm_fix_set) _grp=lists ;;
         engine|engine_stop|engine_start|steer_versions|splify2_versions|splify2_install|steer_install|ui_get|ui_set) _grp=engine ;;

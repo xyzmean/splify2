@@ -44,7 +44,8 @@
           "zapret_strategies",
           "zapret_strategy",
           "zapret_test",
-          "zapret_results"
+          "zapret_results",
+          "support_report"
         ]
       }
     },
