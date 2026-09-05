@@ -1881,13 +1881,41 @@ printf 'vless://k@h:443#node\n' > "$T/etc/sub.txt"
 # Свой список, который заведомо не влезает в один кусок ubus: без него протокол смещений
 # проверялся бы на архиве, приезжающем целиком, то есть не проверялся бы вовсе.
 awk 'BEGIN { for (i = 0; i < 1200; i++) printf "host%d.example\n", i }' > "$(custom_domains_path mine-big)"
+# Ключи туннелей, стратегии обхода и вторая подписка. Ровно то, чего в архиве не было и без
+# чего восстановленный роутер не работает: приватный ключ пира xsteer взять больше негде
+# (панель его не печатает, а сгенерировать заново — это уже другой пир), стратегия обхода
+# выбрана человеком опытом, а вторая подписка живёт своим файлом со своим остатком.
+#
+# XSTEER_DIR экспортируется, а не стоит в общем списке швов у rpcd(): список общий для всех
+# разделов стенда, а этот каталог нужен одному — архиву.
+export XSTEER_DIR="$T/etc/steer-xsteer"
+mkdir -p "$XSTEER_DIR" "$T/etc/steer-zapret" "$T/etc/subs"
+printf '%s\n' '[Interface]' \
+  'PrivateKey = 6Gtidge6FqhO/0LhrAWpRiyYaKdLZF/gib/HePLC9GU=' \
+  'Address = 10.77.0.5/24' 'SNI = www.microsoft.com' '' '[Peer]' \
+  'PublicKey = QYkH5bWOsEOCgIMldHPATSG7yvNyJ8st7o/HMelWKxs=' \
+  'Endpoint = 198.51.100.9:8443' 'AllowedIPs = 10.77.0.0/24, 192.168.9.0/24' \
+  > "$XSTEER_DIR/home.conf"
+printf '%s\n' '#v1' '--filter-tcp=443' '--dpi-desync=fake,split2' > "$T/etc/steer-zapret/yt.opts"
+printf 'vless://k2@h2:443#second\n' > "$T/etc/subs/work.txt"
+uci_set splify2.sub_work subscription
+uci_set splify2.sub_work.url 'https://panel.example.net/sub/2'
+uci_set splify2.sub_work.kind url
+# Все одиннадцать полей, а не три: перечень получается тем же способом, каким его находят в
+# коде, — `grep -rhoE 'splify2\.(main|sub_[a-z_]*)\.[a-z_]+' files/`.
+for _kv in 'sub_url=https://panel.example.net/sub/1' 'sub_kind=url' 'wizard=step3' \
+           'sub_title=Моя панель' 'zm_fix=1' 'manifest_url=https://example.net/categories.json' \
+           'fetch_via_tunnel=always' 'doh_via_tunnel=1' 'list_shrink_factor=4' \
+           'zapret_source=StressOzz/Zapret-Manager' 'geo_url=https://example.net/trace'; do
+    uci_set "splify2.main.${_kv%%=*}" "${_kv#*=}"
+done
 
 doc="$(backup_doc)"
 check "архив приезжает несколькими кусками и склеивается" "yes" \
       "$([ "$(cat "$T/doc-parts")" -gt 1 ] && echo yes || echo no)"
 check "склеенный архив не потерял ни строки на границах кусков" "1200" \
       "$(printf '%s\n' "$doc" | grep -c '^host[0-9]*\.example$')"
-check "архив начинается своим заголовком с версией" "splify2-backup 1" \
+check "архив начинается своим заголовком с версией" "splify2-backup 2" \
       "$(printf '%s\n' "$doc" | head -1)"
 check "в архиве есть спека, подписка и оба своих списка" "yes" \
       "$(printf '%s\n' "$doc" | grep -q '^\[spec\]$' &&
@@ -1900,6 +1928,34 @@ check "зеркал категорий издателя в архиве нет (
       "$(printf '%s\n' "$doc" | grep -qE '^(\[list (prefixes|domains) news\]|10\.0\.0\.0/8|example\.org)$' && echo yes || echo no)"
 check "в архиве есть и большой свой список, и оба маленьких" "yes" \
       "$(printf '%s\n' "$doc" | grep -q '^\[list domains mine-big\]$' && echo yes || echo no)"
+
+# Приватный ключ пира — то, без чего восстановленный роутер туннель не поднимает вовсе.
+# Содержимое едет ДОСЛОВНО, вместе со своими строками в квадратных скобках: файл читает
+# движок и читает строго, а пересобирать его здесь значило бы завести вторую реализацию
+# формата WireGuard.
+check "ключи xsteer уезжают в архив дословно" "yes" \
+      "$(printf '%s\n' "$doc" | grep -q '^\[xsteer home\]$' &&
+         printf '%s\n' "$doc" | grep -q '^\[Interface\]$' &&
+         printf '%s\n' "$doc" | grep -q '^PrivateKey = 6Gtidge6' && echo yes || echo no)"
+# Отметка стратегии — первая строка файла ключей, и она комментарий (`#v1`). Разборщик архива
+# комментарии выбрасывает, поэтому здесь проверяется именно она: без отметки восстановленный
+# выход работает по нужным ключам, но интерфейс не знает, какая стратегия выбрана.
+check "стратегия выхода обхода уезжает вместе со своей отметкой" "yes" \
+      "$(printf '%s\n' "$doc" | grep -q '^\[zapret yt\]$' &&
+         printf '%s\n' "$doc" | grep -qx '#v1' &&
+         printf '%s\n' "$doc" | grep -qx -- '--dpi-desync=fake,split2' && echo yes || echo no)"
+# Вторая подписка — это файл И ссылка на панель: без ссылки восстановленную подписку нечем
+# обновить, то есть она приезжает мёртвой.
+check "именованная подписка уезжает и файлом, и ссылкой" "yes" \
+      "$(printf '%s\n' "$doc" | grep -q '^\[sub work\]$' &&
+         printf '%s\n' "$doc" | grep -qx 'sub_work.url=https://panel.example.net/sub/2' &&
+         printf '%s\n' "$doc" | grep -qx 'sub_work.kind=url' && echo yes || echo no)"
+check "в архив уезжают все одиннадцать полей uci, а не три" "11" \
+      "$(printf '%s\n' "$doc" | grep -cE '^(sub_url|sub_kind|wizard|sub_title|zm_fix|manifest_url|fetch_via_tunnel|doh_via_tunnel|list_shrink_factor|zapret_source|geo_url)=')"
+# Шапка архива предупреждала про ссылки vless://. С приватными ключами туннелей это верно
+# сильнее, и сказать об этом обязана сама шапка: файл человек уносит на флешке и в переписке.
+check "шапка предупреждает и о приватных ключах" "yes" \
+      "$(printf '%s\n' "$doc" | sed -n '1,10p' | grep -q 'приватные ключи' && echo yes || echo no)"
 
 # Экспорт не отдаёт файл, который его же импорт откажется принять: иначе человек узнал бы
 # об этом в тот день, когда бекап понадобился.
@@ -2051,6 +2107,104 @@ check "туннели помечены к пересборке по обоим �
       "$(grep -qx instances "$T/var/vless-dirty" && echo yes || echo no);$(grep -qx params "$T/var/vless-dirty" && echo yes || echo no)"
 check "накопленный файл убран за собой" "no" \
       "$([ -f "$T/var/backup.in" ] && echo yes || echo no)"
+# Заголовок у архива выше — намеренно ПРЕЖНЕЙ версии: у людей уже лежат файлы, собранные
+# до появления ключей и стратегий, и обновление пакета не имеет права превратить их в
+# нечитаемые. Проверка отдельной строкой, чтобы отказ читался как «сломали старые архивы»,
+# а не как «сломалось восстановление вообще».
+check "архив прежнего формата (1) по-прежнему принимается" "true" "$(printf '%s' "$out" | jget ok)"
+
+# ---- формат 2: ключи туннелей, стратегии обхода и именованные подписки ------------
+# Проверяется методом целиком: присланный архив → файлы на диске и поля в uci. Каталоги
+# перед этим сносятся, иначе «восстановлено» было бы не отличить от «лежало и раньше».
+rm -f "$T/var/backup.in"
+rm -rf "$XSTEER_DIR" "$T/etc/steer-zapret" "$T/etc/subs"
+: > "$T/uci.store"
+: > "$T/steer.log"
+out="$(printf '%s\n' \
+  'splify2-backup 2' \
+  '[spec]' \
+  '{"schema":1,"outputs":{},"channels":[]}' \
+  '[xsteer home]' \
+  '[Interface]' \
+  'PrivateKey = 6Gtidge6FqhO/0LhrAWpRiyYaKdLZF/gib/HePLC9GU=' \
+  'Address = 10.77.0.5/24' \
+  '' \
+  '[Peer]' \
+  'PublicKey = QYkH5bWOsEOCgIMldHPATSG7yvNyJ8st7o/HMelWKxs=' \
+  'Endpoint = 198.51.100.9:8443' \
+  '[zapret yt]' \
+  '#v1' \
+  '--filter-tcp=443' \
+  '[sub work]' \
+  'vless://k2@h2:443#second' \
+  '[options]' \
+  'sub_title=Моя панель' \
+  'zm_fix=0' \
+  'list_shrink_factor=4' \
+  'geo_url=https://example.net/trace' \
+  'sub_work.url=https://panel.example.net/sub/2' \
+  'sub_work.kind=url' | backup_put)"
+check "архив нового формата принимается" "true" "$(printf '%s' "$out" | jget ok)"
+check "приватный ключ туннеля лёг на место дословно" "yes" \
+      "$(grep -qx 'PrivateKey = 6Gtidge6FqhO/0LhrAWpRiyYaKdLZF/gib/HePLC9GU=' "$XSTEER_DIR/home.conf" &&
+         grep -qx '\[Peer\]' "$XSTEER_DIR/home.conf" && echo yes || echo no)"
+# Файл с приватным ключом не читается всеми: он попадает в каталог, который движок держит
+# закрытым, и восстановление не имеет права раскрыть его шире, чем создало бы само.
+check "восстановленный ключ закрыт от чужих глаз" "600" \
+      "$(stat -c %a "$XSTEER_DIR/home.conf" 2>/dev/null)"
+check "стратегия обхода лежит вместе со своей отметкой" "yes" \
+      "$(head -1 "$T/etc/steer-zapret/yt.opts" | grep -qx '#v1' &&
+         grep -qx -- '--filter-tcp=443' "$T/etc/steer-zapret/yt.opts" && echo yes || echo no)"
+check "именованная подписка легла своим файлом" "yes" \
+      "$(grep -qx 'vless://k2@h2:443#second' "$T/etc/subs/work.txt" && echo yes || echo no)"
+check "ссылка именованной подписки легла в свою секцию uci" "https://panel.example.net/sub/2;url;subscription" \
+      "$(uci_get splify2.sub_work.url);$(uci_get splify2.sub_work.kind);$(uci_get splify2.sub_work)"
+check "остальные поля uci восстановлены, а не только три прежних" "Моя панель;0;4;https://example.net/trace" \
+      "$(uci_get splify2.main.sub_title);$(uci_get splify2.main.zm_fix);$(uci_get splify2.main.list_shrink_factor);$(uci_get splify2.main.geo_url)"
+check "в ответе сказано, что именно восстановлено" "1;1;1" \
+      "$(printf '%s' "$out" | jget xsteer);$(printf '%s' "$out" | jget zapret);$(printf '%s' "$out" | jget subs)"
+
+# Выход, ссылающийся на ИМЕНОВАННУЮ подписку, отвергался проверкой путей: она знала только
+# /etc/steer/sub.txt и каталог списков. То есть архив роутера с двумя подписками нельзя было
+# вернуть на этот же роутер — а именно за этим архив и нужен.
+out="$(printf '%s\n' 'splify2-backup 2' '[spec]' \
+  "{\"schema\":1,\"outputs\":{\"vpn\":{\"kind\":\"vless\",\"sub_file\":\"$T/etc/subs/work.txt\"}},\"channels\":[]}" |
+  backup_put)"
+check "выход на именованную подписку не считается путём наружу" "true" "$(printf '%s' "$out" | jget ok)"
+
+# Дальше — отказы. Каталог с ключами и файл ключей nfqws попадают в руки root: первый читает
+# движок, каждая строка второго становится ОТДЕЛЬНЫМ аргументом обработчика обхода. Принять
+# туда что угодно из присланного файла нельзя.
+out="$(printf '%s\n' 'splify2-backup 2' '[xsteer home]' '[Interface]' 'PrivateKey = k' \
+  'ключ = значение; reboot' | backup_put)"
+check "чужая строка в настройке туннеля отвергает файл" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'туннел' && echo yes || echo no)"
+
+out="$(printf '%s\n' 'splify2-backup 2' '[xsteer home]' '[Interface]' 'Address = 10.77.0.5/24' | backup_put)"
+check "настройка туннеля без приватного ключа отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+
+out="$(printf '%s\n' 'splify2-backup 2' '[zapret yt]' '#v1' '/bin/sh' | backup_put)"
+check "строка не из ключей nfqws отвергает стратегию" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'nfqws' && echo yes || echo no)"
+
+out="$(printf '%s\n' 'splify2-backup 2' '[options]' 'geo_url=https://x/$(reboot)' | backup_put)"
+check "подстановка в адресе измерителя отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+
+out="$(printf '%s\n' 'splify2-backup 2' '[options]' 'zm_fix=да' | backup_put)"
+check "нечисловое значение выключателя отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+
+out="$(printf '%s\n' 'splify2-backup 2' '[sub work]' 'http://example.org/list' | backup_put)"
+check "именованная подписка не из vless:// отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+
+# Пустой раздел стратегии создал бы файл ключей без ключей: обработчик обхода на таком
+# выходе поднимается и не обходит ничего, а канал при этом работает — то есть человек видит
+# «включено» на выключенном обходе.
+out="$(printf '%s\n' 'splify2-backup 2' '[zapret yt]' | backup_put)"
+check "пустой раздел стратегии отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+
+# Восстановление продолжается там, где остановились: следующие проверки этого раздела ждут
+# спеку и подписку на месте.
+printf '{"schema":1,"outputs":{},"channels":[]}\n' > "$T/etc/spec.json"
 
 # Отказ компилятора не выдаётся за успех, и в ответе сказано, что списки уже восстановлены:
 # порядок записи (списки и подписка раньше спеки) продиктован тем, что движок читает их при
