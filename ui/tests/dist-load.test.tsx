@@ -13,7 +13,14 @@ import { describe, expect, it } from 'vitest'
  *  начальное.
  *
  *  Барьер грузит ровно то, что уезжает на роутер, монтирует и ходит по разделам. Без сборки
- *  проверять нечего — тогда стенд пропускается. */
+ *  проверять нечего — тогда стенд пропускается.
+ *
+ *  ПОЧЕМУ ПУТЬ К БАНДЛУ ИДЁТ ПЕРЕМЕННОЙ, А НЕ СТРОКОЙ В import(). Пропуск ниже — РАЗБОРА
+ *  ВРЕМЕНИ ИСПОЛНЕНИЯ, а vite:import-analysis разрешает адреса на ПРЕОБРАЗОВАНИИ файла, то
+ *  есть раньше, чем исполнится хоть одна строка. Со строковым литералом файл не преобразуется
+ *  вовсе («Failed to resolve import ../dist/splify-index.js»), skipIf не получает хода, и
+ *  весь ui-harness краснеет на чистой выкачке — там, где обещан пропуск. Переменная плюс
+ *  @vite-ignore уводят разрешение в исполнение, где файл уже либо есть, либо стенд пропущен. */
 
 /** jsdom подменяет базовый адрес модуля на http://localhost, поэтому путь считается от
  *  корня проекта, а не от import.meta.url. */
@@ -75,7 +82,7 @@ describe.skipIf(!existsSync(DIST))('собранный бандл', () => {
         root.className = 'splify-react-root'
         document.body.appendChild(root)
 
-        await import('../dist/splify-index.js')
+        await import(/* @vite-ignore */ DIST)
         const mount = (window as never as Record<string, (el: Element) => void>).__splifyMount
         mount(root)
         await new Promise((r) => setTimeout(r, 250))
