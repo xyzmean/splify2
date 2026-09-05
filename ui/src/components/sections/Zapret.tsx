@@ -49,6 +49,11 @@ const SET_OF: Record<ZapretFamily, ZapretSet> = {
     flowseal: 'general', v: 'general', yv: 'youtube', other: 'general',
 }
 const SET_NAME: Record<ZapretSet, string> = { general: 'общий набор', youtube: 'YouTube' }
+/** Сроки расписания. Ноль первым — «не надо» это умолчание, и оно обязано быть видно как
+ *  выбранное, а не как отсутствие выбора. Значения редкие нарочно: подбор гоняет три десятка
+ *  запросов на каждую из полусотни стратегий, и делать это чаще раза в неделю незачем —
+ *  каталог стратегий у автора меняется не быстрее. */
+const AUTO_EVERY = [0, 7, 30] as const
 
 function ago(ts: number): string {
     if (!ts) return 'ни разу'
@@ -90,6 +95,11 @@ export default function Zapret() {
     const setCat = (v: Cat | null) => { setCatRaw(v); if (v) cacheSet('zapret:cat', v) }
     const setRes = (v: ZapretResults | null) => { setResRaw(v); if (v) cacheSet('zapret:res', v) }
     const [test, setTest] = useState<Awaited<ReturnType<typeof rpc.zapretTest>> | null>(null)
+    /** Автоподбор: состояние, рейтинг и приговор одним ответом. Не кэшируется в отличие от
+     *  каталога: «можно ли откатиться» и «идёт ли подбор» — сведения, которые устаревают за
+     *  минуты, и показать их из снимка прошлого открытия значило бы предложить откат, которого
+     *  уже нет. */
+    const [auto, setAuto] = useState<Awaited<ReturnType<typeof rpc.zapretAutoselect>> | null>(null)
     const [busy, setBusy] = useState('')
     /** Куда применять выбранное: пусто — весь роутер, иначе имя выхода kind=zapret. */
     const [target, setTarget] = useState('')
@@ -109,6 +119,7 @@ export default function Zapret() {
             rpc.zapretState().then(setSt).catch(() => setStRaw(null)),
             rpc.zapretStrategies().then(setCat).catch(() => setCatRaw(null)),
             rpc.zapretResults().then(setRes).catch(() => setResRaw(null)),
+            rpc.zapretAutoselect().then(setAuto).catch(() => setAuto(null)),
         ]).then(() => undefined),
         [],
     )
@@ -132,6 +143,12 @@ export default function Zapret() {
                         void rpc.zapretResults().then(setRes).catch(() => undefined)
                     }
                     wasRunning.current = r.running
+                    /* Подбор идёт минуты и заканчивается сам — значит его состояние надо
+                     * перечитывать, пока он идёт, ровно как ход проверки. Отдельного цикла
+                     * для этого нет: подбор ГОНЯЕТ проверку, поэтому пока «идёт проверка»,
+                     * этот круг уже частый, а по её окончании нужен ещё один вопрос — не
+                     * применилось ли что-нибудь. */
+                    void rpc.zapretAutoselect().then(setAuto).catch(() => undefined)
                     timer = setTimeout(tick, r.running ? 2000 : 15000)
                 })
                 .catch(() => { if (alive) timer = setTimeout(tick, 15000) })
@@ -161,6 +178,13 @@ export default function Zapret() {
     async function startTest(scope: string) {
         await act('test', () => rpc.zapretTestStart(scope), t('Проверка запущена'))
         rpc.zapretTest().then((r) => { setTest(r); wasRunning.current = r.running }).catch(() => undefined)
+    }
+
+    /** Подобрать и применить. Ход подхватит общий опрос; чтобы «подбираю…» появилось сразу,
+     *  состояние спрашивается здесь же. */
+    async function startAuto(scope: string) {
+        await act('auto', () => rpc.zapretAutoselectStart(scope), t('Подбор запущен'))
+        rpc.zapretAutoselect().then(setAuto).catch(() => undefined)
     }
 
     function toggleRow(name: string) {
@@ -393,6 +417,102 @@ export default function Zapret() {
                             )}
                         </div>
                     )}
+                </CardContent>
+            </Card>
+
+            {/* ---- автоподбор ------------------------------------------------------------ */}
+            {/* ПОСЛЕ проверки и ДО списка нарочно: подбор — это та же проверка плюс решение,
+                и человек читает страницу сверху вниз ровно в этом порядке. Кнопка честно
+                называется «Подобрать и применить»: подбор без применения был бы обманом, а
+                применить победителя, не сказав, — тем, за что этот продукт и переписывали.  */}
+            <Card>
+                <CardHeader><CardTitle className="text-base">{t('Автоподбор')}</CardTitle></CardHeader>
+                <CardContent className="space-y-3 text-sm">
+                    <div className="text-xs text-muted-foreground">
+                        {t('Гоняет ту же проверку в изоляции, ранжирует и применяет победителя. Применяет НЕ ВСЕГДА: только если он открывает больше, чем открывается без обхода вовсе, и больше, чем ваша нынешняя стратегия. Менять работающее на равное — риск без выигрыша.')}
+                    </div>
+
+                    {/* Приговор. Строка отказа здесь ценнее пустоты: «уже применена лучшая» и
+                        «проверка не проходила» — разные состояния, и человек по ним решает,
+                        жать ли кнопку. */}
+                    {auto?.winner ? (
+                        <div>
+                            {t('лучшая по замеру')}: <span className="font-medium">{auto.winner.name}</span>
+                            {' '}({auto.winner.ok} {t('из')} {auto.winner.total})
+                        </div>
+                    ) : auto?.note ? (
+                        <div className="text-muted-foreground">{auto.note}</div>
+                    ) : null}
+
+                    {/* Что применено подбором и когда. Различение «подобрал сам» и «нажали
+                        кнопку» здесь не украшение: через месяц это единственный способ понять,
+                        почему стратегия не та, которую выбирали руками. */}
+                    {auto && auto.at > 0 && auto.applied && (
+                        <div className="text-xs text-muted-foreground">
+                            {auto.by === 'auto' ? t('подобрано по расписанию') : t('подобрано вручную')}
+                            : {auto.applied}
+                            {auto.applied_ok !== undefined && auto.applied_total
+                                ? ` (${auto.applied_ok} ${t('из')} ${auto.applied_total})`
+                                : ''}
+                            {' · '}{ago(auto.at)}
+                            {auto.prev ? ` · ${t('было')}: ${auto.prev}` : ''}
+                        </div>
+                    )}
+
+                    <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                            size="sm"
+                            disabled={busy !== '' || running || auto?.running || !st.curl || st.strategies === 0}
+                            onClick={() => void startAuto('all')}
+                        >
+                            {auto?.running
+                                ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                                : <Play className="h-3.5 w-3.5" aria-hidden="true" />}
+                            {auto?.running ? t('подбираю…') : t('Подобрать и применить')}
+                        </Button>
+                        {/* Откат предлагается ТОЛЬКО когда он возможен: копия на месте и
+                            работает то, что применил подбор. Кнопка, отказывающая при нажатии,
+                            хуже отсутствующей. */}
+                        {auto?.can_undo && (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={busy !== ''}
+                                onClick={() => void act(
+                                    'undo',
+                                    () => rpc.zapretAutoselectUndo(),
+                                    t('Вернулось как было'),
+                                )}
+                            >
+                                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                                {t('Вернуть как было')}
+                            </Button>
+                        )}
+                    </div>
+
+                    {/* Расписание. ВЫКЛЮЧЕНО по умолчанию, и это видно: применение стратегии
+                        перезапускает обход и меняет то, что работает у всех клиентов роутера. */}
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <span className="text-xs text-muted-foreground">{t('по расписанию')}:</span>
+                        {AUTO_EVERY.map((d) => (
+                            <Button
+                                key={d}
+                                variant={(auto?.every_days ?? 0) === d ? 'default' : 'outline'}
+                                size="sm"
+                                disabled={busy !== ''}
+                                onClick={() => void act(
+                                    'every',
+                                    () => rpc.zapretAutoselectSet(d),
+                                    d === 0 ? t('Автоподбор выключен') : t('Расписание сохранено'),
+                                )}
+                            >
+                                {d === 0 ? t('не надо') : `${t('раз в')} ${d} ${t('сут')}`}
+                            </Button>
+                        ))}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                        {t('По расписанию подбор идёт вместе с ночным обновлением списков и только когда роутер не занят: если через него идёт трафик, подбор откладывается до следующей ночи.')}
+                    </div>
                 </CardContent>
             </Card>
 

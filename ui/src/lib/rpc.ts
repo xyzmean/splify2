@@ -889,6 +889,48 @@ export const rpc = {
      *  целей; строка результата называет свой набор и то, что в нём открылось. Верхние
      *  `targets` и `baseline` — про общий набор, для файла постарше. */
     zapretResults: declare<ZapretResults>('zapret_results'),
+
+    /** Автоподбор: состояние, рейтинг и приговор ОДНИМ ответом — вкладка спрашивает всё это
+     *  разом, а читается оно из одного каталога результатов.
+     *
+     *  `winner` нет, а `note` объясняет, почему, и это ОТВЕТ, а не пустота: «уже применена
+     *  лучшая», «не лучше работающей», «не лучше, чем без обхода вовсе» и «проверка не
+     *  проходила» — четыре разных состояния, и по строке человек понимает, жать ли кнопку. */
+    zapretAutoselect: declare<{
+        every_days: number
+        on: boolean
+        /** Когда подбор ПРИМЕНИЛ стратегию (не когда гонял проверку). 0 — ни разу. */
+        at: number
+        applied?: string
+        applied_ok?: number
+        applied_total?: number
+        by?: string
+        prev?: string
+        can_undo: boolean
+        winner?: { name: string; ok: number; total: number; set: ZapretSet }
+        note?: string
+        /** По убыванию доли удач; при равной доле выше та, у которой меньше ключей nfqws. */
+        rank: { name: string; ok: number; total: number; keys: number; set: ZapretSet }[]
+        running: boolean
+    }>('zapret_autoselect'),
+
+    /** Число дней между подборами; 0 выключает, больше 90 — отказ. */
+    zapretAutoselectSet: declare<{ ok: boolean; error?: string; every_days?: number }>(
+        'zapret_autoselect_set', ['days'],
+    ),
+
+    /** Подобрать и ПРИМЕНИТЬ. Набор без `dv`: слой discord мерить нечем, а подбор без замера —
+     *  подбор наугад. Идёт фоном, как и проверка. */
+    zapretAutoselectStart: declare<{ ok: boolean; error?: string; scope?: string }>(
+        'zapret_autoselect_start', ['scope'],
+    ),
+
+    /** Откат к настройке, которая была до применения победителя. Отказывает, если после
+     *  подбора стратегию выбрали руками: копия хранит файл целиком, и откат отменил бы
+     *  именно этот выбор. */
+    zapretAutoselectUndo: declare<{ ok: boolean; error?: string; active?: string }>(
+        'zapret_autoselect_undo',
+    ),
 }
 
 /** Состояние игрового фильтра. `gv`: '' — блока нет, '0' — встроенный фильтр стратегии
