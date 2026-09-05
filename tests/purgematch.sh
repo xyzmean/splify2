@@ -273,8 +273,12 @@ EOF
         printf "\toption splify2_state 'saved'\n"
         printf "\tlist splify2_orig 'option resolver_url https://dns.foreign/dns-query'\n"
     } > "$T/etc/config/https-dns-proxy"
-    printf '%s\n%s\n' '0 3 * * * /usr/bin/чужое-обновление' \
-        '17 5 * * * /usr/sbin/splify2-update-lists' > "$T/etc/crontabs/root"
+    # ДВЕ НАШИХ СТРОКИ, а не одна. Телеметрия уезжает раз в час и потому живёт своим
+    # заданием: хвостом ночного обновления списков час не сделать. Обе обязаны уйти —
+    # забытая почасовая строка стучится в панель каждый час на роутере, где пакета уже нет.
+    printf '%s\n%s\n%s\n' '0 3 * * * /usr/bin/чужое-обновление' \
+        '17 5 * * * /usr/sbin/splify2-update-lists' \
+        '41 * * * * /usr/sbin/splify2-telemetry --scheduled' > "$T/etc/crontabs/root"
     : > "$T/var/run/splify2-vless-dirty"
     printf 'a1b2c3d4\n' > "$T/var/run/splify2-boot-id"
     printf 'wan_down=7\niface_down=9\n' > "$T/var/run/splify2-events"
@@ -329,6 +333,8 @@ check "показ оставляет настройку" "yes" "$(exists "$T/etc
 check "показ оставляет расписку" "yes" "$(exists "$T/etc/splify2/fw-owned")"
 check "показ оставляет конфиг DoH" "yes" "$(exists "$T/etc/config/https-dns-proxy")"
 check "показ оставляет запись в crontab" "1" "$(grep -c splify2-update-lists "$T/etc/crontabs/root")"
+check "показ оставляет и почасовую строку телеметрии" "1" \
+    "$(grep -c splify2-telemetry "$T/etc/crontabs/root")"
 check "показ оставляет состояние в /var" "yes" "$(exists "$T/var/lib/splify2")"
 # Показ, по которому не видно, что будет удалено, бесполезен: человек не узнает ни про зону,
 # ни про свою спеку — а именно они и есть цена ошибки.
@@ -358,6 +364,8 @@ check "отсутствующую таблицу не удаляли" "0" "$(gre
 check "правило DoH снято" "30000:	from all lookup main" "$(cat "$T/ip.rules")"
 check "таблица маршрутов очищена" "" "$(cat "$T/ip.routes")"
 check "наша запись в crontab убрана" "0" "$(grep -c splify2-update-lists "$T/etc/crontabs/root")"
+check "почасовая строка телеметрии убрана тоже" "0" \
+    "$(grep -c splify2-telemetry "$T/etc/crontabs/root")"
 check "чужая запись в crontab осталась" "1" "$(grep -c 'чужое-обновление' "$T/etc/crontabs/root")"
 check "cron перезапущен" "1" "$(grep -c '^cron restart' "$T/initd.log")"
 check "срок вызова rpcd снят" "no" "$(has 'rpcd.@rpcd[0].timeout=120')"
@@ -423,6 +431,8 @@ check "с --keep-config зоны всё равно удалены" "lan " "$(zon
 check "с --keep-config таблицы всё равно удалены" "fw4" "$(cat "$T/nft.tables")"
 check "с --keep-config запись в crontab всё равно убрана" "0" \
     "$(grep -c splify2-update-lists "$T/etc/crontabs/root")"
+check "с --keep-config почасовая строка телеметрии убрана" "0" \
+    "$(grep -c splify2-telemetry "$T/etc/crontabs/root")"
 
 # ---- телеметрия --------------------------------------------------------------------
 #
@@ -453,8 +463,14 @@ state_paths_default() {
 }
 check "умолчание скрипта: список путей вообще разбирается" "yes" \
       "$([ "$(state_paths_default | grep -c .)" -ge 8 ] && echo yes || echo no)"
+# Список нарочно поимённый, и в нём же — следы телеметрии: тальники падений (каталог),
+# последнее падение и отметка ограничителя внеплановых отправок. Забытый файл в /var/run не
+# опасен сам по себе, но «пакет снят, а следы остались» — это ровно то, о чём команда обещает
+# обратное.
 for _p in /var/run/splify2-boot-id /var/run/splify2-events \
-          /var/run/splify2-events.i /var/run/splify2-events.w; do
+          /var/run/splify2-events.i /var/run/splify2-events.w \
+          /var/run/splify2-events.c /var/run/splify2-crash \
+          /var/run/splify2-telemetry-now; do
     check "умолчание скрипта знает $_p" "1" "$(state_paths_default | grep -cx "$_p")"
 done
 # Показ обязан назвать это словами: по нему человек решает, звать ли с --yes.

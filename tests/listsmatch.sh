@@ -167,6 +167,15 @@ printf '0.0.0.0/32\n'  > "$T/lists/news.lst"
 printf 'old.example\n' > "$T/lists/domains/news.lst"
 printf '0.0.0.0/32\n'  > "$T/lists/rkn_other.lst"
 
+# Заглушка команды телеметрии: оставляет след. Нужна ровно для того, чтобы проверка «её не
+# звали» была проверкой, а не совпадением: настоящей команды на машине стенда нет, и без
+# заглушки скрипт молчал бы по одной лишь недоступности файла.
+cat > "$T/bin/telemetry-stub" <<EOF
+#!/bin/sh
+printf 'звали: %s\n' "\$*" > "$T/telemetry-called"
+EOF
+chmod +x "$T/bin/telemetry-stub"
+
 # ---- прогон ------------------------------------------------------------------
 SANDBOX="$T" \
 PATH="$T/bin:$PATH" \
@@ -177,10 +186,18 @@ MANIFEST="$T/etc/manifest.json" \
 STAMP="$T/var/last-update" \
 LOCK="$T/var/update.lock" \
 REPORT="$T/report" \
+TELEMETRY="$T/bin/telemetry-stub" \
 FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
     sh "$SCRIPT" > "$T/out" 2>&1
 
 # ---- проверки ----------------------------------------------------------------
+# ТЕЛЕМЕТРИЮ ОТСЮДА БОЛЬШЕ НЕ ЗОВУТ. Она уезжает раз в час и живёт своим заданием крона;
+# пока вызов висел хвостом ночного обновления, в час этого задания отправок было бы две.
+# Проверка по следствию: заглушка, оставляющая след, подставлена в тот самый шов (TELEMETRY),
+# которым скрипт звал команду, — след не должен появиться ни разу.
+check "обновление списков телеметрию не отправляет" "нет" \
+      "$([ -e "$T/telemetry-called" ] && cat "$T/telemetry-called" || echo нет)"
+
 dom_url="$(grep 'domains/news.lst' "$T/requested" 2>/dev/null | head -1)"
 check "доменный список качается по адресу доменного (I-011)" \
       "https://example.invalid/lists/domains/news.lst" "${dom_url:-НЕ ЗАПРАШИВАЛСЯ}"

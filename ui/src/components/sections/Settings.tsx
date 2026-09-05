@@ -91,10 +91,6 @@ export default function Settings({
                             />
                             <FetchCard />
                             <ZmFixCard />
-                            {/* Согласие на отчёт живёт рядом с остальными выключателями,
-                                которыми человек распоряжается сам, а не отдельным экраном:
-                                отдельный экран открывают только те, кто уже искал телеметрию. */}
-                            <TelemetryCard />
                         </div>
                     )}
                     {screen === 'catalog' && <CatalogTab onUseInRule={onUseInRule} />}
@@ -113,6 +109,12 @@ export default function Settings({
                                 onInstalled={live.refresh}
                             />
                             <SelfUpdateCard info={live.selfUpdate} onInstalled={live.refresh} />
+                            {/* Отчёт о работе живёт здесь, а не среди общих выключателей:
+                                «О ПО» — раздел про сам продукт и про то, что он о себе
+                                собирает, и именно это место названо человеку в документации
+                                как то, где телеметрия выключается. Разойдись названное место
+                                с настоящим — отказ превратился бы в поиски. */}
+                            <TelemetryCard />
                         </div>
                     )}
                 </>
