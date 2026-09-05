@@ -28,6 +28,10 @@ run() {  # ИМЯ КОМАНДА...
 run listsmatch sh "$ROOT/tests/listsmatch.sh"
 run rpcdmatch  sh "$ROOT/tests/rpcdmatch.sh"
 run pkgmatch   sh "$ROOT/tests/pkgmatch.sh"
+# Команда полного удаления: убирает ТОЛЬКО записанное за нами и по умолчанию ничего не
+# делает вовсе. Стенд про порядок (проброс уходит раньше зоны — иначе fw4 не перезагрузится)
+# и про чужое, которое остаться обязано.
+run purgematch sh "$ROOT/tests/purgematch.sh"
 # Скачивание с обходом закрытого githubusercontent: лестница путей и её порядок (splify2#15).
 run fetchmatch sh "$ROOT/tests/fetchmatch.sh"
 # Определение версии в установщике: оба пути и оба отказа (R-048).
