@@ -2,6 +2,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/preact'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import CatalogTab from '@/components/tabs/CatalogTab'
 import { rpc } from '@/lib/rpc'
+import { adPath, mockCatalog } from './ad-fixture'
 
 // Кнопка «Обновить списки» в каталоге. До неё обновить всё разом можно было только
 // расписанием (или по одной записи), то есть человек, добавивший правило, ждал ночи или
@@ -11,17 +12,10 @@ import { rpc } from '@/lib/rpc'
 // и расписание, и отчитываться по его ответу, а не безусловным успехом — ровно на этом
 // уже обжигалось удаление (R-033).
 
-const MANIFEST = {
-    version: '1',
-    base_url: 'https://x/',
-    categories: [{ id: 'youtube', name_ru: 'YouTube', file: 'youtube.lst', count: 100 }],
-}
-
 function mockBase() {
-    vi.spyOn(rpc, 'manifest').mockResolvedValue(MANIFEST as never)
-    vi.spyOn(rpc, 'specGet').mockResolvedValue({ channels: [] } as never)
-    vi.spyOn(rpc, 'localLists').mockResolvedValue(
-        { files: { 'youtube.lst': { count: 100, mtime: 1 } } } as never,
+    mockCatalog(
+        [{ id: 'youtube', name: 'YouTube', kinds: ['domains'] }],
+        { [adPath('youtube', 'domains')]: { count: 100, mtime: 1 } },
     )
 }
 

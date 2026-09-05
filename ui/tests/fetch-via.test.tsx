@@ -4,6 +4,7 @@ import CatalogTab from '@/components/tabs/CatalogTab'
 import EngineCard from '@/components/EngineCard'
 import SelfUpdateCard from '@/components/SelfUpdateCard'
 import { rpc } from '@/lib/rpc'
+import { adPath, mockCatalog } from './ad-fixture'
 
 // splify2#15: у части аудитории провайдер закрыл githubusercontent.com — и закрыл целиком,
 // потому что raw., objects. и release-assets. стоят на одних адресах Fastly. Бэкенд теперь
@@ -19,12 +20,6 @@ import { rpc } from '@/lib/rpc'
 const VIA = 'прямой адрес не отдал — взято через api.github.com (xyzmean/ru-bypass-ipsets, ветка main)'
 const noop = () => {}
 
-const MANIFEST = {
-    version: '1',
-    base_url: 'https://x/',
-    categories: [{ id: 'youtube', name_ru: 'YouTube', file: 'youtube.lst', count: 100 }],
-}
-
 // Всплывашка живёт четыре секунды и висит прямо в body, а не в контейнере рендера,
 // поэтому уборка testing-library её не трогает: без этой строки следующая проверка
 // находит слова предыдущей.
@@ -32,13 +27,12 @@ function clearToasts() {
     document.body.innerHTML = ''
 }
 
-function mockCatalog() {
-    vi.spyOn(rpc, 'manifest').mockResolvedValue(MANIFEST as never)
-    vi.spyOn(rpc, 'specGet').mockResolvedValue({ channels: [] } as never)
+function mockTab() {
     // Список уже на роутере: кнопка «Обновить» есть только у скачанного — у остального
     // в этой колонке стоит «скачается сам».
-    vi.spyOn(rpc, 'localLists').mockResolvedValue(
-        { files: { 'youtube.lst': { count: 100, mtime: 1 } } } as never,
+    mockCatalog(
+        [{ id: 'youtube', name: 'YouTube', kinds: ['domains'] }],
+        { [adPath('youtube', 'domains')]: { count: 100, mtime: 1 } },
     )
 }
 
@@ -46,7 +40,7 @@ describe('каталог называет путь, которым приеха�
     beforeEach(() => {
         vi.restoreAllMocks()
         clearToasts()
-        mockCatalog()
+        mockTab()
     })
 
     it('обход назван рядом с «обновлено»', async () => {

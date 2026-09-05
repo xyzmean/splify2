@@ -5,7 +5,16 @@ import { Switch } from '@/components/ui/switch'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
 import { pending } from '@/lib/pending'
-import { toCatalog, customServices, EMPTY_SPEC, isPart, type Channel, type OutputStatus, type ServiceEntry, type Spec } from '@/lib/model'
+import {
+    toAllowDomainsServices,
+    customServices,
+    EMPTY_SPEC,
+    isPart,
+    type Channel,
+    type OutputStatus,
+    type ServiceEntry,
+    type Spec,
+} from '@/lib/model'
 import { type Live } from '@/lib/live'
 import { Hint } from '@/components/ui/hint'
 import RuleEditor, { pathFor, selectedIds } from '@/components/tabs/RuleEditor'
@@ -109,7 +118,14 @@ export default function RulesTab({
          * помнит и несохранённые полсекунды, и снимок применённого — свой specGet здесь
          * вернул бы то, что вкладка Outbounds уже успела поменять. */
         pending.load().then(setSpec).catch(() => setSpec(EMPTY_SPEC))
-        rpc.manifest().then((m) => setServices(toCatalog(m).services)).catch(() => setServices([]))
+        /* Каталог у выбора списков ТОТ ЖЕ, что на вкладке каталога, и это не экономия: два
+         * источника означали бы, что человек видит в справке одно, а выбрать может другое.
+         * Источник один — itdoginfo/allow-domains (решение владельца). Файлы прежнего
+         * издателя, уже стоящие в правилах, отсюда не пропадают: `pick` трогает только
+         * файлы своей записи, а незнакомые оставляет в спеке нетронутыми. */
+        rpc.allowDomains()
+            .then((a) => setServices(toAllowDomainsServices(a)))
+            .catch(() => setServices([]))
         rpc.localLists().then((d) => setLocal(d.files || {})).catch(() => setLocal({}))
     }, [])
 

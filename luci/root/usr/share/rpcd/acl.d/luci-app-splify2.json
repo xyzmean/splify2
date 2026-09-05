@@ -16,6 +16,7 @@
           "devices",
           "client_nets",
           "local_lists",
+          "allow_domains",
           "list_custom",
           "list_get",
           "engine",

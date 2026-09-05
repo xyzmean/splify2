@@ -843,5 +843,269 @@ check "список первого издателя по-прежнему кач
 check "и он лёг на место" "yes" \
       "$([ -s "$T/lists/rkn.lst" ] && echo yes || echo no)"
 
+
+# ---- каталог второго издателя: метод allow_domains -------------------------------
+#
+# ЗАЧЕМ ЭТОТ РАЗДЕЛ. Двадцать пять списков лежали на роутере и включить их было неоткуда:
+# метода, который отдал бы каталог второго издателя, не существовало вовсе. Раздел сторожит
+# четыре обещания этого метода, и каждое из них однажды нарушалось где-то рядом:
+#
+#   1. Каталог — ТА ЖЕ таблица, что читает скачивание. Переписанный в стенд список
+#      сервисов зеленел бы на разошедшейся копии, поэтому ожидаемое берётся из САМОГО
+#      файла описания источника.
+#   2. `have` отвечает на вопрос «что скачано и какой версии», и отвечает ТОЛЬКО про то,
+#      что лежит на диске. Ноль строк — законное состояние скачанного пустого списка, и
+#      подменять им «файла нет» значит соврать интерфейсу ровно там, где он решает, рисовать
+#      кнопку «Загрузить» или «Обновить».
+#   3. Жалоба на негодную настройку тега ДОЕЗЖАЕТ. Разбор и печать в описании источника
+#      разведены именно затем, чтобы предупреждение не съела подоболочка (`$( )`), и метод
+#      обязан звать ad_tag_resolve в своей.
+#   4. Метод НЕ ХОДИТ В СЕТЬ. Его зовёт опрос страницы, а поход в сеть на опросе — это
+#      полминуты ожидания у того, у кого GitHub закрыт. Проверяется по следствию: curl и
+#      wget подменяются падающими заглушками, и ответ обязан остаться верным.
+
+# Сравнение ответа с таблицей. Ожидаемое — из файла описания источника, а не из копии в
+# стенде: копия расходится с таблицей на первом же добавленном сервисе, и стенд после этого
+# зелен по неверной причине.
+ad_cat() {  # ОПЕРАЦИЯ   (ответ метода — в $T/cat.json)
+    python3 - "$1" "$T/cat.json" "$ROOT/files/usr/share/splify2/allow-domains.sh" <<'PY'
+import json, re, sys
+op, catf, srcf = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    cat = json.load(open(catf, encoding='utf-8'))
+except Exception as e:
+    print('НЕ JSON: %s' % e); sys.exit(0)
+tbl = []
+for line in open(srcf, encoding='utf-8'):
+    m = re.match(r'^([a-z0-9_]+)\|([a-z,]+)\|(.+)$', line.rstrip('\n'))
+    if m:
+        tbl.append((m.group(1), m.group(2).split(','), m.group(3)))
+svc = cat.get('services', [])
+by = {s.get('id'): s for s in svc}
+if   op == 'count':    print(len(svc))
+elif op == 'tblcount': print(len(tbl))
+elif op == 'ids':      print(' '.join(sorted(by)))
+elif op == 'tblids':   print(' '.join(sorted(t[0] for t in tbl)))
+elif op == 'kindsdiff': print(' '.join(t[0] for t in tbl if by.get(t[0], {}).get('kinds') != t[1]))
+elif op == 'namesdiff': print(' '.join(t[0] for t in tbl if by.get(t[0], {}).get('name')  != t[2]))
+elif op.startswith('top:'):
+    v = cat.get(op[4:], '<нет ключа>')
+    print(v if not isinstance(v, bool) else ('true' if v else 'false'))
+elif op.startswith('haskey:'):     # есть ли у сервиса ключ have ВООБЩЕ
+    print('yes' if 'have' in by.get(op[7:], {}) else 'no')
+elif op.startswith('hv:'):         # hv:СЕРВИС:ВИД:ПОЛЕ
+    _, s, k, f = op.split(':')
+    print(by.get(s, {}).get('have', {}).get(k, {}).get(f, '<нет>'))
+elif op.startswith('hvkinds:'):    # какие виды названы в have
+    print(' '.join(sorted(by.get(op[8:], {}).get('have', {}))))
+PY
+}
+
+ad_catalog() {  # снять каталог в $T/cat.json
+    srs_rpcd allow_domains '{}' > "$T/cat.json"
+}
+
+# Раздел выше оставил в оболочке SRS_TAG_NOW=AD_TAG2 (присваивание перед присваиванием, а не
+# перед командой, живёт до конца скрипта). Здесь тег обязан быть предсказуем: половина
+# проверок сравнивает ответ метода именно с зашитым умолчанием.
+SRS_TAG_NOW=""
+
+# Диск чистый: ни одного списка второго издателя и ни одной отметки. Так выглядит роутер,
+# на котором каталог открывают впервые.
+srs_lists_reset
+rm -rf "$T/lists"; mkdir -p "$T/lists"
+rm -f "$T/etc/allow-domains.tag" "$T/requested"
+: > "$T/uci.store"
+
+ad_catalog
+check "allow_domains отвечает успехом" "true" "$(ad_cat top:ok)"
+check "каталог отдаёт СТОЛЬКО сервисов, сколько их в таблице" "$(ad_cat tblcount)" "$(ad_cat count)"
+check "и ровно те же имена, что в таблице" "$(ad_cat tblids)" "$(ad_cat ids)"
+check "виды у каждого сервиса — те же, что в таблице" "" "$(ad_cat kindsdiff)"
+check "названия у каждого сервиса — те же, что в таблице" "" "$(ad_cat namesdiff)"
+check "приставка id названа именем источника" "itdog" "$(ad_cat top:id)"
+check "репозиторий издателя назван" "itdoginfo/allow-domains" "$(ad_cat top:repo)"
+check "ссылка ведёт на релизы, а не на ветку" "yes" \
+      "$(ad_cat top:base_url | grep -q '/releases/download$' && echo yes || echo no)"
+check "тег — зашитый в пакет, пока uci молчит" "$AD_TAG" "$(ad_cat top:tag)"
+check "зашитый тег отдаётся отдельным полем" "$AD_TAG" "$(ad_cat top:tag_default)"
+check "жалобы на настройку нет, когда с ней всё в порядке" "" "$(ad_cat top:tag_warn)"
+check "на чистом диске ни у кого нет ключа have" "no" "$(ad_cat haskey:telegram)"
+
+# ---- have появляется ровно у того, что ЛЕЖИТ на диске ----------------------------
+#
+# Файлы кладёт настоящее скачивание (list_fetch), а не стенд своей рукой: `have` обязан
+# описывать то, что создаёт продукт, и путь у обеих половин обязан быть один. Разложи стенд
+# файлы сам — он зеленел бы и на методе, который смотрит не туда.
+rm -f "$T/requested"
+out="$(srs_rpcd list_fetch '{"id":"itdog:telegram","kind":"domains"}')"
+ad_catalog
+
+check "у скачанного сервиса have есть" "yes" "$(ad_cat haskey:telegram)"
+check "и в нём оба вида — набор один, кладутся оба" "domains prefixes" "$(ad_cat hvkinds:telegram)"
+check "тег в have — тот, что записан в отметке" \
+      "$(awk '$1=="telegram" && $2=="domains" {print $3}' "$T/etc/allow-domains.tag")" \
+      "$(ad_cat hv:telegram:domains:tag)"
+check "число строк в have — то, что лежит на диске" \
+      "$(grep -c . "$T/lists/itdog/domains/telegram.lst")" "$(ad_cat hv:telegram:domains:lines)"
+check "и у второго вида того же набора тоже" \
+      "$(grep -c . "$T/lists/itdog/telegram.lst")" "$(ad_cat hv:telegram:prefixes:lines)"
+check "у сервиса без файла ключа have НЕТ ВОВСЕ" "no" "$(ad_cat haskey:anime)"
+check "и у соседа по таблице тоже" "no" "$(ad_cat haskey:youtube)"
+
+# ПУСТОЙ СКАЧАННЫЙ СПИСОК — ЭТО НЕ «ФАЙЛА НЕТ». Ноль строк законен (у сервиса может не
+# оказаться ни одной записи нужного вида), и подмена его отсутствием ключа заставила бы
+# интерфейс предлагать «Загрузить» то, что уже загружено.
+: > "$T/lists/itdog/domains/anime.lst"
+ad_catalog
+check "пустой скачанный список назван в have, а не пропущен" "yes" "$(ad_cat haskey:anime)"
+check "и у него честный ноль строк" "0" "$(ad_cat hv:anime:domains:lines)"
+check "и только тот вид, который лежит" "domains" "$(ad_cat hvkinds:anime)"
+
+# Файл без отметки — законное состояние: так выглядит список, положенный руками или
+# вернувшийся из архива настроек. Он ЕСТЬ на диске, значит have про него быть обязан, а
+# версия у него неизвестна — и врать про неё нельзя.
+check "у файла без отметки версия пуста, но сам он в have есть" "" "$(ad_cat hv:anime:domains:tag)"
+rm -f "$T/lists/itdog/domains/anime.lst"
+
+# ---- негодный тег в uci: жалоба доезжает, а тег остаётся зашитым --------------------
+#
+# Предупреждение, съеденное подоболочкой, — ровно та беда, ради которой разбор и печать
+# тега в описании источника разведены. Проверяется по СЛЕДСТВИЮ: в ответе жалоба непуста,
+# а тег — умолчание, а не мусор из uci.
+printf 'splify2.main.allow_domains_tag=%s\n' 'not a tag/../../x' > "$T/uci.store"
+ad_catalog
+check "негодный тег из uci даёт непустую жалобу" "yes" \
+      "$(ad_cat top:tag_warn | grep -q . && echo yes || echo no)"
+check "и жалоба называет то, что человек набрал" "yes" \
+      "$(ad_cat top:tag_warn | grep -q 'not a tag' && echo yes || echo no)"
+check "а качать будем по ЗАШИТОМУ тегу, а не по мусору" "$AD_TAG" "$(ad_cat top:tag)"
+
+printf 'splify2.main.allow_domains_tag=latest\n' > "$T/uci.store"
+ad_catalog
+check "tag=latest отбит и назван вслух" "yes" \
+      "$(ad_cat top:tag_warn | grep -q 'latest' && echo yes || echo no)"
+check "и тег остался зашитым" "$AD_TAG" "$(ad_cat top:tag)"
+
+# Годный тег из uci метод обязан ПОКАЗАТЬ: иначе человек, поднявший версию руками, видел бы
+# в каталоге не ту, по которой качается.
+printf 'splify2.main.allow_domains_tag=%s\n' "$AD_TAG2" > "$T/uci.store"
+ad_catalog
+check "годный тег из uci доезжает до каталога" "$AD_TAG2" "$(ad_cat top:tag)"
+check "и жалобы при нём нет" "" "$(ad_cat top:tag_warn)"
+check "а зашитый рядом виден по-прежнему" "$AD_TAG" "$(ad_cat top:tag_default)"
+: > "$T/uci.store"
+
+# ---- метод НЕ ХОДИТ В СЕТЬ -------------------------------------------------------
+#
+# Его зовёт опрос страницы. Поход в сеть на опросе — это то, чего в продукте избегают везде:
+# у аудитории, которой этот издатель и нужен, GitHub закрыт, и каждый такой поход стоит
+# полминуты ожидания. Проверяется по следствию: заглушки скачивания ПАДАЮТ и протоколируют
+# попытку, а ответ обязан остаться тем же самым.
+cp "$T/bin/curl" "$T/bin/curl.keep"
+[ -f "$T/bin/wget" ] && cp "$T/bin/wget" "$T/bin/wget.keep"
+cat > "$T/bin/curl" <<'EOF'
+#!/bin/sh
+echo "curl $*" >> "$SANDBOX/netcalls"
+exit 7
+EOF
+cp "$T/bin/curl" "$T/bin/wget"
+chmod +x "$T/bin/curl" "$T/bin/wget"
+rm -f "$T/netcalls"
+ad_catalog
+check "с падающим скачиванием каталог всё равно верен" "$(ad_cat tblcount)" "$(ad_cat count)"
+check "и по-прежнему успешен" "true" "$(ad_cat top:ok)"
+check "и have на месте — он про диск, а не про сеть" "yes" "$(ad_cat haskey:telegram)"
+check "в сеть не ходили ни разу" "no" "$([ -f "$T/netcalls" ] && echo yes || echo no)"
+mv "$T/bin/curl.keep" "$T/bin/curl"
+if [ -f "$T/bin/wget.keep" ]; then mv "$T/bin/wget.keep" "$T/bin/wget"; else rm -f "$T/bin/wget"; fi
+
+# ---- метод объявлен и разрешён ---------------------------------------------------
+# Метод, которого нет в ACL, работает из ssh и НЕ работает из браузера: страница получает
+# отказ доступа и показывает «нет данных». Барьер сборки требует того же, но стенд быстрее.
+check "allow_domains объявлен в перечне методов объекта" "yes" \
+      "$(JSHN_SH="$ROOT/tests/stub/jshn.sh" sh "$ROOT/files/usr/libexec/rpcd/splify2" list 2>/dev/null |
+         grep -q '"allow_domains"' && echo yes || echo no)"
+check "allow_domains разрешён в ACL на чтение" "yes" \
+      "$(python3 -c '
+import json,sys
+a=json.load(open(sys.argv[1],encoding="utf-8"))["luci-app-splify2"]
+print("yes" if "allow_domains" in a["read"]["ubus"]["splify2"] else "no")' \
+        "$ROOT/luci/root/usr/share/rpcd/acl.d/luci-app-splify2.json")"
+
+# ---- удаление списка второго издателя ---------------------------------------------
+#
+# ВТОРАЯ ПОЛОВИНА ТОЙ ЖЕ ДЫРЫ. Приставку `itdog:` выучил один потребитель — скачивание, — а
+# list_remove разбирал id по прежнему правилу и искал его в манифесте ПЕРВОГО издателя. На
+# `itdog:telegram` он честно отвечал «такого нет в манифесте», и список, который можно было
+# скачать, нельзя было убрать НИКОГДА. Тот же класс, что R-106.
+#
+# Проверяется по СЛЕДСТВИЮ: исчезает ли файл, который создало скачивание. «Метод вернул ok»
+# здесь ничего не значит — ровно так выглядел бы и метод, стирающий не тот путь.
+srs_lists_reset
+rm -rf "$T/lists"; mkdir -p "$T/lists"
+rm -f "$T/etc/allow-domains.tag" "$T/requested"
+# Спека на время удаления не должна ссылаться на удаляемое — иначе сработает (законный)
+# отказ «список используется каналом», и проверялся бы он, а не удаление.
+cp "$T/etc/spec.json" "$T/etc/spec.keep"
+printf '{"schema":1,"channels":[]}\n' > "$T/etc/spec.json"
+out="$(srs_rpcd list_fetch '{"id":"itdog:telegram","kind":"domains"}')"
+check "перед удалением файл на месте" "yes" \
+      "$([ -s "$T/lists/itdog/domains/telegram.lst" ] && echo yes || echo no)"
+
+out="$(srs_rpcd list_remove '{"id":"itdog:telegram","kind":"domains"}')"
+check "list_remove у второго издателя отвечает успехом" "yes" \
+      "$(printf '%s' "$out" | grep -q '"ok": *true' && echo yes || echo no)"
+check "и файл, созданный скачиванием, исчез" "no" \
+      "$([ -e "$T/lists/itdog/domains/telegram.lst" ] && echo yes || echo no)"
+check "а второй вид того же набора не тронут — его не просили" "yes" \
+      "$([ -s "$T/lists/itdog/telegram.lst" ] && echo yes || echo no)"
+# ОТМЕТКА ВЕРСИИ УХОДИТ ВМЕСТЕ С ФАЙЛОМ. Отметка говорит «лежащий файл набит этим тегом»;
+# пережившая свой файл, она заявляет о том, чего нет, — и каталог показал бы версию у
+# списка, которого на роутере не осталось.
+check "отметка версии удалённого вида снята" "" \
+      "$(awk '$1=="telegram" && $2=="domains" {print $3}' "$T/etc/allow-domains.tag" 2>/dev/null)"
+check "а отметка оставшегося вида цела" "yes" \
+      "$(awk '$1=="telegram" && $2=="prefixes" {print $3}' "$T/etc/allow-domains.tag" | grep -q . &&
+         echo yes || echo no)"
+ad_catalog
+check "и каталог про удалённый вид больше не говорит" "prefixes" "$(ad_cat hvkinds:telegram)"
+
+# Вид не указан, а на диске лежит ровно один — берётся он. Это тот же случай, что у своих
+# списков: имя внутри сервиса уникально по виду.
+out="$(srs_rpcd list_remove '{"id":"itdog:telegram"}')"
+check "без вида удаляется единственный лежащий" "no" \
+      "$([ -e "$T/lists/itdog/telegram.lst" ] && echo yes || echo no)"
+
+# Оба вида на диске, а вид не назван — удалять наугад нельзя: у второго издателя оба вида
+# кладутся ОДНИМ скачиванием, то есть это обычное состояние, а не редкость.
+out="$(srs_rpcd list_fetch '{"id":"itdog:telegram","kind":"domains"}')"
+out="$(srs_rpcd list_remove '{"id":"itdog:telegram"}')"
+check "при двух лежащих видах без вида не удаляется ничего" "yes" \
+      "$([ -s "$T/lists/itdog/domains/telegram.lst" ] && [ -s "$T/lists/itdog/telegram.lst" ] &&
+         echo yes || echo no)"
+check "и сказано, чего не хватает" "yes" \
+      "$(printf '%s' "$out" | grep -q 'вид' && echo yes || echo no)"
+
+# Список, на который ссылается канал, не удаляется: движок читает список при сборке правил и
+# падает на отсутствующем. Проверка про СПЕКУ, а не про издателя, и второму издателю нужна
+# ровно так же, как первому.
+cp "$T/etc/spec.keep" "$T/etc/spec.json"
+out="$(srs_rpcd list_remove '{"id":"itdog:telegram","kind":"domains"}')"
+check "используемый каналом список второго издателя не удаляется" "yes" \
+      "$([ -s "$T/lists/itdog/domains/telegram.lst" ] && echo yes || echo no)"
+check "и сказано, почему" "yes" \
+      "$(printf '%s' "$out" | grep -q 'используется каналом' && echo yes || echo no)"
+check "и отметка версии при отказе цела" "yes" \
+      "$(awk '$1=="telegram" && $2=="domains" {print $3}' "$T/etc/allow-domains.tag" | grep -q . &&
+         echo yes || echo no)"
+
+out="$(srs_rpcd list_remove '{"id":"itdog:nosuchservice","kind":"domains"}')"
+check "неизвестный сервис не выдаётся за манифест первого издателя" "yes" \
+      "$(printf '%s' "$out" | grep -q 'манифест' && echo no || echo yes)"
+out="$(srs_rpcd list_remove '{"id":"itdog:../../etc/passwd","kind":"domains"}')"
+check "list_remove отвергает выход за каталог списков" "yes" \
+      "$(printf '%s' "$out" | grep -q '"ok": *false' && echo yes || echo no)"
+
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo 'ЕСТЬ ПРОВАЛЫ')"
 [ "$fails" -eq 0 ]

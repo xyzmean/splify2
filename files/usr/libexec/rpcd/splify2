@@ -564,6 +564,15 @@ list)
     # откуда он приходит (splify2#16).
     json_add_object client_nets; json_close_object
     json_add_object local_lists; json_close_object
+    # Каталог ВТОРОГО издателя (itdoginfo/allow-domains) и то, что из него лежит на диске.
+    # Входа нет: метод только читает — таблицу сервисов из описания источника, тег из uci и
+    # сами файлы. В сеть он не ходит НИКОГДА, потому что его зовёт открытие вкладки, а не
+    # нажатие; качает по-прежнему list_fetch, по id с приставкой «itdog:».
+    #
+    # Отдельным методом, а не полем в `lists`: тот отдаёт манифест первого издателя дословно,
+    # и вклейка своих полей в чужой JSON стоила бы разбора и пересборки манифеста в shell на
+    # каждом открытии каталога.
+    json_add_object allow_domains; json_close_object
     json_add_object lists_update; json_close_object
     json_add_object list_remove
         json_add_string id; json_add_string kind; json_add_string name
@@ -709,7 +718,7 @@ call)
     case "$2" in
         status|diag|dev_stats|net_info|devices|client_nets|leases|engine_state|outbound_geo|outbound_probe|explain|xsteer_state|vless_nodes|vless_probe|support_report) _grp=state ;;
         spec_set|apply) _grp=spec ;;
-        lists|list_fetch|lists_update|list_put|list_remove|list_custom|list_get|local_lists|fetch_mode|fetch_mode_set|zm_fix|zm_fix_set) _grp=lists ;;
+        lists|list_fetch|lists_update|list_put|list_remove|list_custom|list_get|local_lists|allow_domains|fetch_mode|fetch_mode_set|zm_fix|zm_fix_set) _grp=lists ;;
         engine|engine_stop|engine_start|steer_versions|splify2_versions|splify2_install|steer_install|ui_get|ui_set) _grp=engine ;;
         sub_set|sub_info|sub_quota|sub_list|sub_del) _grp=sub ;;
         backup_get|backup_put) _grp=backup ;;

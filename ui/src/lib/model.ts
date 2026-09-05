@@ -495,6 +495,9 @@ export interface ServiceEntry {
     /** Устойчив между запусками: собран из id участников по порядку. */
     id: string
     name: string
+    /** Кто издаёт эту запись. Пусто — первый издатель (наш манифест): он был единственным,
+     *  и дописывать его в каждую запись значило бы переписать манифест ради подписи. */
+    publisher?: { id: string; name: string }
     description?: string
     /** Пути у издателя, отдельно по видам: движку их надо класть в разные поля правила. */
     prefixes: string[]
@@ -528,6 +531,85 @@ export interface ServiceEntry {
      *  `complements`), false — эту запись дополняет чужая строка каталога. Смысл в обоих
      *  случаях один: включать надо обе, потому что дополнение не заменяет зеркало. */
     complement?: { names: string[]; ours: boolean }
+}
+
+/** ВТОРОЙ ИЗДАТЕЛЬ СПИСКОВ — itdoginfo/allow-domains. Ответ метода `allow_domains`
+ *  дословно: таблица сервисов из пакета плюс то, что из неё уже лежит на роутере.
+ *
+ *  Почему он приезжает НЕ через `Catalog`. У первого издателя манифест скачивается из сети и
+ *  описывает состав СЕБЯ САМОГО; второй описан таблицей внутри пакета, а его версия — тег
+ *  релиза, зафиксированный сборкой. Это разные вещи, и общий тип для них означал бы поля,
+ *  пустые ровно у половины записей. В общий вид (`ServiceEntry`) они сводятся ниже, там, где
+ *  человеку и правда всё равно, кто издатель. */
+export interface AllowDomains {
+    ok?: boolean
+    /** Приставка к id списка: `itdog:telegram`. Она же подкаталог на диске. */
+    id: string
+    repo: string
+    /** По какому тегу будем качать. */
+    tag: string
+    /** Зашитый в пакет — чтобы отличить «как собрано» от «переопределено настройкой». */
+    tag_default?: string
+    /** Что не так с настройкой тега. Пусто — всё в порядке. */
+    tag_warn?: string
+    base_url?: string
+    services?: {
+        id: string
+        name: string
+        kinds: ListKind[]
+        /** Только то, что ЛЕЖИТ на диске: тег, которым набит файл, и число строк. Ключа
+         *  нет вовсе, если файла нет, — ноль здесь означал бы скачанный пустой список. */
+        have?: Partial<Record<ListKind, { tag?: string; lines?: number }>>
+    }[]
+}
+
+/** Путь списка второго издателя ОТНОСИТЕЛЬНО каталога списков.
+ *
+ *  Раскладка повторяет роутерную (`ad_rel` в allow-domains.sh) — и это единственное место,
+ *  где интерфейс её знает. Разойдясь с ней, каталог начнёт считать скачанное нескачанным:
+ *  «что уже лежит» он ищет по пути, а не по имени. */
+export const allowDomainsPath = (pub: string, svc: string, kind: ListKind) =>
+    kind === 'domains' ? `${pub}/domains/${svc}.lst` : `${pub}/${svc}.lst`
+
+/** Сервисы второго издателя в общем виде каталога.
+ *
+ *  ПОЧЕМУ ОНИ ВСТАЮТ В ТОТ ЖЕ СПИСОК, а не в отдельную вкладку: человек ищет «Telegram», а
+ *  не «издателя». Кто издатель — ответ на другой вопрос, и он подписью под названием, как у
+ *  первого издателя (`SourceNote`).
+ *
+ *  `count` берётся ТОЛЬКО из скачанного: числа записей второй издатель не обещает вовсе, и
+ *  выдумать его тут значило бы показать человеку цифру, которой никто не давал. */
+export function toAllowDomainsServices(a: AllowDomains | null): ServiceEntry[] {
+    if (!a?.services?.length) return []
+    const pub = a.id || 'itdog'
+    return a.services.map((s) => {
+        const parts = s.kinds.map((kind) => ({
+            /* id уезжает С ПРИСТАВКОЙ: ровно его ждут `list_fetch` и `list_remove`, и это
+               единственное, что связывает строку каталога с файлом на роутере. */
+            id: `${pub}:${s.id}`,
+            kind,
+            name: s.name,
+            file: allowDomainsPath(pub, s.id, kind),
+            count: s.have?.[kind]?.lines,
+        }))
+        return {
+            id: `${pub}:${s.id}`,
+            name: s.name,
+            prefixes: parts.filter((p) => p.kind === 'prefixes').map((p) => p.file),
+            domains: parts.filter((p) => p.kind === 'domains').map((p) => p.file),
+            count: parts.reduce((n, p) => n + (p.count || 0), 0),
+            parts,
+            publisher: { id: pub, name: a.repo || pub },
+            /* Список внешний и правится только у издателя — то же сообщение, что у зеркал
+               первого издателя, и по той же причине: дописанное на роутере исчезнет при
+               следующем обновлении. */
+            upstream: {
+                repo: a.repo,
+                suggest_url: a.repo ? `https://github.com/${a.repo}/issues` : undefined,
+                editable_locally: false,
+            },
+        }
+    })
 }
 
 export interface Catalog {

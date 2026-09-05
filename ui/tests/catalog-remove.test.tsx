@@ -2,21 +2,15 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/preact'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import CatalogTab from '@/components/tabs/CatalogTab'
 import { rpc } from '@/lib/rpc'
+import { adPath, mockCatalog } from './ad-fixture'
 
 // R-033: каталог отчитывался об удалении безусловным успехом, а не по ответу rpcd,
 // и держал один флаг занятости на всю таблицу.
 
-const MANIFEST = {
-    version: '1',
-    base_url: 'https://x/',
-    categories: [{ id: 'youtube', name_ru: 'YouTube', file: 'youtube.lst', count: 100 }],
-}
-
 function mockBase() {
-    vi.spyOn(rpc, 'manifest').mockResolvedValue(MANIFEST as never)
-    vi.spyOn(rpc, 'specGet').mockResolvedValue({ channels: [] } as never)
-    vi.spyOn(rpc, 'localLists').mockResolvedValue(
-        { files: { 'youtube.lst': { count: 100, mtime: 1 } } } as never,
+    mockCatalog(
+        [{ id: 'youtube', name: 'YouTube', kinds: ['domains'] }],
+        { [adPath('youtube', 'domains')]: { count: 100, mtime: 1 } },
     )
 }
 
@@ -42,22 +36,19 @@ describe('каталог: удаление отчитывается по отв�
     })
 })
 
-const MANIFEST2 = {
-    version: '1',
-    base_url: 'https://x/',
-    categories: [
-        { id: 'aaa', name_ru: 'AAA', file: 'aaa.lst', count: 1 },
-        { id: 'bbb', name_ru: 'BBB', file: 'bbb.lst', count: 1 },
-    ],
-}
 
 describe('каталог: занятость — по строке, а не на всю таблицу (I-043, R-033)', () => {
     beforeEach(() => {
         vi.restoreAllMocks()
-        vi.spyOn(rpc, 'manifest').mockResolvedValue(MANIFEST2 as never)
-        vi.spyOn(rpc, 'specGet').mockResolvedValue({ channels: [] } as never)
-        vi.spyOn(rpc, 'localLists').mockResolvedValue(
-            { files: { 'aaa.lst': { count: 1, mtime: 1 }, 'bbb.lst': { count: 1, mtime: 1 } } } as never,
+        mockCatalog(
+            [
+                { id: 'aaa', name: 'AAA', kinds: ['prefixes'] },
+                { id: 'bbb', name: 'BBB', kinds: ['prefixes'] },
+            ],
+            {
+                [adPath('aaa', 'prefixes')]: { count: 1, mtime: 1 },
+                [adPath('bbb', 'prefixes')]: { count: 1, mtime: 1 },
+            },
         )
     })
 

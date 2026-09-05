@@ -8,6 +8,7 @@
 import {
     normalizeSpec,
     toCatalog,
+    type AllowDomains,
     type ClientNet,
     type RawManifest,
     type Spec,
@@ -210,6 +211,19 @@ export const rpc = {
          *  дольше прямого пути, и без строки обновление выглядит как беспричинная пауза. */
         { ok: boolean; count?: number; error?: string; via?: string }
     >('list_fetch', ['id', 'kind']),
+
+    /** Каталог ВТОРОГО издателя (itdoginfo/allow-domains) и то, что из него уже лежит
+     *  на роутере.
+     *
+     *  Отдельный метод, а не расширение `manifest`, и это не удобство: у первого издателя
+     *  манифест приезжает ИЗ СЕТИ и пересказывается дословно, а второй описан таблицей
+     *  В ПАКЕТЕ и версией зафиксирован тегом. Слить их в один ответ значило бы, что
+     *  недоступная сеть уносит с собой и тот каталог, который лежит на диске и никуда
+     *  ходить не должен.
+     *
+     *  Метод ТОЛЬКО ЧИТАЕТ: его зовёт опрос страницы, и поход в сеть на опросе — это то,
+     *  чего в этом продукте избегают везде. */
+    allowDomains: declare<AllowDomains>('allow_domains'),
 
     /** Which list files are already on the router, with their local line count. The
      *  UI cannot tell a downloaded list from a merely offered one without this — and

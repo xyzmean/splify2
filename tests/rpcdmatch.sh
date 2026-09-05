@@ -3234,6 +3234,32 @@ check "xsteer_link_put: негодная ссылка не портит наст
 check "xsteer_link_put: отказ движка доезжает его словами" "yes" \
       "$(printf '%s' "$out" | jget error | grep -q 'snii' && echo yes || echo no)"
 
+# ---- каталог второго издателя: allow_domains -------------------------------------
+#
+# Здесь проверяется НЕ содержимое каталога (оно сверяется с самой таблицей сервисов в
+# listsmatch.sh), а два свойства метода как метода объекта: он объявлен там, где объявляются
+# методы, и он НИЧЕГО НЕ ПИШЕТ. Второе — не придирка: метод зовёт открытие вкладки, а всё,
+# что он трогает, лежит либо во флеш-разделе (отметка версий), либо в каталоге списков.
+# Метод, который на опросе заводит файлы, изнашивает флеш ровно пропорционально тому, как
+# часто человек открывает страницу.
+for m in allow_domains; do
+    check "метод $m объявлен в списке ubus" "yes" \
+          "$(rpcd_list | grep -q "\"$m\"" && echo yes || echo no)"
+    check "метод $m назван в ACL" "yes" \
+          "$(grep -q "\"$m\"" "$ROOT/luci/root/usr/share/rpcd/acl.d/luci-app-splify2.json" \
+             && echo yes || echo no)"
+done
+
+rm -rf "$T/lists" "$T/etc/allow-domains.tag" "$T/srs-tmp"
+out="$(rpcd allow_domains '{}')"
+check "allow_domains отвечает и на роутере без единого списка" "true" "$(printf '%s' "$out" | jget ok)"
+check "и каталога списков он при этом не заводит" "нет" \
+      "$([ -e "$T/lists" ] && echo есть || echo нет)"
+check "и отметки версий тоже — писать ему нечего" "нет" \
+      "$([ -e "$T/etc/allow-domains.tag" ] && echo есть || echo нет)"
+check "и разбора наборов в /tmp не оставляет — он их не качает" "нет" \
+      "$([ -e "$T/srs-tmp" ] && echo есть || echo нет)"
+
 for m in xsteer_state xsteer_link xsteer_link_put; do
     check "метод $m объявлен в списке ubus" "yes" \
           "$(rpcd_list | grep -q "\"$m\"" && echo yes || echo no)"

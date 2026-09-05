@@ -5,7 +5,13 @@ import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
 import CustomLists from '@/components/CustomLists'
 import { Hint } from '@/components/ui/hint'
-import { toCatalog, type Catalog, type ListOrigin, type ServiceEntry, type Spec } from '@/lib/model'
+import {
+    toAllowDomainsServices,
+    type AllowDomains,
+    type ListOrigin,
+    type ServiceEntry,
+    type Spec,
+} from '@/lib/model'
 
 /** Каталог: что доступно, сколько записей, где используется. ТОЛЬКО справка.
  *
@@ -14,7 +20,17 @@ import { toCatalog, type Catalog, type ListOrigin, type ServiceEntry, type Spec 
  *  осталась одна необязательная кнопка — обновить уже лежащий список прямо сейчас.
  *
  *  Назначение живёт только в правиле, каталог отвечает на другой вопрос: «что вообще
- *  есть и задействовано ли оно». */
+ *  есть и задействовано ли оно».
+ *
+ *  ИСТОЧНИК ОДИН — itdoginfo/allow-domains, решение владельца. Прежний манифест
+ *  (ru-bypass-ipsets) отсюда убран, и убран ТОЛЬКО из предложения: файлы, на которые уже
+ *  ссылаются правила, продолжают скачиваться и обновляться как прежде. Поэтому внизу
+ *  отдельной строкой перечислено то, что правила используют, а каталог больше не
+ *  предлагает: спрятать это молча значило бы, что включённый человеком список исчезает с
+ *  экрана, оставаясь в работе, — и снять его становится негде.
+ *
+ *  Версия у второго издателя — ТЕГ РЕЛИЗА, а не номер манифеста, и он зашит в пакет:
+ *  состав списков не меняется сам собой, а подпись внизу говорит, какой именно тег. */
 
 interface Props {
     /** Открыть редактор правила с этим сервисом. Переключает вкладку — каталог не умеет
@@ -59,7 +75,10 @@ function SourceNote({ origin, ours, mixed }: { origin: ListOrigin; ours: boolean
 }
 
 export default function CatalogTab({ onUseInRule }: Props) {
-    const [manifest, setManifest] = useState<Catalog | null>(null)
+    const [ad, setAd] = useState<AllowDomains | null>(null)
+    /** Каталог не загрузился — отдельным признаком от «загрузился пустым»: первое означает
+     *  поломку и требует объяснения, второе законно (издатель не публикует ничего). */
+    const [adFailed, setAdFailed] = useState(false)
     const [spec, setSpec] = useState<Spec | null>(null)
     const [local, setLocal] = useState<Record<string, { count: number; mtime: number }>>({})
     const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set())
@@ -80,7 +99,9 @@ export default function CatalogTab({ onUseInRule }: Props) {
     const [updating, setUpdating] = useState(false)
 
     useEffect(() => {
-        rpc.manifest().then((m) => setManifest(toCatalog(m))).catch(() => setManifest(null))
+        rpc.allowDomains()
+            .then((a) => { setAd(a); setAdFailed(false) })
+            .catch(() => { setAd(null); setAdFailed(true) })
         rpc.specGet().then(setSpec).catch(() => setSpec(null))
         rpc.localLists().then((d) => setLocal(d.files || {})).catch(() => setLocal({}))
     }, [])
@@ -166,11 +187,16 @@ export default function CatalogTab({ onUseInRule }: Props) {
         }
     }
 
-    if (!manifest)
+    /** Записи каталога. Таблица издателя лежит В ПАКЕТЕ, поэтому сети для неё не нужно —
+     *  и «каталог пуст» здесь означает поломку метода, а не отсутствие интернета. */
+    const services = useMemo(() => toAllowDomainsServices(ad), [ad])
+
+    if (adFailed)
         return (
             <div className="rounded-md border border-border bg-card p-5 text-sm text-muted-foreground">
-                Каталог недоступен: манифест не загрузился. Проверьте, есть ли у роутера сеть — записи
-                скачиваются с сервера издателя, а не лежат в пакете.
+                Каталог недоступен: метод <code>allow_domains</code> не ответил. Сети для него не
+                нужно — таблица списков лежит в пакете, — поэтому дело не в интернете: проверьте,
+                установлена ли свежая версия splify2.
             </div>
         )
 
@@ -181,13 +207,22 @@ export default function CatalogTab({ onUseInRule }: Props) {
         return [...names]
     }
 
-    const shown = manifest.services.filter((sv) => {
+    const shown = services.filter((sv) => {
         if (only === 'used' && rulesFor(sv).length === 0) return false
         const s = q.trim().toLowerCase()
         return !s || sv.name.toLowerCase().includes(s) || sv.id.toLowerCase().includes(s)
     })
 
-    const usedCount = manifest.services.filter((sv) => rulesFor(sv).length > 0).length
+    const usedCount = services.filter((sv) => rulesFor(sv).length > 0).length
+
+    /* ЧТО ПРАВИЛА ИСПОЛЬЗУЮТ, А КАТАЛОГ БОЛЬШЕ НЕ ПРЕДЛАГАЕТ. Считается по спеке, а не по
+       диску: вопрос ровно один — «на что ссылается правило, чего я тут не вижу». Свои
+       списки исключены, у них своя карточка; всё остальное — прежний издатель или файл,
+       положенный руками. */
+    const catalogFiles = new Set(services.flatMap((sv) => sv.parts.map((p) => p.file.replace(/^\/+/, ''))))
+    const orphans = [...used.keys()].filter(
+        (f) => !catalogFiles.has(f) && !f.startsWith('custom/') && !f.startsWith('domains/custom/'),
+    )
 
     return (
         <div className="space-y-3">
@@ -203,7 +238,7 @@ export default function CatalogTab({ onUseInRule }: Props) {
                 </div>
                 <div className="flex gap-1" role="tablist" aria-label="Что показывать">
                     {([
-                        ['all', `все · ${manifest.services.length}`],
+                        ['all', `все · ${services.length}`],
                         ['used', `используются · ${usedCount}`],
                     ] as const).map(([id, label]) => (
                         <button
@@ -391,10 +426,42 @@ export default function CatalogTab({ onUseInRule }: Props) {
                 </table>
             </div>
 
+            {orphans.length > 0 && (
+                /* Отдельным блоком и без кнопок: убрать такой список можно только там, где он
+                   назначен, — в правиле. Кнопка «удалить» здесь предложила бы снять файл
+                   из-под живого правила, а это отказ применения при следующей перезагрузке. */
+                <div className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
+                    <div className="mb-1 font-medium text-warning-fg">
+                        Используются правилами, но каталог их больше не предлагает
+                    </div>
+                    <p className="mb-2">
+                        Источник каталога — {ad?.repo || 'itdoginfo/allow-domains'}. Эти файлы
+                        остались от прежнего набора: они продолжают скачиваться и обновляться, но
+                        выбрать такой список заново отсюда нельзя. Снять — на вкладке правил.
+                    </p>
+                    <ul className="space-y-0.5">
+                        {orphans.map((f) => (
+                            <li key={f} className="truncate">
+                                <code>{f}</code> · {(used.get(f) || []).join(', ')}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
+
             <p className="text-xs text-muted-foreground">
                 Каталог — справка: запись начинает работать, когда на неё укажет правило. Нужные
-                списки скачиваются и обновляются сами. Манифест версии {manifest.version}.
+                списки скачиваются и обновляются сами. Источник —{' '}
+                {ad?.repo || 'itdoginfo/allow-domains'}, версия зафиксирована тегом{' '}
+                <code>{ad?.tag || '—'}</code>
+                {ad?.tag_default && ad.tag !== ad.tag_default && ' (переопределён настройкой)'}.
             </p>
+            {ad?.tag_warn && (
+                /* Настройка, отбитая молча, — ровно та беда, ради которой предупреждение и
+                   заведено на роутере: человек набрал тег, получил прежние списки и не узнал
+                   почему. */
+                <p className="text-xs text-warning-fg">{ad.tag_warn}</p>
+            )}
         </div>
     )
 }

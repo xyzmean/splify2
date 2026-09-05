@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Search, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { rpc } from '@/lib/rpc'
@@ -144,6 +144,40 @@ export default function RuleEditor({
 
     const total = chosenEntries.reduce((n, sv) => n + (sv.count || 0), 0)
 
+    /** Файлы правила, за которыми не стоит ни одна запись каталога и ни один свой список.
+     *
+     *  Считается по СПЕКЕ, а не по диску: вопрос «что это правило делает», а не «что
+     *  скачано». Свои списки исключены — у них своя карточка и свой способ снять. */
+    const foreign = useMemo(() => {
+        const known = new Set(
+            services.flatMap((sv) => [...sv.prefixes, ...sv.domains].map((f) => pathFor(f))),
+        )
+        const files: string[] = [
+            ...(ch.match.prefixes_files || []),
+            ...(ch.match.domains_files || []),
+        ]
+        return [...new Set(files)].filter((f) => !known.has(f))
+    }, [services, ch.match.prefixes_files, ch.match.domains_files])
+
+    /** Убрать из правила один файл, не трогая остальные.
+     *
+     *  Отдельно от `pick`: тот работает записью каталога, а здесь записи нет вовсе — есть
+     *  путь, и снимать надо ровно его. `match` расширяется, а не пересоздаётся, по той же
+     *  причине, что и там (I-012). */
+    function dropFile(file: string) {
+        const pref = (ch.match.prefixes_files || []).filter((f) => f !== file)
+        const doms = (ch.match.domains_files || []).filter((f) => f !== file)
+        onChange({
+            ...ch,
+            match: {
+                ...ch.match,
+                prefixes_files: pref.length ? pref : undefined,
+                domains_files: doms.length ? doms : undefined,
+                mode: doms.length ? (ch.match.mode ?? 'fakeip') : undefined,
+            },
+        })
+    }
+
     return (
         <div className="rounded-md border border-border bg-card shadow-card">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border p-3">
@@ -258,6 +292,38 @@ export default function RuleEditor({
                             )
                         })}
                     </div>
+
+                    {foreign.length > 0 && (
+                        /* ФАЙЛЫ, КОТОРЫХ НЕТ В КАТАЛОГЕ, но которые в этом правиле стоят.
+                           Появляются они у того, кто выбирал списки до смены издателя, и у
+                           того, кто правил спеку руками. Промолчать нельзя: галочки у них
+                           нет, а работают они по-прежнему — то есть правило делает больше,
+                           чем показывает. Снять можно прямо здесь, поимённо: это
+                           единственное место, где такой файл вообще виден. */
+                        <div className="mt-2 rounded-md border border-border p-2">
+                            <div className="mb-1 text-xs font-medium text-warning-fg">
+                                В правиле есть файлы не из каталога
+                            </div>
+                            <ul className="space-y-1">
+                                {foreign.map((f) => (
+                                    <li key={f} className="flex items-center gap-2 text-xs">
+                                        <code className="min-w-0 flex-1 truncate">{f}</code>
+                                        <button
+                                            type="button"
+                                            onClick={() => dropFile(f)}
+                                            className="shrink-0 text-muted-foreground underline decoration-dotted hover:text-destructive"
+                                        >
+                                            убрать
+                                        </button>
+                                    </li>
+                                ))}
+                            </ul>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                                Они продолжают работать и обновляться. Каталог их больше не предлагает,
+                                поэтому выбрать такой файл заново отсюда будет нельзя.
+                            </p>
+                        </div>
+                    )}
 
                     <p className="mt-1 text-xs text-muted-foreground">
                         Это тот же каталог, что на вкладке «Сервисы и категории». Там он показывает, где
