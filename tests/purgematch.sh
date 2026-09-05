@@ -240,6 +240,13 @@ network.lan=interface
 network.lan.proto=static
 network.xs0=interface
 network.xs0.proto=xsteer
+splify2.main=splify2
+splify2.main.telemetry=0
+splify2.main.telemetry_id=sp-00112233445566778899aabbccddeeff
+splify2.main.telemetry_at=1757000000
+splify2.main.telemetry_error=панель ответила 503
+splify2.main.telemetry_url=https://panel.example/ingest
+splify2.main.telemetry_key=K3Y
 EOF
 
     # Расписка: обе зоны и обе устройства заведены нами. Постороннее устройство в первой
@@ -269,6 +276,8 @@ EOF
     printf '%s\n%s\n' '0 3 * * * /usr/bin/чужое-обновление' \
         '17 5 * * * /usr/sbin/splify2-update-lists' > "$T/etc/crontabs/root"
     : > "$T/var/run/splify2-vless-dirty"
+    printf 'a1b2c3d4\n' > "$T/var/run/splify2-boot-id"
+    printf 'wan_down=7\niface_down=9\n' > "$T/var/run/splify2-events"
     printf '%s\n%s\n%s\n%s\n' splify2_doh splify2_zm steer fw4 > "$T/nft.tables"
     printf '%s\n%s\n' '29000:	from all uidrange 65534-65534 lookup 290' \
         '30000:	from all lookup main' > "$T/ip.rules"
@@ -287,7 +296,8 @@ run_purge() {  # КЛЮЧИ СКРИПТА
     CRON_INITD="$T/bin/initd-cron" \
     INITD="$T/bin/initd-steer" \
     FW_INITD="$T/bin/initd-firewall" \
-    STATE_PATHS="$T/var/lib/splify2 $T/var/lib/steer $T/var/run/xsteer $T/var/run/splify2-vless-dirty" \
+    STATE_PATHS="$T/var/lib/splify2 $T/var/lib/steer $T/var/run/xsteer $T/var/run/splify2-vless-dirty \
+$T/var/run/splify2-boot-id $T/var/run/splify2-events" \
         sh "$SCRIPT" "$@" > "$T/out" 2>&1
     rc=$?
 }
@@ -413,6 +423,46 @@ check "с --keep-config зоны всё равно удалены" "lan " "$(zon
 check "с --keep-config таблицы всё равно удалены" "fw4" "$(cat "$T/nft.tables")"
 check "с --keep-config запись в crontab всё равно убрана" "0" \
     "$(grep -c splify2-update-lists "$T/etc/crontabs/root")"
+
+# ---- телеметрия --------------------------------------------------------------------
+#
+# Здесь ЕДИНСТВЕННОЕ место в настройке, где --keep-config не спасает всё подряд, и проверять
+# надо обе стороны сразу: состояние уходит, ОТВЕТ ЧЕЛОВЕКА остаётся. Стерев ноль в `telemetry`,
+# чистка вернула бы интерфейсу право предложить телеметрию тому, кто уже сказал нет, — а три
+# состояния завели ровно для того, чтобы этого не случилось.
+setup
+run_purge --yes --keep-config
+check "с --keep-config идентификатор телеметрии снят" "no" "$(has 'splify2.main.telemetry_id=sp-00112233445566778899aabbccddeeff')"
+check "с --keep-config время последней отправки снято" "no" "$(has 'splify2.main.telemetry_at=1757000000')"
+check "с --keep-config причина отказа снята" "no" "$(has 'splify2.main.telemetry_error=панель ответила 503')"
+check "с --keep-config адрес панели снят" "no" "$(has 'splify2.main.telemetry_url=https://panel.example/ingest')"
+check "с --keep-config ключ панели снят" "no" "$(has 'splify2.main.telemetry_key=K3Y')"
+check "НО ОТКАЗ ЧЕЛОВЕКА ОСТАЛСЯ" "yes" "$(has 'splify2.main.telemetry=0')"
+check "и чужая настройка рядом не пострадала" "yes" "$(has 'zapret.config.run_on_boot=1')"
+check "признак загрузки удалён" "no" "$(exists "$T/var/run/splify2-boot-id")"
+check "счётчики отвалов удалены" "no" "$(exists "$T/var/run/splify2-events")"
+# А ЭТО — ПРО УМОЛЧАНИЕ САМОГО СКРИПТА, и проверка отдельная не от придирчивости. Все
+# проверки выше подменяют STATE_PATHS швом, то есть проверяют список, написанный в стенде;
+# рабочий список после этого не сторожит ничто, и файл, забытый в нём, остался бы на роутере
+# при зелёном стенде. Умолчание берётся из скрипта и вычисляется настоящей оболочкой, а не
+# переписывается сюда второй копией.
+state_paths_default() {
+    sed -n '/^STATE_PATHS=/,/"}$/p' "$SCRIPT" > "$T/state-paths.sh"
+    printf 'printf "%%s\\n" $STATE_PATHS\n' >> "$T/state-paths.sh"
+    sh "$T/state-paths.sh"
+}
+check "умолчание скрипта: список путей вообще разбирается" "yes" \
+      "$([ "$(state_paths_default | grep -c .)" -ge 8 ] && echo yes || echo no)"
+for _p in /var/run/splify2-boot-id /var/run/splify2-events \
+          /var/run/splify2-events.i /var/run/splify2-events.w; do
+    check "умолчание скрипта знает $_p" "1" "$(state_paths_default | grep -cx "$_p")"
+done
+# Показ обязан назвать это словами: по нему человек решает, звать ли с --yes.
+setup
+run_purge
+check "показ называет состояние телеметрии" "yes" "$(outhas 'телеметри')"
+check "и при показе ничего не удалено" "yes" "$(has 'splify2.main.telemetry_id=sp-00112233445566778899aabbccddeeff')"
+check "и признак загрузки на месте" "yes" "$(exists "$T/var/run/splify2-boot-id")"
 
 # ---- чужой конфиг https-dns-proxy --------------------------------------------------
 # force_dns '1' пишет сам пакет и пишет Zapret Manager; ноль пишем только мы (doh.sh). Значит

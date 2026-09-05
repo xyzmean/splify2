@@ -9,6 +9,7 @@ import CustomLists from '@/components/CustomLists'
 import EngineCard from '@/components/EngineCard'
 import FetchCard from '@/components/FetchCard'
 import SelfUpdateCard from '@/components/SelfUpdateCard'
+import TelemetryCard from '@/components/TelemetryCard'
 import XsteerPanel from '@/components/XsteerPanel'
 import ZmFixCard from '@/components/ZmFixCard'
 import { rpc } from '@/lib/rpc'
@@ -90,6 +91,10 @@ export default function Settings({
                             />
                             <FetchCard />
                             <ZmFixCard />
+                            {/* Согласие на отчёт живёт рядом с остальными выключателями,
+                                которыми человек распоряжается сам, а не отдельным экраном:
+                                отдельный экран открывают только те, кто уже искал телеметрию. */}
+                            <TelemetryCard />
                         </div>
                     )}
                     {screen === 'catalog' && <CatalogTab onUseInRule={onUseInRule} />}

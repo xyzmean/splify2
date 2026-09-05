@@ -154,6 +154,10 @@ cp files/usr/sbin/splify2-zapret-autoselect "$PKG/usr/sbin/splify2-zapret-autose
 # удаление плюс установка, поэтому чистка в postrm сносила бы настройки человека при каждом
 # обновлении. Поэтому — отдельная команда, которую зовут осознанно (см. шапку скрипта).
 cp files/usr/sbin/splify2-purge "$PKG/usr/sbin/splify2-purge"
+# Команда отправки телеметрии. Её зовёт ночное обновление списков (TELEMETRY=... в
+# splify2-update-lists), а не своё задание крона, — то есть её отсутствие не видно ничем:
+# обновление списков отработает как обычно, а телеметрия просто не уедет никогда.
+cp files/usr/sbin/splify2-telemetry "$PKG/usr/sbin/splify2-telemetry"
 # Каталог резолверов DoH, перенесённый из Zapret Manager. Едет ФАЙЛОМ, а не таблицей внутри
 # скрипта: список меняется чаще, чем код вокруг него — резолверы появляются, переезжают и
 # умирают, — и правка файла не должна быть правкой программы.
@@ -187,6 +191,14 @@ cp files/usr/lib/splify2/rpcd/*.sh "$PKG/usr/lib/splify2/rpcd/"
 # тогда, когда до GitHub не дойти, и качать его оттуда же было бы замкнутым кругом.
 mkdir -p "$PKG/etc/steer/lists"
 cp files/etc/steer/lists/zm-github.lst "$PKG/etc/steer/lists/zm-github.lst"
+# Обработчик событий netifd: он и есть тот, кто считает отвалы интерфейсов, — поля
+# ev.wan_down и ev.iface_down пакета телеметрии. Сборщик их читает давно, а писать было
+# некому, и панель получала честный ноль на роутере, где WAN отваливается каждый вечер.
+# Бит исполнения обязателен: hotplug.d запускает файлы каталога и молча пропускает
+# неисполняемые — то есть счётчики остались бы нулями, а в журнале не было бы ни строки.
+mkdir -p "$PKG/etc/hotplug.d/iface"
+cp files/etc/hotplug.d/iface/96-splify2 "$PKG/etc/hotplug.d/iface/96-splify2"
+chmod 0755 "$PKG/etc/hotplug.d/iface/96-splify2"
 # Настройка uci объявляется системе пакетом: почему именно так — в шапке самого файла.
 mkdir -p "$PKG/etc/uci-defaults"
 cp files/etc/uci-defaults/99-splify2 "$PKG/etc/uci-defaults/99-splify2"
@@ -210,7 +222,7 @@ cp files/lib/upgrade/keep.d/splify2 "$PKG/lib/upgrade/keep.d/splify2"
 chmod 0644 "$PKG/lib/upgrade/keep.d/splify2"
 chmod 0755 "$PKG/usr/libexec/rpcd/splify2" "$PKG/usr/sbin/splify2-update-lists" \
            "$PKG/usr/sbin/splify2-zapret-test" "$PKG/usr/sbin/splify2-zapret-autoselect" \
-           "$PKG/usr/sbin/splify2-purge"
+           "$PKG/usr/sbin/splify2-purge" "$PKG/usr/sbin/splify2-telemetry"
 chmod 0644 "$PKG/usr/share/splify2/doh-providers.conf" "$PKG/usr/share/splify2/dpi-suite.json" \
            "$PKG/usr/share/splify2/allow-domains.sh"
 chmod 0644 "$PKG"/usr/lib/splify2/*.sh "$PKG"/usr/lib/splify2/rpcd/*.sh
@@ -371,7 +383,8 @@ chmod +x build/scripts/post-install
 for _need in $(grep -ho '/usr/lib/splify2/[a-z0-9_-]*\.sh' \
                     files/usr/libexec/rpcd/splify2 files/usr/sbin/splify2-update-lists \
                     files/usr/sbin/splify2-zapret-test \
-                    files/usr/sbin/splify2-zapret-autoselect |
+                    files/usr/sbin/splify2-zapret-autoselect \
+                    files/usr/sbin/splify2-telemetry |
                sort -u); do
     test -s "$PKG$_need" || {
         echo "в пакете нет ${_need#/} — подключающая его половина не запустится"; exit 1; }
@@ -393,6 +406,20 @@ test -s "$PKG/etc/steer/lists/zm-github.lst" || {
 # автоматически чистить их в postrm нельзя (обновление opkg это удаление плюс установка).
 test -x "$PKG/usr/sbin/splify2-purge" || {
     echo "в пакете нет usr/sbin/splify2-purge — следы пакета убрать будет нечем"; exit 1; }
+# Без этой команды телеметрия не работает НИКОГДА и не говорит об этом ни звука: ночное
+# обновление списков зовёт её по имени файла, отсутствие файла для него не ошибка, а человек
+# в интерфейсе видит включённый переключатель согласия — то есть обещание, которого пакет не
+# исполняет. Проверяется и бит исполнения: файл без него так же не запустится.
+test -x "$PKG/usr/sbin/splify2-telemetry" || {
+    echo "в пакете нет usr/sbin/splify2-telemetry — согласившийся на телеметрию не отправит ничего"
+    exit 1; }
+# Тот же класс тихого сбоя со стороны писателя: без обработчика hotplug счётчики отвалов
+# интерфейсов писать некому, и в панель уезжают нули — неотличимые от «у человека ничего не
+# отваливалось». Бит исполнения тут не придирка: hotplug.d молча пропускает неисполняемые
+# файлы каталога, и отличить это от «файла нет» на роутере нечем.
+test -x "$PKG/etc/hotplug.d/iface/96-splify2" || {
+    echo "в пакете нет исполняемого etc/hotplug.d/iface/96-splify2 — счётчики отвалов останутся нулями"
+    exit 1; }
 # Без каталога резолверов вкладка DoH открывается пустым списком: выбрать нечего, а причина
 # не названа ничем — doh_providers просто возвращает пустоту. Тот же класс тихого сбоя, что
 # у списка выше.

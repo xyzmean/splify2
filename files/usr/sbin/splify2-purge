@@ -75,6 +75,8 @@ RPCD_TIMEOUT=${RPCD_TIMEOUT:-120}
 STATE_PATHS=${STATE_PATHS:-"/var/lib/splify2 /var/lib/steer /var/run/xsteer \
 /var/run/splify2-vless-dirty /var/run/splify2-obfs-dirty /var/run/splify2-zapret-dirty \
 /var/run/splify2-zapret-autoselect.progress /var/run/splify2-zapret-autoselect.pid \
+/var/run/splify2-boot-id /var/run/splify2-events /var/run/splify2-events.i \
+/var/run/splify2-events.w \
 /var/lock/splify2-update.lock /var/lock/splify2-zapret-autoselect.lock"}
 
 DO=0     # 0 — только показать; 1 — делать
@@ -340,6 +342,36 @@ purge_doh_conf() {
     return 0
 }
 
+# ---- телеметрия --------------------------------------------------------------------
+#
+# РАБОТАЕТ И ПРИ --keep-config, в отличие от всего остального в настройке. Без --keep-config
+# файл настройки уходит целиком и этот шаг ничего не меняет; весь его смысл — во втором
+# наклонении, где человек просил сохранить свои настройки. Идентификатор, время последней
+# отправки, причина отказа и адрес панели его настройкой не являются: это НАШЕ состояние,
+# и после снятия пакета оно описывает то, чего на роутере больше нет.
+#
+# СОГЛАСИЕ (`telemetry`) НЕ ТРОГАЕТСЯ, и это ровно противоположное решение по ровно той же
+# причине. Отказ — единственный ответ человека во всём этом наборе, и «не спрашивали» не
+# значит «можно»: стерев ноль, чистка вернула бы интерфейсу право предложить телеметрию
+# ещё раз тому, кто уже сказал нет. Три состояния завели как раз для того, чтобы этого не
+# случилось, и команда удаления — последнее место, где их стоило бы свести к двум.
+#
+# Идентификатор при этом ничего не теряет: он выведен из MAC и детерминирован, и включив
+# телеметрию снова, роутер посчитает то же самое значение.
+purge_telemetry() {
+    _tk=""
+    for _k in telemetry_id telemetry_at telemetry_error telemetry_url telemetry_key; do
+        [ -n "$(uci -q get "splify2.main.$_k" 2>/dev/null || true)" ] || continue
+        _tk="$_tk $_k"
+    done
+    [ -n "$_tk" ] || return 0
+    plan "состояние телеметрии в настройке снимается:$_tk (согласие остаётся как есть)"
+    [ "$DO" = 1 ] || return 0
+    for _k in $_tk; do uci -q delete "splify2.main.$_k" 2>/dev/null; done
+    uci -q commit splify2 2>/dev/null
+    return 0
+}
+
 # ---- каталоги и файлы --------------------------------------------------------------
 purge_paths() {
     for _p in $STATE_PATHS; do
@@ -395,6 +427,7 @@ purge_cron
 purge_rpcd_timeout
 purge_zapret
 purge_doh_conf
+purge_telemetry
 purge_paths
 warn_xsteer
 

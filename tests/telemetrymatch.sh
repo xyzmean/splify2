@@ -138,7 +138,7 @@ build() {
     STEER="$STEER_BIN" SPEC="$T/etc/spec.json" LISTS="$T/lists" GEO_DIR="$T/var" \
     SYSINFO_MODEL="$T/etc/model" OPENWRT_RELEASE="$T/etc/openwrt_release" \
     BUILD_ID_FILE="$T/etc/build-id" TM_BOOT_FILE="$T/var/boot" TM_EVENTS="$T/var/events" \
-    RPCD_OBJ="$T/none" \
+    RPCD_OBJ="$T/none" TM_NET_FILE="$T/var/net" UCI_SPLIFY2="$T/etc/config-splify2" \
     ZAPRET_SH="$ROOT/files/usr/lib/splify2/zapret.sh" \
     DOH_SH="$ROOT/files/usr/lib/splify2/doh.sh" \
     ZP_DIR="$T/zapret" ZP_CATALOG="$T/zapret/strategies.txt" ZP_CONF="$T/etc/config-zapret" \
@@ -229,6 +229,269 @@ check "движок посчитал идентификатор" "yes" \
       "$(case "$(printf '%s' "$out" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')" in sp-*) echo yes ;; *) echo no ;; esac)"
 check "и он запомнен в настройке" "yes" \
       "$(grep -q '^splify2.main.telemetry_id=sp-' "$T/uci.db" && echo yes || echo no)"
+
+# ---- город и провайдер: чужой ответ ------------------------------------------------------
+#
+# Второй внешний вызов роутера, и здесь проверяется не «разобрали ли мы JSON», а ДВА обещания:
+# адрес не попадает даже в кэш, и не подошедшего поля в пакете нет вовсе — ни пустой строкой,
+# ни нулём. Ответ сервиса подставной, и в нём нарочно лежит настоящий по форме адрес.
+cat > "$T/bin/curl" <<EOF
+#!/bin/sh
+# Заглушка curl. Два разных вызова, и различает она их так же, как различил бы человек: у
+# отправки есть --data-binary, у запроса города — нет. Аргументы обоих пишутся на диск: стенду
+# важно не только что отправлено, но и ЧЕМ — заголовок с ключом однажды уезжал пустым.
+_send=0
+for a in "\$@"; do case "\$a" in --data-binary) _send=1 ;; esac; done
+if [ "\$_send" = 1 ]; then
+    printf '%s\n' "\$@" > "$T/curl.argv"
+    _prev=
+    for a in "\$@"; do
+        [ "\$_prev" = --data-binary ] && cp "\${a#@}" "$T/curl.body" 2>/dev/null
+        _prev="\$a"
+    done
+    printf '%s' "\$(cat "$T/curl.code" 2>/dev/null || echo 200)"
+    exit 0
+fi
+printf '%s\n' "\$@" > "$T/curl.geo.argv"
+cat "$T/geo-answer" 2>/dev/null
+EOF
+chmod +x "$T/bin/curl"
+
+geo_answer() { printf '%s' "$1" > "$T/geo-answer"; }
+refresh() {  # -> код возврата tm_net_refresh
+    PATH="$T/bin:$PATH" TM_NET_FILE="$T/var/net" UCI_SPLIFY2="$T/etc/config-splify2" \
+    TM_CURL="$T/bin/curl" \
+        sh -c '. files/usr/lib/splify2/telemetry.sh; tm_net_refresh'
+}
+
+# Ответ ровно той формы, что отдаёт ipinfo.io: адрес ПЕРВЫМ полем, номер сети ведущим в org.
+geo_answer '{"ip":"198.51.100.23","city":"Moscow","region":"Moscow","country":"RU",
+"loc":"55.75,37.61","org":"AS12345 Rostelecom '"$CANARY"'","postal":"101000"}'
+check "фикстура: в ответе сервиса есть адрес" "1" \
+      "$(grep -c '198.51.100.23' "$T/geo-answer" || true)"
+refresh
+check "город и провайдер разрешились" "0" "$?"
+check "В КЭШЕ НЕТ АДРЕСА" "0" \
+      "$(grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' "$T/var/net" | grep -c . || true)"
+check "и названия провайдера тоже нет — только номер" "0" \
+      "$(grep -c "$CANARY" "$T/var/net" || true)"
+check "страна из ответа" "RU"    "$(sed -n 's/^cc=//p' "$T/var/net")"
+check "номер сети из ведущего AS" "12345" "$(sed -n 's/^asn=//p' "$T/var/net")"
+check "город из ответа" "Moscow" "$(sed -n 's/^city=//p' "$T/var/net")"
+# Адрес сервиса берётся из настройки, а не зашит: у части людей ipinfo.io закрыт.
+uset splify2.main.geo_city_url "https://свой-сервис.example/j"
+refresh >/dev/null 2>&1
+check "адрес сервиса берётся из настройки" "1" \
+      "$(grep -c 'свой-сервис.example' "$T/curl.geo.argv" || true)"
+sed -i '/^splify2.main.geo_city_url=/d' "$T/uci.db"
+
+pkt="$(build)"
+check "город уехал в пакете" "Moscow" "$(j 'd["geo"]["city"]')"
+check "номер сети уехал числом" "12345" "$(j 'd["geo"]["asn"]')"
+check "страна уехала" "RU" "$(j 'd["geo"]["cc"]')"
+# КОГДА измерено — иначе панель не отличит переезд от недельного кэша.
+check "время измерения уехало и совпадает с кэшем" "$(sed -n 's/^at=//p' "$T/var/net")" \
+      "$(j 'd["geo"]["at"]')"
+check "и адреса в пакете по-прежнему нет" "0" \
+      "$(printf '%s' "$pkt" | grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | grep -c . || true)"
+
+# ---- и то, что НЕ ДОЛЖНО пройти ----------------------------------------------------------
+# Каждый случай проверяется по одному следствию: поля НЕТ ВОВСЕ. Пустая строка или ноль здесь
+# были бы хуже отсутствия — они неотличимы от измеренного значения.
+nofield() {  # ПОЛЕ -> yes, если поля нет в пакете
+    printf '%s' "$pkt" | python3 -c "import json,sys
+d=json.load(sys.stdin)
+print('yes' if '$1' not in d.get('geo',{}) else d['net']['$1'])" 2>/dev/null
+}
+# Имя ЛАТИНИЦЕЙ и ровно 41 байт: возьми его кириллицей — и проверку длины подменила бы
+# проверка на алфавит, а мутация «длина города не ограничена» прошла бы мимо стенда. Так она
+# и прошла в первой редакции этого стенда.
+geo_answer '{"ip":"198.51.100.23","city":"Llanfairpwllgwyngyll Upon Thames West","country":"RU","org":"AS12345 X"}'
+refresh >/dev/null 2>&1; pkt="$(build)"
+check "город длиннее 32 байт не уезжает вовсе" "yes" "$(nofield city)"
+check "а страна из того же ответа уехала" "RU" "$(j 'd["geo"]["cc"]')"
+geo_answer '{"city":"Москва","country":"RU","org":"AS12345 X"}'
+refresh >/dev/null 2>&1; pkt="$(build)"
+check "город не латиницей не уезжает" "yes" "$(nofield city)"
+geo_answer '{"city":"Perm<script>","country":"RU","org":"AS12345 X"}'
+refresh >/dev/null 2>&1; pkt="$(build)"
+check "город с чем угодно внутри не уезжает" "yes" "$(nofield city)"
+geo_answer '{"city":"Perm","country":"Russia","org":"AS12345 X"}'
+refresh >/dev/null 2>&1; pkt="$(build)"
+check "страна не в две буквы не уезжает" "yes" "$(nofield cc)"
+geo_answer '{"city":"Perm","country":"RU","org":"Rostelecom Ltd"}'
+refresh >/dev/null 2>&1; pkt="$(build)"
+check "org без ведущего AS не даёт номера сети" "yes" "$(nofield asn)"
+# Два килобайта — граница на ВХОДЕ. Ответ, у которого поля лежат за ней, не разбирается вовсе:
+# иначе чужой сервис решал бы, сколько памяти занять на роутере с 64 МБ.
+rm -f "$T/var/net"
+{ printf '{"pad":"'; i=0; while [ "$i" -lt 300 ]; do printf 'xxxxxxxxxx'; i=$((i+1)); done
+  printf '","city":"Perm","country":"RU","org":"AS12345 X"}'; } > "$T/geo-answer"
+refresh >/dev/null 2>&1
+check "ответ длиннее двух килобайт не разбирается" "1" "$?"
+check "и кэш от него не появился" "no" "$([ -s "$T/var/net" ] && echo yes || echo no)"
+# Кэш лежит в /tmp, куда пишет не только эта функция. Проверка повторяется НА ЧТЕНИИ — иначе
+# дописанная кем угодно строка уехала бы в пакет как измеренное значение.
+printf 'at=%s\ncc=RU\ncity=Perm 198.51.100.9\nasn=12345\n' "$(date +%s)" > "$T/var/net"
+pkt="$(build)"
+check "подделанный кэш не проходит проверку на чтении" "yes" "$(nofield city)"
+check "а годные поля из него берутся" "12345" "$(j 'd["geo"]["asn"]')"
+printf 'at=1\ncc=RU\ncity=Perm\nasn=12345\n' > "$T/var/net"
+pkt="$(build)"
+check "протухший кэш не уезжает вовсе" "0" \
+      "$(printf '%s' "$pkt" | grep -c '"geo"' || true)"
+# Нет curl — нет и полей: молчание здесь честнее выдумки.
+rm -f "$T/var/net"
+geo_answer '{"city":"Perm","country":"RU","org":"AS12345 X"}'
+mv "$T/bin/curl" "$T/curl.hidden"
+refresh >/dev/null 2>&1
+check "без curl город не спрашивается" "1" "$?"
+mv "$T/curl.hidden" "$T/bin/curl"
+refresh >/dev/null 2>&1
+
+# ---- САМА ОТПРАВКА -----------------------------------------------------------------------
+#
+# Проверяется по СЛЕДСТВИЮ: что заглушка curl увидела в аргументах и в теле запроса и что
+# команда записала в настройку. Ни одна проверка ниже не смотрит на текст сообщений.
+uset splify2.main.telemetry_url "https://panel.example/ingest"
+# Ключ С ПРОБЕЛОМ нарочно: без пробела разбиение на слова стенду не видно вовсе, и проверка
+# «заголовок приехал одним аргументом» была бы зелена при любой форме подстановки.
+uset splify2.main.telemetry_key "K3Y SECRET"
+: > "$T/curl.code"
+send() {  # АРГУМЕНТЫ команды отправки
+    rm -f "$T/curl.argv" "$T/curl.body"
+    PATH="$T/bin:$PATH" \
+    TELEMETRY_SH="$ROOT/files/usr/lib/splify2/telemetry.sh" \
+    STEER="$STEER_BIN" SPEC="$T/etc/spec.json" LISTS="$T/lists" GEO_DIR="$T/var" \
+    SYSINFO_MODEL="$T/etc/model" OPENWRT_RELEASE="$T/etc/openwrt_release" \
+    BUILD_ID_FILE="$T/etc/build-id" TM_BOOT_FILE="$T/var/boot" TM_EVENTS="$T/var/events" \
+    RPCD_OBJ="$T/none" TM_NET_FILE="$T/var/net" UCI_SPLIFY2="$T/etc/config-splify2" \
+    TM_CURL="$T/bin/curl" \
+    ZAPRET_SH="$ROOT/files/usr/lib/splify2/zapret.sh" \
+    DOH_SH="$ROOT/files/usr/lib/splify2/doh.sh" \
+    ZP_DIR="$T/zapret" ZP_CATALOG="$T/zapret/strategies.txt" ZP_CONF="$T/etc/config-zapret" \
+    ZP_NFQWS="$T/bin/nfqws-missing" ZP_INIT="$T/bin/initd-zapret" ZP_RCD="$T/rcd" \
+    DOH_CONF="$T/etc/config-doh" DOH_INIT="$T/bin/initd-doh" \
+    sh files/usr/sbin/splify2-telemetry "$@"
+}
+ukey() { sed -n "s|^splify2.main.$1=||p" "$T/uci.db" | tail -n1; }
+
+check "команда исполняемая" "yes" \
+      "$([ -x files/usr/sbin/splify2-telemetry ] && echo yes || echo no)"
+
+# БЕЗ --send НИЧЕГО НЕ УЕЗЖАЕТ. То же правило, что у splify2-purge: действие, уводящее данные
+# с роутера, надо назвать вслух.
+rm -f "$T/curl.geo.argv"
+out="$(send 2>/dev/null)"
+check "без --send пакет печатается" "1" "$(printf '%s' "$out" | grep -c '"id":"sp-' || true)"
+check "и curl не звался вовсе" "no" "$([ -e "$T/curl.argv" ] && echo yes || echo no)"
+# И ЗА ГОРОДОМ НАРУЖУ ТОЖЕ НЕ ХОДИЛИ. Отдельная проверка, потому что это отдельный вызов
+# другого адреса: печать пакета — чтение, и обращением к третьей стороне быть не может.
+check "и за городом наружу не ходили" "no" \
+      "$([ -e "$T/curl.geo.argv" ] && echo yes || echo no)"
+
+# ---- УЕЗЖАЮТ ТЕ ЖЕ БАЙТЫ, ЧТО ПОКАЗЫВАЕТ ПРЕДПРОСМОТР ----
+# Сравниваются тело запроса и вывод сборщика; замаскированы только три величины, которые
+# меняются между двумя вызовами по определению — время, аптайм и отсчёт событий.
+mask() { sed 's/"at":[0-9]*/"at":T/; s/"uptime":[0-9]*/"uptime":T/; s/"since":[0-9]*/"since":T/'; }
+send --send >/dev/null 2>&1
+check "тело запроса — байты сборщика, а не своя сборка" "same" \
+      "$([ "$(build | mask)" = "$(mask < "$T/curl.body")" ] && echo same || echo different)"
+
+# КЛЮЧ ПРИЕЗЖАЕТ ОДНИМ АРГУМЕНТОМ. Подстановка `${key:+-H "…"}` разбиралась бы по пробелам, и
+# заголовок уходил бы пустым, а сам ключ curl принял бы за второй адрес.
+check "заголовок с ключом — один аргумент целиком" "1" \
+      "$(grep -cx 'X-Splify2-Key: K3Y SECRET' "$T/curl.argv" || true)"
+check "и адрес у curl ровно один" "1" \
+      "$(grep -c '^https://panel.example/ingest$' "$T/curl.argv" || true)"
+check "ключа отдельным словом среди аргументов нет" "0" \
+      "$(grep -cx 'K3Y SECRET' "$T/curl.argv" || true)"
+# Без ключа заголовка нет вовсе — а не пустой заголовок.
+sed -i '/^splify2.main.telemetry_key=/d' "$T/uci.db"
+send --send >/dev/null 2>&1
+check "без ключа заголовка нет вовсе" "0" \
+      "$(grep -c 'X-Splify2-Key' "$T/curl.argv" || true)"
+uset splify2.main.telemetry_key "K3Y SECRET"
+
+# ---- коды ответа ----
+printf '200' > "$T/curl.code"
+sed -i '/^splify2.main.telemetry_at=/d; /^splify2.main.telemetry_error=/d' "$T/uci.db"
+uset splify2.main.telemetry_error "старая беда"
+send --send >/dev/null 2>&1
+check "200: код возврата ноль" "0" "$?"
+check "200: время отправки записано" "yes" \
+      "$(case "$(ukey telemetry_at)" in [0-9]*) echo yes ;; *) echo no ;; esac)"
+check "200: прошлая ошибка убрана" "" "$(ukey telemetry_error)"
+
+printf '400' > "$T/curl.code"
+send --send >/dev/null 2>&1
+check "400: код возврата единица" "1" "$?"
+check "400: причина сохранена для интерфейса" "1" \
+      "$(ukey telemetry_error | grep -c '400' || true)"
+check "400: НО телеметрия не погашена" "1" "$(ukey telemetry)"
+
+# 401 — ЕДИНСТВЕННЫЙ КОД, ПО КОТОРОМУ РОУТЕР ГАСИТ ОТПРАВКУ САМ. Иначе неисправный ключ
+# превращается в ежедневный стук в чужую дверь.
+printf '401' > "$T/curl.code"
+send --send >/dev/null 2>&1
+check "401: код возврата единица" "1" "$?"
+check "401: ТЕЛЕМЕТРИЯ ПОГАШЕНА" "0" "$(ukey telemetry)"
+check "401: и сказано почему" "1" "$(ukey telemetry_error | grep -c '401' || true)"
+check "401: после этого расписание молчит" "no" \
+      "$(send --scheduled >/dev/null 2>&1; [ -e "$T/curl.argv" ] && echo yes || echo no)"
+sed -i '/^splify2.main.telemetry=/d' "$T/uci.db"; uset splify2.main.telemetry 1
+sed -i '/^splify2.main.telemetry_error=/d' "$T/uci.db"
+
+# 429 — панель просит подождать. Это не поломка: код возврата ноль и в настройку ничего.
+printf '429' > "$T/curl.code"
+send --send >/dev/null 2>&1
+check "429: код возврата ноль" "0" "$?"
+check "429: в настройку ничего не записано" "" "$(ukey telemetry_error)"
+check "429: телеметрия не погашена" "1" "$(ukey telemetry)"
+
+# 000 — НЕ КОД ОТВЕТА, а «ответа не было вовсе»: так curl печатает отказ в соединении и
+# истёкшее время. Пока разбор ждал здесь пустую строку, недоступная панель записывала в
+# настройку «панель ответила 000», и интерфейс показывал это человеку как ответ панели.
+printf '000' > "$T/curl.code"
+send --send >/dev/null 2>&1
+check "000: код возврата ноль — просто пропущены сутки" "0" "$?"
+check "000: и это НЕ записано как ответ панели" "" "$(ukey telemetry_error)"
+printf '503' > "$T/curl.code"
+send --send >/dev/null 2>&1
+check "503: ответ панели записан как есть" "1" \
+      "$(ukey telemetry_error | grep -c '503' || true)"
+printf '200' > "$T/curl.code"
+sed -i '/^splify2.main.telemetry_error=/d' "$T/uci.db"
+
+# ---- согласие решает, уедет ли что-нибудь ----
+sed -i '/^splify2.main.telemetry=/d' "$T/uci.db"
+check "расписание при «не спрашивали» молчит" "no" \
+      "$(send --scheduled >/dev/null 2>&1; [ -e "$T/curl.argv" ] && echo yes || echo no)"
+check "и код возврата ноль — это не поломка" "0" "$(send --scheduled >/dev/null 2>&1; echo $?)"
+uset splify2.main.telemetry 0
+check "расписание при отказе молчит" "no" \
+      "$(send --scheduled >/dev/null 2>&1; [ -e "$T/curl.argv" ] && echo yes || echo no)"
+send --send >/dev/null 2>&1
+check "и руками при отказе — отказ, а не отправка" "1" "$?"
+sed -i '/^splify2.main.telemetry=/d' "$T/uci.db"; uset splify2.main.telemetry 1
+
+# ---- отправлять нечем ----
+# У busybox uclient-fetch нет ни отправки тела, ни кода ответа. Роутер без curl — законное
+# состояние, но молчание в нём читалось бы как «отправляется».
+mv "$T/bin/curl" "$T/curl.hidden"
+send --send >/dev/null 2>&1
+check "без curl отправка — честный отказ" "1" "$?"
+mv "$T/curl.hidden" "$T/bin/curl"
+# И адрес панели: без него отправлять некуда, и это тоже отказ, а не тишина.
+sed -i '/^splify2.main.telemetry_url=/d' "$T/uci.db"
+send --send >/dev/null 2>&1
+check "без адреса панели — честный отказ" "1" "$?"
+uset splify2.main.telemetry_url "https://panel.example/ingest"
+
+# Пакет с настройками роутера не остаётся лежать в /tmp.
+send --send >/dev/null 2>&1
+check "временный файл с пакетом убран" "0" \
+      "$(ls /tmp/splify2-telemetry.* 2>/dev/null | grep -c . || true)"
 
 printf '\n%d проверок пройдено' "$pass"
 if [ "$fail" -gt 0 ]; then printf ', %d ПРОВАЛЕНО\n' "$fail"; exit 1; fi

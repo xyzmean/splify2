@@ -38,6 +38,10 @@ run telemetrymatch sh "$ROOT/tests/telemetrymatch.sh"
 # Команда полного удаления: убирает ТОЛЬКО записанное за нами и по умолчанию ничего не
 # делает вовсе. Стенд про порядок (проброс уходит раньше зоны — иначе fw4 не перезагрузится)
 # и про чужое, которое остаться обязано.
+# Счётчики отвалов интерфейсов: обработчик hotplug, который на каждом событии сети выполняет
+# netifd от root. Стенд про цену (ранний выход по ACTION), про признак WAN и про гонку —
+# при флапающем WAN обработчики запускаются десятками в минуту и параллельно.
+run eventsmatch sh "$ROOT/tests/eventsmatch.sh"
 run purgematch sh "$ROOT/tests/purgematch.sh"
 # Скачивание с обходом закрытого githubusercontent: лестница путей и её порядок (splify2#15).
 run fetchmatch sh "$ROOT/tests/fetchmatch.sh"
