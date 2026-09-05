@@ -199,9 +199,16 @@ case "$2" in
                 case "$n" in
                     general*) json_add_string family flowseal ;;
                     Yv*)      json_add_string family yv ;;
+                    Dv[0-9]*) json_add_string family dv ;;
                     v[0-9]*)  json_add_string family v ;;
                     *)        json_add_string family other ;;
                 esac
+                # СЛОЙ, а не только семейство. Семейство отвечает на вопрос «откуда
+                # стратегия», слой — на вопрос «можно ли её применить одну». Интерфейсу
+                # нужен второй: `Yv05` и `Dv3` это надстройки над основной стратегией, и
+                # предлагать их кнопкой «Применить» значит предлагать снести обход всему
+                # остальному трафику (zp_apply_global пишет в NFQWS_OPT ОДИН блок).
+                json_add_string layer "$(zp_layer_of "$n")"
                 json_close_object
             fi
             IFS='
@@ -245,9 +252,11 @@ case "$2" in
         case "$name" in
             general*) json_add_string family flowseal ;;
             Yv*)      json_add_string family yv ;;
+            Dv[0-9]*) json_add_string family dv ;;
             v[0-9]*)  json_add_string family v ;;
             *)        json_add_string family other ;;
         esac
+        json_add_string layer "$(zp_layer_of "$name")"
         json_add_array opts
         # Без конвейера — как в zapret_strategies: тело конвейера идёт в подоболочке, и
         # накопленный jshn из неё не возвращается.
@@ -274,6 +283,20 @@ case "$2" in
         [ -n "$name" ] || fail "не выбрана стратегия"
         zp_installed || fail "обход DPI не установлен"
         zp_has "$name" || fail "нет такой стратегии в каталоге: $name"
+        # СЛОЙ ОДНОЙ СТРАТЕГИЕЙ НЕ ПРИМЕНЯЕТСЯ, и отказ здесь — не педантизм.
+        #
+        # zp_apply_global срезает всё от `option NFQWS_OPT '` до конца файла и пишет ОДИН
+        # блок. Для основной стратегии это верно, для слоя — разрушительно: выбор `Yv05`
+        # оставил бы в конфигурации только блок YouTube, то есть Google заработал бы, а
+        # весь остальной трафик тихо остался бы без обхода. С `Dv` (17 записей, запуск 65)
+        # то же самое, только блок ловит одни порты discord.media.
+        #
+        # Отказ стоит в БЭКЕНДЕ, а не в интерфейсе: метод зовут и мимо страницы (ubus,
+        # ssh, чужой скрипт), а цена ошибки — роутер без обхода. Собрать пачку из основной
+        # и слоёв — отдельная работа; пока её нет, честнее отказать, чем сделать не то.
+        if ! zp_is_main "$name"; then
+            fail "«$name» — это надстройка над стратегией ($(zp_layer_of "$name")), а не стратегия: применённая одна, она снимет обход всему остальному трафику"
+        fi
         if [ -n "$out" ]; then
             # Выход обязан существовать И быть нужного вида: файл ключей, положенный для
             # выхода kind=interface, никто никогда не прочитает, а в интерфейсе стратегия
@@ -382,9 +405,9 @@ case "$2" in
         # вопроса «а эта у меня пойдёт?» и стоит секунды вместо часа; её результат ложится
         # рядом с остальными, а не затирает их (см. хранение в splify2-zapret-test).
         case "${scope:-all}" in
-            all|flowseal|v|yv) ;;
+            all|flowseal|v|yv|dv) ;;
             one:?*) zp_has "${scope#one:}" || fail "нет такой стратегии в каталоге: ${scope#one:}" ;;
-            *) fail "набор бывает all, flowseal, v, yv или one:<стратегия>" ;;
+            *) fail "набор бывает all, flowseal, v, yv, dv или one:<стратегия>" ;;
         esac
         zp_installed || fail "обход DPI не установлен"
         [ -s "$ZP_CATALOG" ] || fail "каталог стратегий пуст — обновите его"
