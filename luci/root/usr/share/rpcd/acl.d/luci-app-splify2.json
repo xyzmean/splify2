@@ -46,6 +46,8 @@
           "zapret_test",
           "zapret_results",
           "zapret_autoselect",
+          "telemetry_state",
+          "telemetry_preview",
           "support_report"
         ]
       }
@@ -88,7 +90,8 @@
           "zapret_test_stop",
           "zapret_autoselect_set",
           "zapret_autoselect_start",
-          "zapret_autoselect_undo"
+          "zapret_autoselect_undo",
+          "telemetry_set"
         ]
       }
     }

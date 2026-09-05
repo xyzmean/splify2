@@ -140,6 +140,10 @@ UPDATE_LISTS=${UPDATE_LISTS:-/usr/sbin/splify2-update-lists}
 # но переменные с умолчаниями `${X:-…}` от второго прохода не страдают, а время — да.
 need_zapret() { [ "${_zp_loaded:-}" = 1 ] || { . "${ZAPRET_SH:-/usr/lib/splify2/zapret.sh}"; _zp_loaded=1; }; }
 need_doh()    { [ "${_doh_loaded:-}" = 1 ] || { . "${DOH_SH:-/usr/lib/splify2/doh.sh}"; _doh_loaded=1; }; }
+# Сборщик пакета телеметрии. Подключается ЛЕНИВО и только своей группой: он тянет за собой
+# чтение спеки, каталога устройств и вызов движка, а платить за это должен тот вызов,
+# которому это нужно, — раз в сутки, а не на каждом круге опроса страницы.
+need_telemetry() { [ "${_tm_loaded:-}" = 1 ] || { . "${TELEMETRY_SH:-/usr/lib/splify2/telemetry.sh}"; _tm_loaded=1; }; }
 # Фоновая проверка стратегий — отдельный процесс, а не работа внутри вызова ubus: у вызова
 # свой срок жизни (две минуты), а проверка идёт десятки минут, и человек должен иметь право
 # закрыть окно. Путь швом по той же причине, что у остальных.
@@ -672,6 +676,14 @@ list)
     json_add_object zapret_autoselect_start; json_add_string scope; json_close_object
     # Откат к настройке, которая была до применения победителя.
     json_add_object zapret_autoselect_undo; json_close_object
+    # Телеметрия. Согласие тремя состояниями: ключа нет — «не спрашивали» (можно предложить
+    # один раз), 0 — отказ (предлагать больше нельзя), 1 — согласие. Умолчание — выключено.
+    json_add_object telemetry_state; json_close_object
+    json_add_object telemetry_set; json_add_boolean on; json_close_object
+    # «Вот что уедет» — ТЕ ЖЕ БАЙТЫ, которые уедут: метод зовёт того же сборщика, что и
+    # отправка. Работает и при выключенной телеметрии — иначе посмотреть можно было бы
+    # только после согласия.
+    json_add_object telemetry_preview; json_close_object
     json_add_object fetch_mode; json_close_object
     json_add_object fetch_mode_set; json_add_string mode; json_close_object
     # `sub` — путь к файлу подписки: узлы подписки, на которую ещё не заведён ни один выход.
@@ -704,6 +716,7 @@ call)
         xsteer_link|xsteer_link_put) _grp=xsteer ;;
         doh_state|doh_set|doh_off|doh_tunnel_set) _grp=doh ;;
         zapret_state|zapret_install|zapret_remove|zapret_sync|zapret_strategies|zapret_strategy|zapret_apply|zapret_enable|zapret_game_set|zapret_test_start|zapret_test_stop|zapret_test|zapret_results|zapret_autoselect|zapret_autoselect_set|zapret_autoselect_start|zapret_autoselect_undo) _grp=zapret ;;
+        telemetry_state|telemetry_set|telemetry_preview) _grp=telemetry ;;
         *) fail "неизвестный метод" ;;
     esac
     . "$RPCD_LIB/common.sh"
