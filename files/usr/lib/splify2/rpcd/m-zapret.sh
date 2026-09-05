@@ -71,7 +71,7 @@ case "$2" in
         # активную НЕ трогает (требование владельца), поэтому расхождение — законное
         # состояние, и единственный способ узнать о нём — спросить.
         _za="$(zp_active_global 2>/dev/null)"
-        if [ -n "$_za" ] && zp_drifted "$_za" /dev/null 2>/dev/null; then
+        if [ -n "$_za" ] && zp_drifted_global "$_za" 2>/dev/null; then
             json_add_boolean drifted 1
         else
             json_add_boolean drifted 0

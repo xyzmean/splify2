@@ -2361,6 +2361,75 @@ out="$(rpcd zapret_test_start '{"scope":"one:v9"}')"
 check "одиночный набор с чужим именем отвергается по имени" "yes" \
       "$(printf '%s' "$out" | grep -q 'нет такой стратегии' && echo yes || echo no)"
 
+# ---- разошлась ли активная стратегия с каталогом -------------------------------------
+#
+# Каталог обновляется сам раз в сутки и активную стратегию НЕ подменяет (требование
+# владельца) — значит расхождение с каталогом это законное состояние, и единственный способ
+# о нём узнать — спросить объект. По признаку `drifted` вкладка показывает предложение
+# применить стратегию заново; без него человек видит имя стратегии и не знает, что за этим
+# именем в каталоге уже другие ключи.
+#
+# Признак проверяется здесь целиком через метод, а не через zp_drifted в zapretmatch.sh,
+# потому что ломался он именно на стыке: библиотека сравнивала правильно, а объект звал её
+# с /dev/null вместо применённого тела.
+printf '#v1\n--filter-tcp=443\n' > "$T/zapret/strategies.txt"
+printf "config zapret 'config'\n\toption NFQWS_OPT '\n#v1\n--filter-tcp=443\n'\n" > "$T/etc/config-zapret"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_state)"
+check "активная стратегия названа" "v1" "$(printf '%s' "$out" | jget active)"
+check "совпавшая с каталогом не считается разошедшейся" "false" \
+      "$(printf '%s' "$out" | jget drifted)"
+
+# Каталог обновился, применённое осталось прежним — это и есть расхождение.
+printf '#v1\n--filter-tcp=443\n--dpi-desync=fake\n' > "$T/zapret/strategies.txt"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_state)"
+check "изменившаяся в каталоге считается разошедшейся" "true" \
+      "$(printf '%s' "$out" | jget drifted)"
+
+# Стратегии в каталоге нет вовсе (её переименовали у автора) — сравнивать не с чем, и
+# выдавать это за расхождение нельзя: расхождение зовёт «применить заново», а применять
+# нечего.
+printf '#v2\n--filter-tcp=443\n' > "$T/zapret/strategies.txt"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_state)"
+check "пропавшая из каталога не выдаётся за расхождение" "false" \
+      "$(printf '%s' "$out" | jget drifted)"
+
+# Игровой блок дописан ПОВЕРХ стратегии соседней функцией, в каталоге его нет и быть не
+# может (zp_block обрывается на следующем `#`). Без оговорки про него каждый роутер с
+# игровым фильтром выглядел бы разошедшимся всегда.
+printf '#v1\n--filter-tcp=443\n' > "$T/zapret/strategies.txt"
+printf "config zapret 'config'\n\toption NFQWS_OPT '\n#v1\n--filter-tcp=443\n#Gv3\n--new\n--filter-udp=1024-65535\n'\n" \
+    > "$T/etc/config-zapret"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_state)"
+check "своя игровая стратегия не выдаётся за расхождение" "false" \
+      "$(printf '%s' "$out" | jget drifted)"
+# ...но и не закрывает глаза на настоящее расхождение: блок отрезается, остальное сверяется.
+printf '#v1\n--filter-tcp=80\n' > "$T/zapret/strategies.txt"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_state)"
+check "игровой блок не прячет расхождение в самой стратегии" "true" \
+      "$(printf '%s' "$out" | jget drifted)"
+
+# Метка `#Gv0` — не дописанный блок, а отметка встроенного игрового фильтра стратегии
+# general, и стоит она ПЕРЕД её собственным хвостом. Хвост из сравнения выпадает, поэтому
+# здесь совпадением считается совпадение начала.
+printf '#general\n--filter-tcp=443\n--new\n--filter-tcp=2802\n--dpi-desync=multisplit\n' \
+    > "$T/zapret/strategies.txt"
+printf "config zapret 'config'\n\toption NFQWS_OPT '\n#general\n--filter-tcp=443\n#Gv0\n--new\n--filter-tcp=2802\n--dpi-desync=multisplit\n'\n" \
+    > "$T/etc/config-zapret"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_state)"
+check "встроенный фильтр Flowseal не выдаётся за расхождение" "false" \
+      "$(printf '%s' "$out" | jget drifted)"
+printf '#general\n--filter-tcp=80\n--new\n--filter-tcp=2802\n--dpi-desync=multisplit\n' \
+    > "$T/zapret/strategies.txt"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_state)"
+check "и расхождение до метки видно" "true" "$(printf '%s' "$out" | jget drifted)"
+
+# Каталога нет вовсе — обычное состояние свежей установки, и оно не «расхождение».
+rm -f "$T/zapret/strategies.txt"
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_state)"
+check "пустой каталог не выдаётся за расхождение" "false" \
+      "$(printf '%s' "$out" | jget drifted)"
+printf '#v1\n--filter-tcp=443\n--dpi-desync=fake\n\n#Yv01\n--filter-tcp=443\n' > "$T/zapret/strategies.txt"
+
 # ---- экземпляры обработчиков пересобираются, а не ждут перезагрузки роутера -----------
 #
 # `steer apply` ставит правила, но экземпляров procd НЕ ЗАВОДИТ — их заводит init-скрипт,
