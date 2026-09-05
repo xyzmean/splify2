@@ -45,6 +45,7 @@
           "zapret_strategy",
           "zapret_test",
           "zapret_results",
+          "zapret_autoselect",
           "support_report"
         ]
       }
@@ -84,7 +85,10 @@
           "zapret_sync",
           "zapret_apply",
           "zapret_test_start",
-          "zapret_test_stop"
+          "zapret_test_stop",
+          "zapret_autoselect_set",
+          "zapret_autoselect_start",
+          "zapret_autoselect_undo"
         ]
       }
     }

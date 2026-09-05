@@ -74,7 +74,8 @@ RPCD_TIMEOUT=${RPCD_TIMEOUT:-120}
 # тоже здесь: пакеты снимают вместе, и половина следов — это не «убрано».
 STATE_PATHS=${STATE_PATHS:-"/var/lib/splify2 /var/lib/steer /var/run/xsteer \
 /var/run/splify2-vless-dirty /var/run/splify2-obfs-dirty /var/run/splify2-zapret-dirty \
-/var/lock/splify2-update.lock"}
+/var/run/splify2-zapret-autoselect.progress /var/run/splify2-zapret-autoselect.pid \
+/var/lock/splify2-update.lock /var/lock/splify2-zapret-autoselect.lock"}
 
 DO=0     # 0 — только показать; 1 — делать
 KEEP=0   # 1 — настройки человека оставить

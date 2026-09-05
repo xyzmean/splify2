@@ -144,6 +144,13 @@ need_doh()    { [ "${_doh_loaded:-}" = 1 ] || { . "${DOH_SH:-/usr/lib/splify2/do
 # свой срок жизни (две минуты), а проверка идёт десятки минут, и человек должен иметь право
 # закрыть окно. Путь швом по той же причине, что у остальных.
 ZAPRET_TEST=${ZAPRET_TEST:-/usr/sbin/splify2-zapret-test}
+# Автоподбор — ТРЕТИЙ процесс, а не работа внутри проверки: он её зовёт, ждёт кода возврата
+# и только потом ранжирует. Свой файл процесса и свой замок нужны ровно затем, чтобы
+# «идёт проверка» и «идёт подбор» были разными ответами: во время подбора кнопка проверки
+# обязана быть занята, а во время одиночной проверки подбор — нет.
+ZAPRET_AUTOSEL=${ZAPRET_AUTOSEL:-/usr/sbin/splify2-zapret-autoselect}
+ZA_PIDFILE=${ZA_PIDFILE:-/var/run/splify2-zapret-autoselect.pid}
+ZA_LOCK=${ZA_LOCK:-/var/lock/splify2-zapret-autoselect.lock}
 
 # ---- идентификатор устройства для панели подписки (HWID) ----------------------------
 #
@@ -654,6 +661,17 @@ list)
     # здесь через jshn значило бы разбирать и собирать пятьдесят объектов на каждый запрос
     # ради того же самого JSON — тот же довод, по которому `status` движка отдаётся как есть.
     json_add_object zapret_results; json_close_object
+    # Автоподбор. Состояние и рейтинг — одним методом (вкладка спрашивает оба факта разом,
+    # и оба читаются из одного каталога результатов).
+    json_add_object zapret_autoselect; json_close_object
+    # Расписание: число дней между подборами, 0 выключает. Выключено по умолчанию — смена
+    # работающей стратегии затрагивает всех клиентов роутера, и такое не включают за человека.
+    json_add_object zapret_autoselect_set; json_add_int days; json_close_object
+    # «Подобрать и применить»: гоняет проверку в изоляции, ранжирует, применяет победителя —
+    # но только если он лучше и того, что без обхода вовсе, и того, что работает сейчас.
+    json_add_object zapret_autoselect_start; json_add_string scope; json_close_object
+    # Откат к настройке, которая была до применения победителя.
+    json_add_object zapret_autoselect_undo; json_close_object
     json_add_object fetch_mode; json_close_object
     json_add_object fetch_mode_set; json_add_string mode; json_close_object
     # `sub` — путь к файлу подписки: узлы подписки, на которую ещё не заведён ни один выход.
@@ -685,7 +703,7 @@ call)
         backup_get|backup_put) _grp=backup ;;
         xsteer_link|xsteer_link_put) _grp=xsteer ;;
         doh_state|doh_set|doh_off|doh_tunnel_set) _grp=doh ;;
-        zapret_state|zapret_install|zapret_remove|zapret_sync|zapret_strategies|zapret_strategy|zapret_apply|zapret_enable|zapret_game_set|zapret_test_start|zapret_test_stop|zapret_test|zapret_results) _grp=zapret ;;
+        zapret_state|zapret_install|zapret_remove|zapret_sync|zapret_strategies|zapret_strategy|zapret_apply|zapret_enable|zapret_game_set|zapret_test_start|zapret_test_stop|zapret_test|zapret_results|zapret_autoselect|zapret_autoselect_set|zapret_autoselect_start|zapret_autoselect_undo) _grp=zapret ;;
         *) fail "неизвестный метод" ;;
     esac
     . "$RPCD_LIB/common.sh"

@@ -725,6 +725,9 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         DOH_SH="$ROOT/files/usr/lib/splify2/doh.sh" \
         RPCD_LIB="$ROOT/files/usr/lib/splify2/rpcd" \
         ZAPRET_TEST="$T/bin/zapret-test" \
+        ZAPRET_AUTOSEL="$T/bin/zapret-autoselect" \
+        ZA_PIDFILE="$T/zapret/autosel.pid" ZA_LOCK="$T/zapret/autosel.lock" \
+        ZP_PREV="$T/zapret/previous.opts" ZP_AUTOSEL="$T/zapret/autoselect" \
         ZP_DIR="$T/zapret" ZP_CATALOG="$T/zapret/strategies.txt" \
         ZP_RESULTS="$T/zapret/results.json" ZP_RESULTS_DIR="$T/zapret/results.d" ZP_STAMP="$T/zapret/updated" \
         ZP_PROGRESS="$T/zapret/progress" ZP_PIDFILE="$T/zapret/pid" \
@@ -2555,6 +2558,110 @@ check "одиночный набор доходит до проверки уст
 out="$(rpcd zapret_test_start '{"scope":"one:v9"}')"
 check "одиночный набор с чужим именем отвергается по имени" "yes" \
       "$(printf '%s' "$out" | grep -q 'нет такой стратегии' && echo yes || echo no)"
+
+# ---- автоподбор стратегии ---------------------------------------------------------------
+#
+# Правило выбора живёт в zapret.sh и проверяется autoselmatch.sh целиком. Здесь — только
+# граница «объект rpcd ↔ библиотека и команда»: ровно то место, где ломались все прежние
+# находки этой вкладки (метод звал zp_drifted с /dev/null, метод отказывался применять слой).
+#
+# Проверяется поэтому не рейтинг, а три вещи: что ответ разбирается и при пустом состоянии,
+# что запуск действительно зовёт КОМАНДУ ПОДБОРА (а не проверку) и делает это с --apply, и
+# что невозможный откат отказывает громко.
+printf '#!/bin/sh\necho "$@" >> "%s/autosel.log"\nexit 0\n' "$T" > "$T/bin/zapret-autoselect"
+chmod +x "$T/bin/zapret-autoselect"
+rm -f "$T/autosel.log" "$T/zapret/autoselect" "$T/zapret/previous.opts" "$T/uci.db"
+printf '#v1\n--filter-tcp=443\n#v2\n--filter-tcp=443\n--dpi-desync=fake\n' > "$T/zapret/strategies.txt"
+
+out="$(rpcd zapret_autoselect)"
+check "автоподбор выключен по умолчанию" "false" "$(printf '%s' "$out" | jget on)"
+check "и срок в днях нулевой" "0" "$(printf '%s' "$out" | jget every_days)"
+check "ни разу не применяли — время ноль, а не выдумка" "0" "$(printf '%s' "$out" | jget at)"
+check "откатывать нечего" "false" "$(printf '%s' "$out" | jget can_undo)"
+# ОТКАЗ ТОЖЕ ОТВЕТ: без результатов проверки поле note обязано сказать, почему победителя нет.
+# Пустой ответ здесь означал бы, что вкладка показывает «подбирать нечего» и там, где просто
+# не запускали проверку, и там, где уже применена лучшая, — а это разные состояния.
+check "и сказано, почему победителя нет" "yes" \
+      "$(printf '%s' "$out" | jget note | grep -q 'проверка не проходила' && echo yes || echo no)"
+
+# Расписание. Ноль выключает; больше 90 дней — отказ, ровно как в проверке архива, иначе
+# архив умел бы то, чего не умеет интерфейс.
+out="$(rpcd zapret_autoselect_set '{"days":7}')"
+check "срок ставится" "7" "$(printf '%s' "$out" | jget every_days)"
+out="$(rpcd zapret_autoselect)"
+check "и читается обратно как включённый" "true" "$(printf '%s' "$out" | jget on)"
+out="$(rpcd zapret_autoselect_set '{"days":365}')"
+check "365 дней — отказ" "false" "$(printf '%s' "$out" | jget ok)"
+out="$(rpcd zapret_autoselect_set '{"days":"каждый вторник"}')"
+check "не число — отказ" "false" "$(printf '%s' "$out" | jget ok)"
+out="$(rpcd zapret_autoselect_set '{"days":0}')"
+check "ноль принимается — это «выключено»" "true" "$(printf '%s' "$out" | jget ok)"
+
+# Запуск. Обход не установлен — отказ до всякого фона: подбирать нечего, а сказать надо.
+out="$(rpcd zapret_autoselect_start '{"scope":"all"}')"
+check "без обхода подбор не запускается" "false" "$(printf '%s' "$out" | jget ok)"
+check "и команду не зовёт" "no" "$([ -s "$T/autosel.log" ] && echo yes || echo no)"
+# Слой discord в наборах подбора отсутствует НАРОЧНО, в отличие от проверки: мерить его нечем,
+# а подбор без замера — подбор наугад.
+out="$(rpcd zapret_autoselect_start '{"scope":"dv"}')"
+check "область dv для подбора отвергается" "false" "$(printf '%s' "$out" | jget ok)"
+check "и отказ перечисляет то, что мерить есть чем" "yes" \
+      "$(printf '%s' "$out" | grep -q 'all, flowseal, v или yv' && echo yes || echo no)"
+
+out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_autoselect_start '{"scope":"v"}')"
+check "с установленным обходом подбор запускается" "true" "$(printf '%s' "$out" | jget ok)"
+# Ждём появления журнала: команда запускается ФОНОМ (в этом весь смысл — подбор идёт минуты,
+# а у вызова ubus свой срок), поэтому файл появляется не в тот же миг. Ожидание по ФАКТУ, а
+# не по времени, и с потолком — иначе стенд либо мигает, либо висит.
+_w=0
+while [ "$_w" -lt 40 ] && [ ! -s "$T/autosel.log" ]; do _w=$((_w + 1)); sleep 0.05; done
+check "зовётся команда подбора, а не проверка" "yes" \
+      "$([ -s "$T/autosel.log" ] && echo yes || echo no)"
+# ГЛАВНАЯ ПРОВЕРКА РАЗДЕЛА: кнопка называется «подобрать и применить», значит --apply
+# обязателен. Без него метод отвечал бы «ок», ничего не меняя, и человек считал бы, что
+# стратегия подобрана.
+check "и зовётся с --apply" "yes" \
+      "$(grep -q -- '--apply' "$T/autosel.log" && echo yes || echo no)"
+check "и с той областью, что просили" "yes" \
+      "$(grep -q -- '--scope v' "$T/autosel.log" && echo yes || echo no)"
+
+# Откат. Копии нет — отказ ГРОМКИЙ: молчаливый «ок» здесь означал бы, что человек считает,
+# будто вернул как было.
+out="$(rpcd zapret_autoselect_undo)"
+check "откат без копии — отказ" "false" "$(printf '%s' "$out" | jget ok)"
+check "и причина названа" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'откатывать нечего' && echo yes || echo no)"
+
+# Копия есть и активная стратегия та же, что применил подбор — откат обязан пройти и вернуть
+# файл байт в байт.
+printf "config zapret 'config'\n\toption NFQWS_OPT '\n#v1\n--filter-tcp=443\n'\n" > "$T/zapret/previous.opts"
+printf "config zapret 'config'\n\toption NFQWS_OPT '\n#v2\n--filter-tcp=443\n--dpi-desync=fake\n'\n" > "$T/etc/config-zapret"
+printf 'at=%s\nby=auto\nname=v2\nok=26\ntotal=30\n' "$(date +%s)" > "$T/zapret/autoselect"
+out="$(rpcd zapret_autoselect)"
+check "откат доступен, когда работает применённое" "true" "$(printf '%s' "$out" | jget can_undo)"
+out="$(rpcd zapret_autoselect_undo)"
+check "откат прошёл" "true" "$(printf '%s' "$out" | jget ok)"
+check "и вернул прежнюю стратегию" "v1" "$(printf '%s' "$out" | jget active)"
+check "файл вернулся" "1" "$(grep -c '^#v1$' "$T/etc/config-zapret")"
+check "и копии больше нет" "no" "$([ -e "$T/zapret/previous.opts" ] && echo yes || echo no)"
+
+# Человек выбрал стратегию руками после подбора — откат обязан отказать, а не отменить его
+# выбор: копия хранит файл целиком.
+printf "config zapret 'config'\n\toption NFQWS_OPT '\n#v1\n--filter-tcp=443\n'\n" > "$T/zapret/previous.opts"
+printf 'at=%s\nby=auto\nname=v2\n' "$(date +%s)" > "$T/zapret/autoselect"
+printf "config zapret 'config'\n\toption NFQWS_OPT '\n#v1\n--filter-tcp=443\n'\n" > "$T/etc/config-zapret"
+out="$(rpcd zapret_autoselect)"
+check "после ручного выбора откат недоступен" "false" "$(printf '%s' "$out" | jget can_undo)"
+out="$(rpcd zapret_autoselect_undo)"
+check "и он отказывает" "false" "$(printf '%s' "$out" | jget ok)"
+check "и объясняет, что отменил бы выбор человека" "yes" \
+      "$(printf '%s' "$out" | jget error | grep -q 'ваш выбор' && echo yes || echo no)"
+
+# Методы обязаны быть в перечне: метод, которого нет в list, для LuCI не существует.
+# Метод, которого нет в `list`, для LuCI не существует: ubus его просто не покажет. Считаются
+# ВХОЖДЕНИЯ, а не строки: перечень приезжает одним JSON.
+check "автоподбор объявлен в перечне методов" "4" \
+      "$(rpcd_list | grep -o '"zapret_autoselect[a-z_]*"' | sort -u | grep -c .)"
 
 # ---- разошлась ли активная стратегия с каталогом -------------------------------------
 #

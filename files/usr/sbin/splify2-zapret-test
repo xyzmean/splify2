@@ -399,9 +399,10 @@ zt_run_one() {  # ИМЯ ФАЙЛ_ЦЕЛЕЙ ФАЙЛ_ОТМЕТОК
 # пробелы и скобки («general (ALT10)»), и класть их в имя файла значит спорить с оболочкой.
 # Внутри одна строка полями через табуляцию: имя, набор, удач, целей, открывшиеся метки
 # через запятую, время. Контрольный проход набора хранится рядом — `_baseline.<набор>`.
-zt_res_file() {  # ИМЯ
-    printf '%s/%s' "$ZP_RESULTS_DIR" "$(printf '%s' "$1" | md5sum | cut -c1-32)"
-}
+#
+# ПРАВИЛО ИМЕНИ ЖИВЁТ В zapret.sh (zp_res_file), а не здесь. Писатель тут один, а читателей с
+# появлением автоподбора стало трое — рейтинг, метод объекта rpcd и откат, — и md5 в двух
+# местах это два места, которые обязаны согласиться о том, чего человек никогда не увидит.
 
 zt_json_str() {  # СТРОКА -> JSON-строка в кавычках
     printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
@@ -568,7 +569,7 @@ while IFS= read -r name; do
     ok="$(zt_run_one "$name" "$zt_tmp/t.$set" "$zt_tmp/ok")"
     total="$(grep -c '|' "$zt_tmp/t.$set")"
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$set" "$ok" "$total" \
-        "$(zt_opened "$zt_tmp/t.$set" "$zt_tmp/ok")" "$(date +%s)" > "$(zt_res_file "$name")"
+        "$(zt_opened "$zt_tmp/t.$set" "$zt_tmp/ok")" "$(date +%s)" > "$(zp_res_file "$name")"
     log "$name: $ok из $total ($set)"
 done < "$zt_tmp/names"
 

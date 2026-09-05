@@ -149,6 +149,7 @@ cp files/usr/sbin/splify2-update-lists "$PKG/usr/sbin/splify2-update-lists"
 # вызова ubus свой срок жизни (две минуты), а проверка идёт десятки минут, и человек имеет
 # право закрыть окно роутера.
 cp files/usr/sbin/splify2-zapret-test "$PKG/usr/sbin/splify2-zapret-test"
+cp files/usr/sbin/splify2-zapret-autoselect "$PKG/usr/sbin/splify2-zapret-autoselect"
 # Команда полного удаления следов. В postrm её быть НЕ МОЖЕТ: у opkg обновление пакета это
 # удаление плюс установка, поэтому чистка в postrm сносила бы настройки человека при каждом
 # обновлении. Поэтому — отдельная команда, которую зовут осознанно (см. шапку скрипта).
@@ -208,7 +209,8 @@ mkdir -p "$PKG/lib/upgrade/keep.d"
 cp files/lib/upgrade/keep.d/splify2 "$PKG/lib/upgrade/keep.d/splify2"
 chmod 0644 "$PKG/lib/upgrade/keep.d/splify2"
 chmod 0755 "$PKG/usr/libexec/rpcd/splify2" "$PKG/usr/sbin/splify2-update-lists" \
-           "$PKG/usr/sbin/splify2-zapret-test" "$PKG/usr/sbin/splify2-purge"
+           "$PKG/usr/sbin/splify2-zapret-test" "$PKG/usr/sbin/splify2-zapret-autoselect" \
+           "$PKG/usr/sbin/splify2-purge"
 chmod 0644 "$PKG/usr/share/splify2/doh-providers.conf" "$PKG/usr/share/splify2/dpi-suite.json" \
            "$PKG/usr/share/splify2/allow-domains.sh"
 chmod 0644 "$PKG"/usr/lib/splify2/*.sh "$PKG"/usr/lib/splify2/rpcd/*.sh
@@ -368,7 +370,8 @@ chmod +x build/scripts/post-install
 # опроса). Теперь добавить подключение и забыть укладку нельзя.
 for _need in $(grep -ho '/usr/lib/splify2/[a-z0-9_-]*\.sh' \
                     files/usr/libexec/rpcd/splify2 files/usr/sbin/splify2-update-lists \
-                    files/usr/sbin/splify2-zapret-test |
+                    files/usr/sbin/splify2-zapret-test \
+                    files/usr/sbin/splify2-zapret-autoselect |
                sort -u); do
     test -s "$PKG$_need" || {
         echo "в пакете нет ${_need#/} — подключающая его половина не запустится"; exit 1; }
@@ -414,6 +417,10 @@ python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$PKG/usr/share/splif
     exit 1; }
 # Проверка стратегий запускается объектом rpcd по имени файла. Нет файла — кнопка «Проверить»
 # отвечает отказом, и отказ этот выглядит как поломка бэкенда, а не как недособранный пакет.
+test -x "$PKG/usr/sbin/splify2-zapret-autoselect" || {
+    echo "в пакете нет usr/sbin/splify2-zapret-autoselect — автоподбор не запустится"
+    echo "и, что хуже, ночное обновление зовёт его по расписанию: отсутствие файла там тихое"
+    exit 1; }
 test -x "$PKG/usr/sbin/splify2-zapret-test" || {
     echo "в пакете нет usr/sbin/splify2-zapret-test — проверка стратегий не запустится"
     exit 1; }

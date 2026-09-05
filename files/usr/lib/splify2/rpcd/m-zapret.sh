@@ -516,5 +516,121 @@ case "$2" in
         fi
         ;;
 
+    zapret_autoselect)
+        need_zapret
+        # Состояние автоподбора одним вызовом: включён ли, когда применял и что, есть ли
+        # откат, идёт ли прогон сейчас — и РЕЙТИНГ по уже имеющимся результатам.
+        #
+        # Рейтинг здесь, а не отдельным методом: вкладка спрашивает оба факта разом, а
+        # zp_rank читает те же файлы, что и приговор, — два метода означали бы два обхода
+        # каталога результатов на каждое открытие вкладки.
+        json_init
+        _as_days="$(uci -q get splify2.main.zapret_autoselect 2>/dev/null || true)"
+        case "${_as_days:-0}" in ''|*[!0-9]*) _as_days=0 ;; esac
+        json_add_int every_days "$_as_days"
+        json_add_boolean on "$([ "$_as_days" -gt 0 ] && echo 1 || echo 0)"
+        # Запись о последнем применении. Пустая запись — законное состояние «ни разу не
+        # применяли», и поля тогда не выдумываются: ноль в `at` для страницы значит то же.
+        json_add_int at "$(zp_autosel_get at 2>/dev/null || echo 0)"
+        json_add_string applied "$(zp_autosel_get name 2>/dev/null || true)"
+        json_add_int applied_ok "$(zp_autosel_get ok 2>/dev/null || echo 0)"
+        json_add_int applied_total "$(zp_autosel_get total 2>/dev/null || echo 0)"
+        json_add_string by "$(zp_autosel_get by 2>/dev/null || true)"
+        json_add_string prev "$(zp_autosel_get prev 2>/dev/null || true)"
+        json_add_boolean can_undo "$(zp_undo_ready && echo 1 || echo 0)"
+        # Приговор по имеющимся результатам — той же функцией, которой пользуется команда.
+        # Здесь он ничего не применяет: вкладке нужно показать, ЧТО было бы применено.
+        # Без подоболочки: `$(zp_winner)` унесло бы ZP_NOTE вместе с подоболочкой, и поле
+        # note приходило бы пустым ровно там, где причина отказа и нужна.
+        if zp_winner; then
+            json_add_object winner
+            json_add_string name "$(printf '%s' "$ZP_WINNER" | cut -f6)"
+            json_add_int ok "$(printf '%s' "$ZP_WINNER" | cut -f2)"
+            json_add_int total "$(printf '%s' "$ZP_WINNER" | cut -f3)"
+            json_add_string set "$(printf '%s' "$ZP_WINNER" | cut -f5)"
+            json_close_object
+            json_add_string note ""
+        else
+            # ОТКАЗ ТОЖЕ ОТВЕТ, и он ценнее пустоты: «уже применена лучшая» и «проверка не
+            # проходила» — разные состояния, и человек по строке понимает, жать ли кнопку.
+            json_add_string note "${ZP_NOTE:-}"
+        fi
+        json_add_array rank
+        zp_rank 2>/dev/null | while IFS="$(printf '\t')" read -r _r_share _r_ok _r_total _r_keys _r_set _r_name; do
+            [ -n "${_r_name:-}" ] || continue
+            json_add_object ""
+            json_add_string name "$_r_name"
+            json_add_int ok "${_r_ok:-0}"
+            json_add_int total "${_r_total:-0}"
+            json_add_int keys "${_r_keys:-0}"
+            json_add_string set "${_r_set:-}"
+            json_close_object
+        done
+        json_close_array
+        json_add_boolean running "$(
+            [ -e "${ZA_LOCK:-/var/lock/splify2-zapret-autoselect.lock}" ] &&
+            kill -0 "$(cat "${ZA_LOCK:-/var/lock/splify2-zapret-autoselect.lock}" 2>/dev/null || echo 0)" 2>/dev/null &&
+            echo 1 || echo 0)"
+        json_dump
+        ;;
+
+    zapret_autoselect_set)
+        need_zapret
+        read -r input 2>/dev/null
+        [ -n "$input" ] || input='{}'
+        json_load "$input" 2>/dev/null
+        json_get_var days days 2>/dev/null
+        # Ноль — выключено. Верхний предел не выдуман: 90 дней это уже «никогда», а число
+        # без предела в crontab-подобной логике однажды приезжает строкой.
+        case "${days:-}" in
+            ''|*[!0-9]*) fail "days — число дней между подборами, 0 выключает" ;;
+        esac
+        [ "$days" -le 90 ] || fail "больше 90 дней — это «никогда»; поставьте 0, если автоподбор не нужен"
+        uci_file
+        uci -q set "splify2.main.zapret_autoselect=$days"
+        uci -q commit splify2
+        json_init; json_add_boolean ok 1; json_add_int every_days "$days"; json_dump
+        ;;
+
+    zapret_autoselect_start)
+        need_zapret
+        read -r input 2>/dev/null
+        [ -n "$input" ] || input='{}'
+        json_load "$input" 2>/dev/null
+        json_get_var scope scope 2>/dev/null
+        case "${scope:-all}" in
+            all|flowseal|v|yv) ;;
+            # `dv` здесь нет НАРОЧНО, в отличие от zapret_test_start: слой discord мерить
+            # нечем (см. отбор области в splify2-zapret-test), а подбор без замера — это
+            # подбор наугад. Проверить его по отдельности по-прежнему можно.
+            *) fail "набор для подбора бывает all, flowseal, v или yv" ;;
+        esac
+        zp_installed || fail "обход DPI не установлен"
+        [ -s "$ZP_CATALOG" ] || fail "каталог стратегий пуст — обновите его"
+        command -v curl >/dev/null 2>&1 || fail "нужен curl: без него проверять нечем"
+        [ -x "$ZAPRET_AUTOSEL" ] || fail "нет $ZAPRET_AUTOSEL"
+        if start-stop-daemon -K -t -p "$ZP_PIDFILE" >/dev/null 2>&1; then
+            fail "проверка стратегий уже идёт — подбор ждёт её окончания"
+        fi
+        # ФОНОМ и С --apply: метод зовут кнопкой «Подобрать и применить», и подбор без
+        # применения у неё был бы обманом. Само применение сторожат три условия внутри
+        # zp_winner — не лучше прежней не применится ничего.
+        start-stop-daemon -S -b -m -p "$ZA_PIDFILE" -x "$ZAPRET_AUTOSEL" -- \
+            --scope "${scope:-all}" --apply >/dev/null 2>&1 || fail "подбор не удалось запустить"
+        json_init; json_add_boolean ok 1; json_add_string scope "${scope:-all}"; json_dump
+        ;;
+
+    zapret_autoselect_undo)
+        need_zapret
+        # Откат к настройке, которая была до применения победителя. Отказ здесь громкий и с
+        # причиной: молчаливый «ок» на невозможном откате — это ровно тот случай, когда
+        # человек считает, что вернул как было.
+        zp_undo_global || fail "${ZP_NOTE:-откат не удался}"
+        if zp_running && [ -x "$ZP_INIT" ]; then
+            "$ZP_INIT" restart >/dev/null 2>&1
+        fi
+        json_init; json_add_boolean ok 1; json_add_string active "$(zp_active_global 2>/dev/null || true)"; json_dump
+        ;;
+
     *) fail "неизвестный метод" ;;
 esac

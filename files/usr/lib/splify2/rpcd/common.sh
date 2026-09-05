@@ -496,14 +496,14 @@ backup_build() {
     done
     printf '[options]\n'
     # ВСЕ поля splify2.main, а не три. Прежние три возвращали настройку подписки и память
-    # мастера, а остальные восемь молча терялись — и терялись именно те, которые человек
+    # мастера, а остальные молча терялись — и терялись именно те, которые человек
     # правил однажды и руками: свой манифест, свой источник стратегий, скачивание через
     # туннель, коэффициент схлопывания списков. После восстановления они возвращались к
     # умолчаниям, то есть роутер вёл себя иначе, чем тот, с которого снят архив, и понять
     # это было нельзя ниоткуда. Перечень сверяется с кодом так:
     # grep -rhoE 'splify2\.(main|sub_[a-z_]*)\.[a-z_]+' files/ | sort -u
     for k in sub_url sub_kind sub_title wizard zm_fix manifest_url fetch_via_tunnel \
-             doh_via_tunnel list_shrink_factor zapret_source geo_url; do
+             doh_via_tunnel list_shrink_factor zapret_source geo_url zapret_autoselect; do
         v="$(uci -q get "splify2.main.$k")"
         [ -n "$v" ] && printf '%s=%s\n' "$k" "$v"
     done
