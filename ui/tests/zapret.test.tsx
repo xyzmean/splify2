@@ -36,9 +36,9 @@ const cat = {
     active: 'v5',
     updated: state.updated,
     strategies: [
-        { name: 'v5', family: 'v' as const },
-        { name: 'general (ALT)', family: 'flowseal' as const },
-        { name: 'Yv01', family: 'yv' as const },
+        { name: 'v5', family: 'v' as const, layer: 'main' as const },
+        { name: 'general (ALT)', family: 'flowseal' as const, layer: 'main' as const },
+        { name: 'Yv01', family: 'yv' as const, layer: 'youtube' as const },
     ],
     outputs: [{ name: 'yt', strategy: 'Yv01', queue: 8300, up: true, drifted: false }],
 }
@@ -241,6 +241,26 @@ describe('вкладка Zapret', () => {
         const rows = screen.getAllByText('Применить')
         fireEvent.click(rows[0])
         await waitFor(() => expect(ap).toHaveBeenCalledWith('v5', 'yt'))
+    })
+
+    it('слой к выходу не предлагается кнопкой, которая не может сработать', async () => {
+        // У выхода kind=zapret стратегия лежит одним файлом ключей целиком, поэтому «слой
+        // поверх» там невозможен, и бэкенд отвечает отказом. Поле `layer` заведено ровно
+        // ради этого — чтобы вкладка не предлагала действие, у которого один исход.
+        mockAll()
+        const ap = vi.spyOn(rpc, 'zapretApply').mockResolvedValue({ ok: true })
+        render(<Zapret />)
+        await waitFor(() => expect(screen.getByText('выход yt')).toBeInTheDocument())
+        fireEvent.click(screen.getByText('выход yt'))
+        // Семейство YouTube здесь уже развёрнуто: у выхода применена Yv01, а вкладка
+        // разворачивает семейство применённой.
+        await waitFor(() => expect(screen.getByText(/для выхода/)).toBeInTheDocument())
+        await waitFor(() =>
+            expect(screen.getByText('только всему роутеру')).toBeInTheDocument())
+        // Слой Yv01 у выхода уже «применён» в фикстуре, поэтому проверяется не только текст:
+        // кнопки применения в его строке нет вовсе, и позвать метод неоткуда.
+        expect(screen.queryByText('Применить')).toBeNull()
+        expect(ap).not.toHaveBeenCalled()
     })
 
     it('общая «Проверить» проверяет все, кнопка семейства — семейство', async () => {

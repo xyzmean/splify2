@@ -832,6 +832,19 @@ export default function Zapret() {
                                                                 </span>
                                                             )}
                                                         </span>
+                                                        {/* Слой к выходу не применяется: у выхода
+                                                            стратегия лежит одним файлом ключей
+                                                            целиком, и «слой поверх» означал бы файл,
+                                                            собранный из двух источников. Бэкенд это
+                                                            и отвечает отказом — значит предлагать
+                                                            кнопку, которая не может сработать,
+                                                            нечестно. Слой берётся у бэкенда полем
+                                                            `layer`, а не выводится здесь из имени. */}
+                                                        {target && s.layer !== 'main' ? (
+                                                            <span className="text-xs text-muted-foreground">
+                                                                {t('только всему роутеру')}
+                                                            </span>
+                                                        ) : (
                                                         <Button
                                                             variant="outline"
                                                             size="sm"
@@ -845,6 +858,7 @@ export default function Zapret() {
                                                         >
                                                             {busy === `apply:${s.name}` ? t('…') : t('Применить')}
                                                         </Button>
+                                                        )}
                                                     </div>
                                                     {expanded && (
                                                         <StrategyDetails

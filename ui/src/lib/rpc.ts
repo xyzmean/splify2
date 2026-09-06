@@ -879,7 +879,7 @@ export const rpc = {
     zapretStrategies: declare<{
         active: string
         updated: number
-        strategies: { name: string; family: ZapretFamily }[]
+        strategies: { name: string; family: ZapretFamily; layer: ZapretLayer }[]
         outputs: { name: string; strategy: string; queue: number; up: boolean; drifted: boolean }[]
     }>('zapret_strategies'),
 
@@ -991,6 +991,13 @@ export type ZapretGame = {
 }
 
 export type ZapretFamily = 'flowseal' | 'v' | 'yv' | 'other'
+
+/** Слой отвечает на вопрос «можно ли применить это одно», а семейство — на вопрос «откуда
+ *  оно взято». Интерфейсу нужен именно первый: `Yv05` и `Dv3` — надстройки над основной
+ *  стратегией, и у выхода kind=zapret им места нет вовсе (у выхода стратегия лежит одним
+ *  файлом ключей целиком). Считает слой бэкенд — правило «начинается с Yv» это знание о
+ *  чужом каталоге, и на двух сторонах оно разошлось бы при первом же переименовании. */
+export type ZapretLayer = 'main' | 'youtube' | 'discord' | 'game'
 
 export type ZapretSet = 'general' | 'youtube'
 
