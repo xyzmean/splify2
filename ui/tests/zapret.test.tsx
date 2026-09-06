@@ -40,7 +40,7 @@ const cat = {
         { name: 'general (ALT)', family: 'flowseal' as const },
         { name: 'Yv01', family: 'yv' as const },
     ],
-    outputs: [{ name: 'yt', strategy: 'Yv01', queue: 8300, up: true }],
+    outputs: [{ name: 'yt', strategy: 'Yv01', queue: 8300, up: true, drifted: false }],
 }
 
 const results = {
@@ -319,6 +319,21 @@ describe('вкладка Zapret', () => {
         render(<Zapret />)
         await waitFor(() =>
             expect(screen.getByText(/в каталоге изменилась/)).toBeInTheDocument())
+    })
+
+    it('расхождение у выхода отмечено у него самого, а не полосой на всю вкладку', async () => {
+        // У выхода kind=zapret стратегия лежит отдельным файлом ключей, и ночное обновление
+        // каталога его не трогает так же, как не трогает стратегию всего роутера. Отметка
+        // стоит В СТРОКЕ ВЫХОДА: выходов бывает несколько, и полоса на каждый заслонила бы
+        // сам список.
+        mockAll({
+            cat: { ...cat, outputs: [{ ...cat.outputs[0], drifted: true }] },
+        })
+        render(<Zapret />)
+        await waitFor(() =>
+            expect(screen.getByText(/изменилась в каталоге/)).toBeInTheDocument())
+        // И полосы «всего роутера» при этом нет: расхождения у активной стратегии не было.
+        expect(screen.queryByText(/Выбранная стратегия в каталоге изменилась/)).toBeNull()
     })
 
     it('без curl проверка не предлагается', async () => {

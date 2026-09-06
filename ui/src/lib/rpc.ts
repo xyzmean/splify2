@@ -880,7 +880,7 @@ export const rpc = {
         active: string
         updated: number
         strategies: { name: string; family: ZapretFamily }[]
-        outputs: { name: string; strategy: string; queue: number; up: boolean }[]
+        outputs: { name: string; strategy: string; queue: number; up: boolean; drifted: boolean }[]
     }>('zapret_strategies'),
 
     /** Одна стратегия целиком: её ключи nfqws, по строке на ключ. По запросу, а не в каталоге:

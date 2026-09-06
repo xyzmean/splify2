@@ -839,6 +839,22 @@ v = o.get(sys.argv[2])
 print("" if v is None else json.dumps(v, ensure_ascii=False) if isinstance(v,(list,dict,bool)) else v)' "$1" "$2"
 }
 
+# Поле объекта из массива — по ИМЕНИ, а не по номеру: порядок массива `outputs` задаёт
+# движок, и привязка проверки к нулевому элементу сломалась бы от появления второго выхода.
+# Отдельная функция, а не jsonfilter: его в окружении стенда нет, он есть только заглушкой
+# в PATH объекта rpcd.
+jout() {  # ВЫХОД ПОЛЕ < JSON
+    python3 -c 'import json,sys
+try: d = json.load(sys.stdin)
+except Exception: print("НЕ JSON"); raise SystemExit
+for o in (d.get("outputs") or []):
+    if isinstance(o, dict) and o.get("name") == sys.argv[1]:
+        v = o.get(sys.argv[2])
+        print("" if v is None else json.dumps(v, ensure_ascii=False) if isinstance(v,(list,dict,bool)) else v)
+        raise SystemExit
+print("НЕТ ВЫХОДА")' "$1" "$2"
+}
+
 reset_logs() { rm -f "$T/apk.log" "$T/initd.log" "$T/wget.log" "$T/curl.log" "$T/rpcd-initd.log" "$T/disabled"; : > "$T/apk.log"; : > "$T/initd.log"; }
 
 # Только то, что init.d МЕНЯЕТ. Запросы состояния (enabled) в протоколе тоже есть — их
@@ -2777,6 +2793,49 @@ out="$(ZP_NFQWS_FIXTURE="$T/bin/nfqws" rpcd zapret_state)"
 check "пустой каталог не выдаётся за расхождение" "false" \
       "$(printf '%s' "$out" | jget drifted)"
 printf '#v1\n--filter-tcp=443\n--dpi-desync=fake\n\n#Yv01\n--filter-tcp=443\n' > "$T/zapret/strategies.txt"
+
+# ---- то же расхождение у выхода kind=zapret -------------------------------------------
+#
+# У выхода стратегия лежит отдельным файлом ключей целиком ($ZP_OPTS_DIR/<выход>.opts), то
+# есть тем самым вторым аргументом, ради отсутствия которого для стратегии ВСЕГО РОУТЕРА
+# пришлось заводить отдельную zp_drifted_global. Признак у выхода поэтому дешевле, а нужен
+# он ровно по той же причине: каталог обновляется сам раз в сутки и файл ключей не трогает.
+# Без признака человек видит на вкладке имя стратегии выхода и не знает, что за этим именем
+# в каталоге уже другие ключи.
+cp "$T/etc/spec.json" "$T/etc/spec.json.pre-r103" 2>/dev/null
+printf '%s' '{"schema":1,"outputs":{"direct":{"kind":"direct"},"zt":{"kind":"zapret"}},"channels":[]}' \
+    > "$T/etc/spec.json"
+mkdir -p "$T/etc/steer-zapret"
+printf '#v1\n--filter-tcp=443\n' > "$T/zapret/strategies.txt"
+printf '#v1\n--filter-tcp=443\n' > "$T/etc/steer-zapret/zt.opts"
+out="$(rpcd zapret_strategies)"
+check "выход kind=zapret перечислен" "zt" "$(printf '%s' "$out" | jout zt name)"
+check "и его стратегия названа" "v1" "$(printf '%s' "$out" | jout zt strategy)"
+check "совпавшая с каталогом не считается разошедшейся" "false" \
+      "$(printf '%s' "$out" | jout zt drifted)"
+
+# Каталог обновился, файл ключей выхода остался прежним — это и есть расхождение.
+printf '#v1\n--filter-tcp=443\n--dpi-desync=fake\n' > "$T/zapret/strategies.txt"
+out="$(rpcd zapret_strategies)"
+check "изменившаяся в каталоге считается разошедшейся у выхода" "true" \
+      "$(printf '%s' "$out" | jout zt drifted)"
+
+# Стратегии в каталоге нет вовсе — сравнивать не с чем, и выдавать это за расхождение
+# нельзя по тому же доводу, что и для всего роутера: расхождение зовёт «применить заново».
+printf '#v2\n--filter-tcp=443\n' > "$T/zapret/strategies.txt"
+out="$(rpcd zapret_strategies)"
+check "пропавшая из каталога не выдаётся за расхождение у выхода" "false" \
+      "$(printf '%s' "$out" | jout zt drifted)"
+
+# Файла ключей нет вовсе (выход заведён, стратегию ему ещё не выбирали) — это не расхождение,
+# и признак обязан быть false, а не отсутствовать: интерфейс читает поле, а не его наличие.
+rm -f "$T/etc/steer-zapret/zt.opts"
+printf '#v1\n--filter-tcp=443\n' > "$T/zapret/strategies.txt"
+out="$(rpcd zapret_strategies)"
+check "выход без выбранной стратегии не разошёлся" "false" \
+      "$(printf '%s' "$out" | jout zt drifted)"
+printf '#v1\n--filter-tcp=443\n--dpi-desync=fake\n\n#Yv01\n--filter-tcp=443\n' > "$T/zapret/strategies.txt"
+mv "$T/etc/spec.json.pre-r103" "$T/etc/spec.json" 2>/dev/null
 
 # ---- экземпляры обработчиков пересобираются, а не ждут перезагрузки роутера -----------
 #

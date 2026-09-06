@@ -580,6 +580,15 @@ export default function Zapret() {
                                         : <span className="ml-2 text-xs text-warning-fg">{t('обработчик не запущен')}</span>
                                 )}
                             </span>
+                            {/* То же расхождение, что у стратегии всего роутера выше, и по
+                                той же причине: ночное обновление каталога файл ключей выхода
+                                не трогает. Отметкой рядом с именем, а не полосой: выходов
+                                бывает несколько, и полоса на каждый заслонила бы список. */}
+                            {o.drifted && (
+                                <span className="text-xs text-warning-fg">
+                                    {t('изменилась в каталоге')}
+                                </span>
+                            )}
                             <span className="text-xs text-muted-foreground">
                                 {o.strategy || t('нет стратегии')}
                             </span>

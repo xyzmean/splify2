@@ -231,7 +231,18 @@ case "$2" in
         for o in $("$STEER" outputs --kind zapret --spec "$SPEC" 2>/dev/null); do
             json_add_object
             json_add_string name "$o"
-            json_add_string strategy "$(zp_active_out "$o" 2>/dev/null)"
+            _zs_sn="$(zp_active_out "$o" 2>/dev/null)"
+            json_add_string strategy "$_zs_sn"
+            # Разошлась ли стратегия выхода с каталогом. У выхода это дешевле, чем у всего
+            # роутера: применённое лежит отдельным файлом ключей целиком, то есть ровно тем
+            # вторым аргументом, ради отсутствия которого для роутера пришлось заводить
+            # zp_drifted_global с обрывом на метке. Нужен признак по той же причине: каталог
+            # обновляется сам раз в сутки и файла ключей не трогает.
+            if zp_drifted "$_zs_sn" "$ZP_OPTS_DIR/$o.opts" 2>/dev/null; then
+                json_add_boolean drifted 1
+            else
+                json_add_boolean drifted 0
+            fi
             json_add_int queue "$(printf '%s' "$st" | jsonfilter -e "@.outputs.$o.queue" 2>/dev/null || echo 0)"
             case "$(printf '%s' "$st" | jsonfilter -e "@.outputs.$o.up" 2>/dev/null)" in
                 true) json_add_boolean up 1 ;;
