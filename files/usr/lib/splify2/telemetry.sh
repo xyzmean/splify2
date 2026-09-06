@@ -660,8 +660,10 @@ tm_build() {
               else
                   printf ',"strategy":"custom"'
               fi
+              # ИМЯ обязательно: zp_drifted_global первой же строкой выходит без него, и
+              # без имени поле уезжало «не разошлась» ВСЕГДА (тот же класс, что I-156).
               printf ',"drifted":%s' \
-                  "$(tm_bool "$(zp_drifted_global >/dev/null 2>&1 && echo 1 || echo 0)")"
+                  "$(tm_bool "$(zp_drifted_global "$_tm_a" 2>/dev/null && echo 1 || echo 0)")"
           fi
           _tm_yv="$(zp_yv_get 2>/dev/null)"; [ -n "$_tm_yv" ] && printf ',"yv":%s' "$(tm_int "$_tm_yv")"
           _tm_dv="$(zp_dv_get 2>/dev/null)"; [ -n "$_tm_dv" ] && printf ',"dv":%s' "$(tm_int "$_tm_dv")"
