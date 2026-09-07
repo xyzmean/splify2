@@ -226,10 +226,16 @@ ad_stamp_put() {  # СЕРВИС ВИД ТЕГ
 # разное: 2 — «набор понят, но списком не выразим» (такой список нам пока не подходит,
 # и с прежним файлом всё в порядке), 1 — «это не набор sing-box или он испорчен» (то есть
 # скачалось битое, и виноват путь до издателя, а не сам список).
-ad_split() {  # ФАЙЛ.SRS ФАЙЛ_ДОМЕНОВ ФАЙЛ_ПОДСЕТЕЙ
+# ТРЕТЬИМ ПОТОКОМ — СУЖЕНИЕ (`--meta-out`): `proto=udp` и `ports=50000-65535,19000-20000`,
+# если набор сужен по протоколу или портам. Без этого потока движок отвергает такой набор
+# кодом 2 — и правильно: отдать подсети Cloudflare без «только udp» значит увести в туннель
+# весь TCP к 104.16.0.0/12. Сужение принадлежит КАНАЛУ, а не списку (steer, srs.c), поэтому
+# оно кладётся рядом со списком подсетей файлом `.meta`, а в канал его переносит интерфейс
+# (второй канал-спутник с `proto`/`ports`, см. ui/src/lib/model.ts, expandNarrow).
+ad_split() {  # ФАЙЛ.SRS ФАЙЛ_ДОМЕНОВ ФАЙЛ_ПОДСЕТЕЙ ФАЙЛ_СУЖЕНИЯ
     AD_NOTE=""
     _ad_err="$1.err"
-    "${STEER:-/usr/sbin/steer}" srs-read "$1" --out "$2" --prefixes-out "$3" 2>"$_ad_err"
+    "${STEER:-/usr/sbin/steer}" srs-read "$1" --out "$2" --prefixes-out "$3" --meta-out "$4" 2>"$_ad_err"
     _ad_rc=$?
     # Причина — первой строкой, без приставок «steer: » и «srs: »: строка уедет человеку в
     # интерфейс и в журнал, где ни имя команды, ни имя её подсистемы ничего не объясняют, а
@@ -248,6 +254,7 @@ ad_split() {  # ФАЙЛ.SRS ФАЙЛ_ДОМЕНОВ ФАЙЛ_ПОДСЕТЕЙ
 ad_get() {  # СЕРВИС
     AD_DOM="$AD_TMP/$1.dom"
     AD_PFX="$AD_TMP/$1.pfx"
+    AD_META="$AD_TMP/$1.meta"
     AD_NOTE=""
     # Один набор даёт ОБА вида списка, а зовут эту функцию по видам по очереди (ночное
     # обновление ходит сначала по адресным файлам спеки, потом по доменным). Без памяти
@@ -262,15 +269,48 @@ ad_get() {  # СЕРВИС
     download "$(ad_url "$1")" "$_ad_srs" || { rm -f "$_ad_srs"; return 1; }
     # Разбор в «.new», а подмена — после успеха: половина разбора на месте готового списка
     # выглядела бы для памяти прогона как «уже приезжало».
-    ad_split "$_ad_srs" "$AD_DOM.new" "$AD_PFX.new"
+    ad_split "$_ad_srs" "$AD_DOM.new" "$AD_PFX.new" "$AD_META.new"
     _ad_rc=$?
     rm -f "$_ad_srs"
     if [ "$_ad_rc" != 0 ]; then
-        rm -f "$AD_DOM.new" "$AD_PFX.new"
+        rm -f "$AD_DOM.new" "$AD_PFX.new" "$AD_META.new"
         [ "$_ad_rc" = 2 ] && return 2
         return 3
     fi
-    mv "$AD_DOM.new" "$AD_DOM" && mv "$AD_PFX.new" "$AD_PFX"
+    mv "$AD_DOM.new" "$AD_DOM" && mv "$AD_PFX.new" "$AD_PFX" && mv "$AD_META.new" "$AD_META"
+}
+
+# Положить (или убрать) сужение рядом с УСТАНОВЛЕННЫМ списком подсетей: `<список без .lst>.meta`.
+# Зовётся везде, где список подсетей встаёт на диск, — иначе один путь установки знал бы про
+# сужение, а два других нет, и тот же набор то сужался бы, то нет. Пустое сужение — файла нет:
+# его отсутствие и означает «канал без ограничений».
+ad_meta_install() {  # ПУТЬ_СПИСКА_ПОДСЕТЕЙ
+    _ami_dst="${1%.lst}.meta"
+    if [ -s "${AD_META:-}" ]; then
+        cp "$AD_META" "$_ami_dst.new.$$" && mv "$_ami_dst.new.$$" "$_ami_dst" || { rm -f "$_ami_dst.new.$$"; return 1; }
+    else
+        rm -f "$_ami_dst"
+    fi
+    return 0
+}
+
+# Сужение установленного списка подсетей — в JSON-объект `narrow` текущего объекта jshn.
+# Ничего не добавляет, если файла нет: отсутствие ключа и есть «сужения нет».
+ad_meta_json() {  # ПУТЬ_СПИСКА_ПОДСЕТЕЙ
+    _amj="${1%.lst}.meta"
+    [ -s "$_amj" ] || return 1
+    _amj_proto="$(sed -n 's/^proto=//p' "$_amj" | head -1)"
+    _amj_ports="$(sed -n 's/^ports=//p' "$_amj" | head -1)"
+    [ -n "$_amj_proto$_amj_ports" ] || return 1
+    json_add_object narrow
+    [ -n "$_amj_proto" ] && json_add_string proto "$_amj_proto"
+    json_add_array ports
+    _amj_ifs="$IFS"; IFS=','
+    for _amj_p in $_amj_ports; do [ -n "$_amj_p" ] && json_add_string "" "$_amj_p"; done
+    IFS="$_amj_ifs"
+    json_close_array
+    json_close_object
+    return 0
 }
 
 # Что вышло из набора для запрошенного вида. Печатает путь; код 1 — этого вида в наборе нет.

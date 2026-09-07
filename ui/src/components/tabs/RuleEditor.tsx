@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Search, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { rpc } from '@/lib/rpc'
 import { isCidr4, isIp4 } from '@/lib/validate'
-import { type Channel, type OutputStatus, type ServiceEntry, devList, isPart } from '@/lib/model'
+import { type Channel, type Narrow, type OutputStatus, type ServiceEntry, devList, isPart } from '@/lib/model'
 
 /** Редактор правила — на месте таблицы, а не в модальном окне.
  *
@@ -73,6 +73,10 @@ export default function RuleEditor({
     ch, index, services, local, outputs, clash, rulesTotal, coveredBy, onChange, onClose, onDelete,
 }: Props) {
     const [q, setQ] = useState('')
+    /** Правило на момент ответа сети: list_fetch отвечает секунды, и дописывать сужение
+     *  надо к тому, что человек успел наредактировать, а не к снимку на момент щелчка. */
+    const latest = useRef(ch)
+    latest.current = ch
     /** Аренды DHCP — чтобы устройства выбирали по имени, а не набирали MAC руками. Опечатка в
      *  MAC не совпадёт ни с чем и не пожалуется: правило просто не будет действовать. */
     const [leases, setLeases] = useState<{ mac: string; ip: string; name: string }[]>([])
@@ -117,8 +121,14 @@ export default function RuleEditor({
         const on = chosen.includes(sv.id)
         const pref = new Set(ch.match.prefixes_files || [])
         const doms = new Set(ch.match.domains_files || [])
+        /* Сужение подсетей (Discord: только udp и его порты) — вместе с файлами: снимаем
+         * сервис — снимаем и его; ставим — берём известное у каталога, а неизвестное
+         * спрашиваем у list_fetch ниже. Без сужения подсети Cloudflare уехали бы в туннель
+         * целиком (steer, srs.c). В спеку это уходит каналом-спутником, см. model.ts. */
+        const narrow: Record<string, Narrow> = { ...(ch.narrow || {}) }
         for (const f of sv.prefixes) {
-            if (on) pref.delete(pathFor(f)); else pref.add(pathFor(f))
+            if (on) { pref.delete(pathFor(f)); delete narrow[pathFor(f)] }
+            else { pref.add(pathFor(f)); if (sv.narrow) narrow[pathFor(f)] = sv.narrow }
         }
         for (const f of sv.domains) {
             if (on) doms.delete(pathFor(f)); else doms.add(pathFor(f))
@@ -126,7 +136,7 @@ export default function RuleEditor({
         /* match расширяется, а не пересоздаётся: правило с `any` (или любым полем,
          * которого эта форма не знает) при щелчке по галочке теряло его молча —
          * «весь трафик» превращался в «только выбранное» без единого слова (I-012). */
-        onChange({
+        const next: Channel = {
             ...ch,
             match: {
                 ...ch.match,
@@ -134,7 +144,25 @@ export default function RuleEditor({
                 domains_files: doms.size ? [...doms] : undefined,
                 mode: doms.size ? (ch.match.mode ?? 'fakeip') : undefined,
             },
-        })
+            narrow: Object.keys(narrow).length ? narrow : undefined,
+        }
+        onChange(next)
+        /* Сужение неизвестно (набор ещё не разбирали) — узнать сейчас, а не при следующем
+         * открытии каталога: list_fetch разбирает набор и отдаёт `narrow` тем же ответом.
+         * Ответ без сужения — тоже ответ: подсети не ограничены. */
+        if (!on && sv.publisher && sv.prefixes.length && sv.narrow === undefined) {
+            void rpc.listFetch(sv.id, 'prefixes')
+                .then((r) => {
+                    if (!r.ok || !r.narrow) return
+                    const cur = latest.current
+                    if (!sv.prefixes.every((f) => cur.match.prefixes_files?.includes(pathFor(f)))) return
+                    onChange({
+                        ...cur,
+                        narrow: { ...(cur.narrow || {}), ...Object.fromEntries(sv.prefixes.map((f) => [pathFor(f), r.narrow!])) },
+                    })
+                })
+                .catch(() => undefined)
+        }
     }
 
     const shown = services.filter((sv) => {
@@ -167,8 +195,10 @@ export default function RuleEditor({
     function dropFile(file: string) {
         const pref = (ch.match.prefixes_files || []).filter((f) => f !== file)
         const doms = (ch.match.domains_files || []).filter((f) => f !== file)
+        const narrow = ch.narrow ? Object.fromEntries(Object.entries(ch.narrow).filter(([f]) => f !== file)) : undefined
         onChange({
             ...ch,
+            narrow: narrow && Object.keys(narrow).length ? narrow : undefined,
             match: {
                 ...ch.match,
                 prefixes_files: pref.length ? pref : undefined,

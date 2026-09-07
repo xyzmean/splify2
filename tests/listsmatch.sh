@@ -479,11 +479,12 @@ case "${1:-}" in
     *) exit 0 ;;
 esac
 f="$2"; shift 2
-out=""; pfx=""
+out=""; pfx=""; meta=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --out) out="$2"; shift 2 ;;
         --prefixes-out) pfx="$2"; shift 2 ;;
+        --meta-out) meta="$2"; shift 2 ;;
         *) shift ;;
     esac
 done
@@ -494,9 +495,17 @@ esac
 for s in "$SANDBOX"/srs/*.srs; do
     cmp -s "$f" "$s" || continue
     b="${s##*/}"; b="${b%.srs}"
+    # discord сужен по протоколу и портам: движок отдаёт сужение ТРЕТЬИМ потоком, а без
+    # `--meta-out` отвергает набор кодом 2 (steer e4fa98a) — иначе подсети Cloudflare уехали
+    # бы в туннель без «только udp».
     if [ "$b" = discord ]; then
-        echo 'steer: srs: набор понят, но не выразим списком — network: у канала нет измерения «протокол»' >&2
-        exit 2
+        if [ -z "$meta" ]; then
+            echo 'steer: srs: набор сужен по протоколу или портам — нужен --meta-out, иначе сужение потеряется, а подсети уедут в туннель целиком' >&2
+            exit 2
+        fi
+        printf 'proto=udp\nports=50000-65535,19000-20000\n' > "$meta"
+    else
+        [ -n "$meta" ] && : > "$meta"
     fi
     [ -n "$out" ] && awk 1 "$SANDBOX/srs/$b.lst" > "$out"
     if [ -n "$pfx" ]; then
@@ -597,15 +606,18 @@ check "про отсутствующие подсети сказано вслу�
 check "доменный список того же сервиса при этом обновлён" "18" \
       "$(grep -c . "$T/lists/itdog/domains/youtube.lst" 2>/dev/null)"
 
-# Код 2 — «понят, но не выразим». Это НЕ битый файл, и говорить про порчу нельзя.
-check "набор, не выразимый списком, прежний файл не тронул" "10.9.0.0/16" \
-      "$(cat "$T/lists/itdog/discord.lst" 2>/dev/null)"
-check "про код 2 сказано «пока не подходит»" "yes" \
-      "$(grep -q 'discord.lst: такой список нам пока не подходит' "$T/syslog" && echo yes || echo no)"
-check "причина отказа движка названа дословно" "yes" \
-      "$(grep -q 'нет измерения «протокол»' "$T/syslog" && echo yes || echo no)"
-check "код 2 порчей файла НЕ назван" "" \
-      "$(grep -o 'discord.lst: скачался испорченный' "$T/syslog" 2>/dev/null | head -1)"
+# Набор с сужением по протоколу и портам (discord) больше НЕ отвергается: сужение приезжает
+# третьим потоком и ложится рядом с подсетями файлом .meta — по нему интерфейс ставит каналу
+# proto/ports. Прежде это был код 2 «пока не подходит», и единственный такой набор у издателя
+# оставался недоступным.
+check "суженный набор установлен, а не отвергнут" "104.16.0.0/12" \
+      "$(sed -n 1p "$T/lists/itdog/discord.lst" 2>/dev/null)"
+check "сужение лежит рядом с подсетями" "proto=udp" \
+      "$(sed -n 1p "$T/lists/itdog/discord.meta" 2>/dev/null)"
+check "порты — через тире, как в спеке" "ports=50000-65535,19000-20000" \
+      "$(sed -n 2p "$T/lists/itdog/discord.meta" 2>/dev/null)"
+check "про «не подходит» больше не говорится" "" \
+      "$(grep -o 'discord.lst: такой список нам пока не подходит' "$T/syslog" 2>/dev/null | head -1)"
 
 # Код 1 — «это не наш файл». Здесь виноват путь до издателя, а не сам список.
 check "испорченный набор прежний файл не тронул" "old-news.example" \
@@ -748,8 +760,11 @@ check "list_fetch про отсутствующий вид отвечает вн
       "$(printf '%s' "$out" | grep -q 'подсет' && echo yes || echo no)"
 
 out="$(srs_rpcd list_fetch '{"id":"itdog:discord","kind":"prefixes"}')"
-check "list_fetch про код 2 говорит «пока не подходит»" "yes" \
-      "$(printf '%s' "$out" | grep -q 'пока не подходит' && echo yes || echo no)"
+check "list_fetch отдаёт сужение подсетей вместе со списком" "yes" \
+      "$(printf '%s' "$out" | tr -d ' \n\t' | grep -q '"narrow":{"proto":"udp","ports":\["50000-65535","19000-20000"\]}' && echo yes || echo no)"
+out="$(srs_rpcd allow_domains '{}')"
+check "каталог второго издателя называет сужение у скачанного discord" "yes" \
+      "$(printf '%s' "$out" | tr -d ' \n\t' | grep -q '"id":"discord"[^}]*"narrow":{"proto":"udp"' && echo yes || echo no)"
 
 out="$(srs_rpcd list_fetch '{"id":"itdog:nosuchservice","kind":"domains"}')"
 check "list_fetch про неизвестный сервис не врёт, что скачивание не вышло" "yes" \

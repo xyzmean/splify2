@@ -213,6 +213,7 @@ fetch_missing_srs() {  # «СЕРВИС ВИД» ОТН_ПУТЬ ПУТЬ_НА_�
         rm -f "$3.new.$$"
         echo "список $2 не записался — кончилось место?"
         return 0; }
+    [ "$_fs_kind" = prefixes ] && ad_meta_install "$3"
     ad_stamp_put "$_fs_svc" "$_fs_kind" "$AD_TAG"
     [ -n "$FETCH_NOTE" ] && echo "набор $_fs_svc: $FETCH_NOTE"
     return 0

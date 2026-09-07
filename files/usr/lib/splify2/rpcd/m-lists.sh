@@ -149,6 +149,9 @@ case "$2" in
                     mv "$src" "$dest.new.$$" && mv "$dest.new.$$" "$dest" || {
                         rm -f "$dest.new.$$"; rm -rf "$AD_TMP"
                         fail "список $svc не записался — кончилось место?"; }
+                    # Сужение — рядом с подсетями (см. ad_meta_install): по нему интерфейс
+                    # ставит каналу протокол и порты.
+                    [ "$k" = prefixes ] && ad_meta_install "$dest"
                     # Чем набит файл. Тем же значением пользуется ночное обновление, чтобы
                     # не качать зафиксированный тег повторно.
                     ad_stamp_put "$svc" "$k" "$AD_TAG"
@@ -166,6 +169,9 @@ case "$2" in
                 # числом записей, а поддержке — что спросить.
                 json_add_string tag "$AD_TAG"
                 [ -n "$ad_via" ] && json_add_string via "$ad_via"
+                # Сужение подсетей — интерфейсу сразу, в момент выбора сервиса: правило он
+                # соберёт с протоколом и портами, не дожидаясь перечитывания каталога.
+                [ "$kind" = prefixes ] && ad_meta_json "$dest"
                 json_dump
                 exit 0
                 ;;
@@ -288,6 +294,12 @@ AD_EOF
                 ad_p="${ad_pmap#*"|$ad_s $ad_1="}"; ad_p="${ad_p%%|*}"
                 case "$ad_cnt" in *"|$ad_p:"*) ad_any=1 ;; esac
             done
+            # Сужение подсетей (Discord: только udp и его порты) — тем, у кого список уже
+            # лежит: каталог ничего не качает, а сужение известно только из набора.
+            case " $ad_k " in *" prefixes "*)
+                ad_p="${ad_pmap#*"|$ad_s prefixes="}"; ad_p="${ad_p%%|*}"
+                ad_meta_json "$ad_p" ;;
+            esac
             if [ "$ad_any" = 1 ]; then
                 json_add_object have
                 for ad_1 in $ad_k; do

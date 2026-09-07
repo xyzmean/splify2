@@ -247,9 +247,36 @@ export interface Channel {
         domains_files?: string[]
         mode?: DomainMode
         any?: boolean
+        /** СХЕМА 2: сужение канала по транспорту и портам назначения. В спеке на диске
+         *  живёт только у каналов-спутников (см. `part_of`); в памяти интерфейса вместо
+         *  них — `narrow` у родителя. */
+        proto?: 'tcp' | 'udp' | 'both'
+        ports?: string[]
     }
     /** Output name, not a device: the device is the output's business. */
     out: string
+    /** КАНАЛ-СПУТНИК: несёт подсети с сужением по протоколу и портам от имени правила
+     *  `part_of`. Заводится интерфейсом сам и человеку не показывается — то же понятие, что
+     *  `part_of` у частей пула.
+     *
+     *  Зачем два канала. Сужение (`proto`/`ports`) — свойство КАНАЛА целиком: правило
+     *  «Discord» с доменами и подсетями и `udp 50000-65535` отрезало бы TCP к discord.com.
+     *  Поэтому домены остаются в правиле человека, а подсети с портами едут отдельным
+     *  каналом сразу за ним. При чтении спеки спутники складываются обратно в родителя
+     *  (`narrow`), при записи — разворачиваются (expandNarrow). Движок поле не знает и
+     *  пропускает: неизвестные ключи он терпит намеренно (steer, spec.c). */
+    part_of?: string
+    /** ТОЛЬКО В ПАМЯТИ ИНТЕРФЕЙСА: сужение по файлам подсетей этого правила — путь списка →
+     *  протокол и порты. Берётся у каталога второго издателя (набор sing-box несёт `network`
+     *  и `port_range`) и у сложенных спутников. В спеку не пишется: там его место — в
+     *  спутнике. */
+    narrow?: Record<string, Narrow>
+}
+
+/** Сужение канала: транспорт и порты назначения — в форме спеки (`50000-65535`, через тире). */
+export interface Narrow {
+    proto?: 'tcp' | 'udp' | 'both'
+    ports?: string[]
 }
 
 export interface Spec {
@@ -506,6 +533,10 @@ export interface ServiceEntry {
     count: number
     /** Составные части, чтобы каталог мог сказать, из чего сервис собран. */
     parts: { id: string; kind: ListKind; name: string; file: string; count?: number }[]
+    /** Сужение ПОДСЕТЕЙ сервиса по протоколу и портам (см. Channel.narrow). Есть только у
+     *  второго издателя и только когда набор уже разобран; `undefined` — не знаем, и правило
+     *  спросит у list_fetch в момент выбора. */
+    narrow?: Narrow
     /** Адресный список этой записи совпадает с чужим — так говорит издатель.
      *
      *  `names` — человеческие названия категорий-двойников, `reason` — причина издателя.
@@ -560,6 +591,9 @@ export interface AllowDomains {
         /** Только то, что ЛЕЖИТ на диске: тег, которым набит файл, и число строк. Ключа
          *  нет вовсе, если файла нет, — ноль здесь означал бы скачанный пустой список. */
         have?: Partial<Record<ListKind, { tag?: string; lines?: number }>>
+        /** Сужение подсетей — у наборов, где адреса ограничены протоколом и портами
+         *  (Discord: голос по udp). Известно только у скачанного: набор надо разобрать. */
+        narrow?: Narrow
     }[]
 }
 
@@ -599,6 +633,7 @@ export function toAllowDomainsServices(a: AllowDomains | null): ServiceEntry[] {
             domains: parts.filter((p) => p.kind === 'domains').map((p) => p.file),
             count: parts.reduce((n, p) => n + (p.count || 0), 0),
             parts,
+            narrow: s.narrow,
             publisher: { id: pub, name: a.repo || pub },
             /* Список внешний и правится только у издателя — то же сообщение, что у зеркал
                первого издателя, и по той же причине: дописанное на роутере исчезнет при
@@ -824,7 +859,99 @@ const FILE_FORMS = [
  *  этот вопрос вообще возникает. */
 export function normalizeSpec(spec: Spec): Spec {
     if (!spec || !Array.isArray(spec.channels)) return spec
-    return foldLanForms({ ...spec, channels: spec.channels.map(foldFileForms) })
+    return foldLanForms({ ...spec, channels: foldCompanions(spec.channels.map(foldFileForms)) })
+}
+
+/** Ключ сужения для группировки файлов в один спутник. */
+const narrowKey = (n: Narrow) => `${n.proto || ''}|${(n.ports || []).join(',')}`
+
+/** Спутники — обратно в родителей: их подсети — в `prefixes_files` родителя, их
+ *  `proto`/`ports` — в `narrow` по каждому файлу; сам спутник из списка исчезает.
+ *
+ *  Канал, который САМ несёт `proto`/`ports` (спутник без родителя — так пишется правило, у
+ *  которого кроме суженных подсетей ничего нет), складывается так же: сужение уходит в
+ *  `narrow`, а канал остаётся обычным. Так у интерфейса одна форма правила, и ни редактор, ни
+ *  счётчик «Применить · N» про схему 2 не знают. Спутник без родителя в списке (родителя
+ *  удалили руками в файле) остаётся как есть — терять чужие правила молча нельзя. */
+function foldCompanions(channels: Channel[]): Channel[] {
+    const byName = new Map<string, Channel>()
+    const out: Channel[] = []
+    for (const ch of channels) {
+        if (ch.part_of && byName.has(ch.part_of)) {
+            const parent = byName.get(ch.part_of)!
+            const files = ch.match?.prefixes_files || []
+            const n: Narrow = { proto: ch.match?.proto, ports: ch.match?.ports }
+            parent.match = {
+                ...parent.match,
+                prefixes_files: [...(parent.match.prefixes_files || []), ...files.filter((f) => !(parent.match.prefixes_files || []).includes(f))],
+            }
+            parent.narrow = { ...(parent.narrow || {}), ...Object.fromEntries(files.map((f) => [f, n])) }
+            continue
+        }
+        let c: Channel = { ...ch, match: { ...ch.match } }
+        if (c.match.proto || c.match.ports?.length) {
+            const n: Narrow = { proto: c.match.proto, ports: c.match.ports }
+            const { proto: _p, ports: _q, ...rest } = c.match
+            c = {
+                ...c,
+                match: rest,
+                narrow: { ...(c.narrow || {}), ...Object.fromEntries((rest.prefixes_files || []).map((f) => [f, n])) },
+            }
+        }
+        out.push(c)
+        byName.set(c.name, c)
+    }
+    return out
+}
+
+/** Обратно к форме движка — то, что едет в spec_set. Для каждого правила с `narrow`:
+ *  суженные подсети выходят из него и встают каналом-спутником сразу за ним, с тем же
+ *  выходом, теми же клиентами и тем же состоянием. Правило, в котором больше ничего не
+ *  осталось, несёт сужение само — спутник ему не нужен. `narrow` в спеку не пишется.
+ *  Схема поднимается до 2 только когда сужение и правда записано: движок постарше отвергает
+ *  незнакомый номер целиком (см. Spec.schema). */
+export function expandNarrow(spec: Spec): Spec {
+    if (!Array.isArray(spec.channels)) return spec
+    let schema2 = false
+    const channels: Channel[] = []
+    for (const ch of spec.channels) {
+        const { narrow, ...plain } = ch
+        const files = plain.match?.prefixes_files || []
+        const groups = new Map<string, { n: Narrow; files: string[] }>()
+        for (const f of files) {
+            const n = narrow?.[f]
+            if (!n || (!n.proto && !n.ports?.length)) continue
+            const k = narrowKey(n)
+            if (!groups.has(k)) groups.set(k, { n, files: [] })
+            groups.get(k)!.files.push(f)
+        }
+        if (!groups.size) { channels.push(plain); continue }
+        schema2 = true
+        const narrowed = new Set([...groups.values()].flatMap((g) => g.files))
+        const rest = files.filter((f) => !narrowed.has(f))
+        const bare = !rest.length && !plain.match.domains_files?.length && !plain.match.any
+        const gs = [...groups.values()]
+        if (bare && gs.length === 1) {
+            channels.push({ ...plain, match: { ...plain.match, prefixes_files: files, proto: gs[0].n.proto, ports: gs[0].n.ports } })
+            continue
+        }
+        const { prefixes_files: _pf, ...m } = plain.match
+        channels.push({ ...plain, match: rest.length ? { ...m, prefixes_files: rest } : m })
+        gs.forEach((g, i) => {
+            const { match: _m, ...head } = plain
+            channels.push({
+                ...head,
+                name: i ? `${plain.name} (порты ${i + 1})` : `${plain.name} (порты)`,
+                part_of: plain.name,
+                match: {
+                    prefixes_files: g.files,
+                    ...(g.n.proto ? { proto: g.n.proto } : {}),
+                    ...(g.n.ports?.length ? { ports: g.n.ports } : {}),
+                },
+            })
+        })
+    }
+    return { ...spec, channels, schema: schema2 ? 2 : spec.schema }
 }
 
 /** `lan_device` -> `lan_devices`, по тому же доводу, что и у путей списков выше: форм записи
