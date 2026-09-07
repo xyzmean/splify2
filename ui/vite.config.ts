@@ -68,10 +68,13 @@ export default defineConfig({
           // ленивая вкладка правил (RuleEditor) — то есть он стал общим, и rollup выделил его в
           // собственный кусок `splify-validate.js`, у которого нет пина `?v=`. Барьер
           // scripts/check-dist.mjs это и остановил.
-          // `pending` и `assets` — та же история после того, как опрос состояния стал читать
-          // окно применения (pending) и адрес файлов сборки (assets): их импортируют и главный
-          // бандл, и ленивые разделы, и rollup выделил `splify-pending.js`.
-          if (/[\\/]src[\\/]lib[\\/](notify|utils|i18n|rpc|uci|tw-merge|validate|pending|assets)\./.test(id)) return 'x'
+          // ВЕСЬ src/lib, а не перечень имён. Перечень отставал от графа импортов при каждой
+          // новой связи: после того как опрос состояния стал читать окно применения (pending) и
+          // адрес файлов сборки (assets), rollup выделил `splify-pending.js`, следом —
+          // `splify-cache.js`, и каждый раз барьер останавливал сборку уже после того, как
+          // кусок без пина `?v=` лежал в dist. Библиотека вся общая по смыслу: её читают и
+          // главный бандл, и ленивые разделы.
+          if (/[\\/]src[\\/]lib[\\/]/.test(id)) return 'x'
           if (/[\\/]src[\\/]components[\\/]ui[\\/]/.test(id)) return 'x'
           return undefined
         },
