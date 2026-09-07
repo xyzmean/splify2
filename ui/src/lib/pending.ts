@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
-import { EMPTY_SPEC, type Spec } from '@/lib/model'
+import { EMPTY_SPEC, expandNarrow, type Channel, type Spec } from '@/lib/model'
 
 /** Автосохранение и счётчик неприменённого — одно место на весь экран.
  *
@@ -11,7 +11,31 @@ import { EMPTY_SPEC, type Spec } from '@/lib/model'
  *  ОТЛИЧАЕТСЯ от применённого. Не счётчик кликов: изменил и вернул обратно — ноль.
  *
  *  «Применённое» приходит от бэкенда (applied_get — снимок спеки в момент apply), а не
- *  запоминается интерфейсом: перезагрузка страницы не должна обнулять счётчик. */
+ *  запоминается интерфейсом: перезагрузка страницы не должна обнулять счётчик.
+ *
+ *  ПУСТОЕ ПРАВИЛО — ЧЕРНОВИК И НА РОУТЕР НЕ ЕДЕТ. Правило заводится пустым и заполняется
+ *  по одному действию: имя, сервис, кому, куда. Каждое из них — правка, каждая правка — запись,
+ *  а спеку с правилом без единого сервиса движок отвергает ЦЕЛИКОМ («matches nothing»): не
+ *  сохранялось ничего, в том числе правки в других правилах и выходах, и на каждые полсекунды
+ *  набора текста внизу вставала новая красная полоса с английской фразой компилятора (снято
+ *  владельцем с экрана). Поэтому правило без сервисов остаётся в памяти страницы, а на роутер
+ *  уезжает спека без него; как только сервис выбран — правило едет как все. Пока черновик
+ *  есть, «Сохранено» не вспыхивает и страховка на выгрузку спрашивает: он действительно не
+ *  сохранён, и перезагрузка страницы его потеряет — как теряла и раньше, только теперь об этом
+ *  честно сказано, а остальное сохранено. */
+
+/** Правило без единого сервиса: движку такое не отдаётся. */
+export function isDraft(c: Channel): boolean {
+    const m = c.match || {}
+    return !m.any && !(m.prefixes_files?.length) && !(m.domains_files?.length)
+}
+
+/** Спека без черновиков — то, что едет на роутер. */
+export function writable(spec: Spec): { spec: Spec; drafts: number } {
+    const channels = spec.channels || []
+    const kept = channels.filter((c) => !isDraft(c))
+    return { spec: kept.length === channels.length ? spec : { ...spec, channels: kept }, drafts: channels.length - kept.length }
+}
 
 type Listener = () => void
 
@@ -21,8 +45,17 @@ class PendingStore {
     applying = false
     /** Полторы секунды зелёной галочки после успешного apply. */
     justApplied = false
+    /** Когда закончилось последнее применение (любым исходом). По нему опрос знает, что
+     *  движок сейчас перестраивает правила и перезапускает клиентов туннелей: ответы этих
+     *  секунд — не приговор, а стройплощадка. */
+    appliedAt = 0
     /** Короткая вспышка «Сохранено» у вкладок. */
     savedFlash = false
+    /** Последнее предупреждение записи — чтобы одно и то же не всплывало на каждое
+     *  автосохранение. Список, который «нам пока не подходит», не подходит и через
+     *  полсекунды, когда человек допечатал имя правила: предупреждение то же, и вторая
+     *  полоса о нём ничего не добавляет. Новый текст — новая полоса. */
+    private lastWarn = ''
 
     private listeners = new Set<Listener>()
     private timer: ReturnType<typeof setTimeout> | null = null
@@ -89,11 +122,14 @@ class PendingStore {
         if (!this.dirty || !this.saved) return
         this.dirty = false
         if (this.timer) { clearTimeout(this.timer); this.timer = null }
-        const spec = this.saved
+        const { spec, drafts } = writable(this.saved)
         this.inflight = true
         this.writing = this.writing.then(async () => {
             try {
-                const r = await rpc.specSet(JSON.stringify(spec))
+                /* В форме движка: правила с сужением подсетей разворачиваются в канал и его
+                 * спутник (model.ts, expandNarrow). В памяти и в `applied` остаётся форма
+                 * интерфейса — иначе счётчик «Применить · N» сравнивал бы разные формы. */
+                const r = await rpc.specSet(JSON.stringify(expandNarrow(spec)))
                     .catch((e) => ({ ok: false, error: String(e instanceof Error ? e.message : e) }))
                 if (!r.ok) {
                     /* Отказ dry-run — это не «потеряно»: спека осталась в памяти, человек
@@ -101,15 +137,24 @@ class PendingStore {
                     notify(('error' in r && r.error) || 'не удалось сохранить', 'error')
                     this.dirty = true
                     this.emit()
+                } else if (drafts) {
+                    /* Уехало всё, кроме черновика — он и остаётся несохранённым: без галочки
+                     * (она обещала бы то, чего не случилось) и с признаком «есть несохранённое»
+                     * для страховки на выгрузку. */
+                    this.dirty = true
+                    this.emit()
                 } else {
                     /* Записано — теперь и только теперь галочка. */
                     this.flash()
-                    if ('warn' in r && r.warn)
-                        /* Сохранение прошло, но список не скачался — значит его канал не
-                         * поднимется. Молчать нельзя: человек выбрал сервис, интерфейс мигнул
-                         * «Сохранено», а работать оно не будет, и связь между этими событиями
-                         * восстановить нечем. */
-                        notify(String(r.warn), 'error')
+                    const warn = 'warn' in r && r.warn ? String(r.warn) : ''
+                    if (warn && warn !== this.lastWarn)
+                        /* Сохранение прошло, но список не скачался или не годится — значит его
+                         * канал не поднимется. Молчать нельзя: человек выбрал сервис, интерфейс
+                         * мигнул «Сохранено», а работать оно не будет, и связь между этими
+                         * событиями восстановить нечем. Жёлтым, а не красным: запись удалась,
+                         * это предупреждение, а не отказ. */
+                        notify(warn, 'warning')
+                    this.lastWarn = warn
                 }
             } finally {
                 /* В finally, а не в трёх ветках: признак «в полёте» обязан сниматься при любом
@@ -157,6 +202,18 @@ class PendingStore {
         return n
     }
 
+    /** Идёт ли применение или его хвост. ОКНО ДЛИННЕЕ САМОГО ВЫЗОВА: apply на роутере — это
+     *  `steer apply`, перезапуск клиентов vless сигналом, подъём обработчиков обхода и ещё
+     *  до четырёх секунд ожидания их старта; клиент туннеля после сигнала перечитывает узлы и
+     *  поднимается секунды. Пока это идёт, `status` честно отвечает «выход не поднят», а
+     *  `diag` — «правил в ядре нет», и показывать это как поломку значило бы пугать человека
+     *  каждым нажатием «Применить» (владелец: «пока применяет — пишет про ошибки, так не
+     *  должно быть»). Пятнадцать секунд — с запасом к худшему замеру; окно закрывается само,
+     *  и дальше опрос судит как обычно. */
+    settling(): boolean {
+        return this.applying || Date.now() - this.appliedAt < SETTLE_MS
+    }
+
     async apply() {
         if (this.applying) return
         this.applying = true
@@ -166,7 +223,10 @@ class PendingStore {
             const r = await rpc.apply()
             notify(r.output?.trim() || (r.ok ? 'Применено' : 'сбой применения'), r.ok ? 'info' : 'error')
             if (r.ok) {
-                this.applied = this.saved
+                /* Применено то, что было записано, — без черновиков: они на роутер не ездили,
+                 * и считать их применёнными значило бы обнулить счётчик на правиле, которого
+                 * движок не видел. */
+                this.applied = this.saved ? writable(this.saved).spec : this.saved
                 this.justApplied = true
                 this.emit()
                 setTimeout(() => { this.justApplied = false; this.emit() }, 1800)
@@ -175,10 +235,14 @@ class PendingStore {
             notify(String(e instanceof Error ? e.message : e), 'error')
         } finally {
             this.applying = false
+            this.appliedAt = Date.now()
             this.emit()
         }
     }
 }
+
+/** Хвост применения: сколько после ответа apply ответы опроса считаются переходными. */
+export const SETTLE_MS = 15000
 
 export const pending = new PendingStore()
 

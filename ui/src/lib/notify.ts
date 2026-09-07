@@ -12,7 +12,13 @@
  *
  *  Текст приходит с роутера (слова движка, вывод менеджера пакетов, причины отказов), поэтому
  *  ставится только как ТЕКСТ: никаких innerHTML — иначе строка из ответа однажды окажется
- *  разметкой. */
+ *  разметкой.
+ *
+ *  ОДИНАКОВОЕ НЕ ПОВТОРЯЕТСЯ. Одно и то же сообщение, пришедшее второй раз, пока первое ещё на
+ *  экране, не добавляет вторую полосу — первая живёт дальше и получает счётчик «×N». Поймано
+ *  владельцем на редакторе правил: автосохранение шло каждые полсекунды правки, отказ был один
+ *  и тот же, и внизу стояла стопка из четырёх красных полос с одним текстом. Стопка не
+ *  говорит больше, чем одна полоса, — только заслоняет. */
 export type NotifyKind = 'info' | 'warning' | 'error'
 
 const KIND_BG: Record<NotifyKind, string> = {
@@ -41,11 +47,25 @@ function stack(): HTMLElement | null {
   return el
 }
 
+/** Живые полосы по тексту: чтобы повтор находил свою. */
+const live = new Map<string, { text: HTMLElement; n: number; timer: ReturnType<typeof setTimeout>; close: () => void }>()
+
 export function notify(msg: string, kind: NotifyKind = 'info') {
   const host = stack()
   if (!host) return
+  const key = `${kind}\n${msg}`
+  const seen = live.get(key)
+  if (seen) {
+    seen.n += 1
+    seen.text.textContent = `${msg}  ×${seen.n}`
+    clearTimeout(seen.timer)
+    seen.timer = setTimeout(seen.close, KIND_MS[kind])
+    return
+  }
   const el = document.createElement('div')
-  el.textContent = msg
+  const text = document.createElement('span')
+  text.textContent = msg
+  el.appendChild(text)
   el.setAttribute('role', kind === 'error' ? 'alert' : 'status')
   Object.assign(el.style, {
     pointerEvents: 'auto', cursor: 'pointer',
@@ -60,9 +80,10 @@ export function notify(msg: string, kind: NotifyKind = 'info') {
   requestAnimationFrame(() => { el.style.opacity = '1' })
 
   const close = () => {
+    live.delete(key)
     el.style.opacity = '0'
     setTimeout(() => el.remove(), 200)
   }
   el.addEventListener('click', close)
-  setTimeout(close, KIND_MS[kind])
+  live.set(key, { text, n: 1, timer: setTimeout(close, KIND_MS[kind]), close })
 }
