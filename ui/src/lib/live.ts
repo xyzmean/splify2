@@ -4,6 +4,7 @@ import { rpc } from './rpc'
 import { type Releases, type SelfUpdateInfo } from './engine'
 import { type Status } from './model'
 import { pending } from './pending'
+import { buildId } from './assets'
 
 /** Живые данные экрана — ОДИН опрос на всё.
  *
@@ -169,7 +170,14 @@ export function useLive(): Live {
      * и полторы секунды на каждый из двух вопросов при каждом открытии окна — ради чисел,
      * которые меняются раз в неделю. Запомненное рисуется сразу; свежее спрашивается, когда
      * запомненному больше шести часов. */
-    const versionsSaved = useRef(cacheGet<{ at: number; releases: Releases | null; selfUpdate: SelfUpdateInfo | null }>('versions'))
+    /* ЗАПОМНЕННОЕ ЖИВЁТ ТОЛЬКО ПРИ ТОЙ ЖЕ СБОРКЕ. В ответе лежит и версия установленного пакета:
+     * человек обновил пакет мимо интерфейса — и шесть часов читал в рельсе прежнюю версию, а
+     * свежий браузер рядом показывал новую (владелец: «почему у меня всё ещё 1.2.5, а у тебя
+     * 26.9»). Новая сборка страницы — новый `?v=` у стиля, и память прежней сборки не годится. */
+    const versionsSaved = useRef((() => {
+        const v = cacheGet<{ at: number; build?: string; releases: Releases | null; selfUpdate: SelfUpdateInfo | null }>('versions')
+        return v && (v.build ?? '') === buildId() ? v : null
+    })())
     const [releases, setReleases] = useState<Releases | null>(versionsSaved.current?.releases ?? null)
     const [selfUpdate, setSelfUpdate] = useState<SelfUpdateInfo | null>(versionsSaved.current?.selfUpdate ?? null)
     const [net, setNet] = useState<{ uptime: number; active_clients: number } | null>(null)
@@ -525,7 +533,7 @@ export function useLive(): Live {
                 setReleases(rel)
                 setSelfUpdate(up)
                 if (rel || up) {
-                    versionsSaved.current = { at: Date.now(), releases: rel, selfUpdate: up }
+                    versionsSaved.current = { at: Date.now(), build: buildId(), releases: rel, selfUpdate: up }
                     cacheSet('versions', versionsSaved.current)
                 }
             })

@@ -11,3 +11,11 @@ export function assetUrl(name: string): string {
     u.pathname = u.pathname.replace(/[^/]+$/, name)
     return u.pathname + u.search
 }
+
+/** Номер сборки страницы — `?v=` у адреса стиля, который поставил загрузчик. Пусто на стенде.
+ *  Нужен памяти браузера: запомненное одной сборкой не должно переживать установку другой. */
+export function buildId(): string {
+    const css = document.querySelector('link[id^="splify2-app-css"]') as HTMLLinkElement | null
+    if (!css?.href) return ''
+    return new URL(css.href, location.href).searchParams.get('v') || ''
+}
