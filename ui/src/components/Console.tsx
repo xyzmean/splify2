@@ -69,7 +69,9 @@ export default function Console() {
      * «движка нет» тому, у кого он работает, и это худшая из двух ошибок. */
     if (live.build && !live.build.present) return <FirstRun live={live} />
 
-    const warnings = (live.diag?.fail ?? 0) + (live.diag?.warn ?? 0)
+    /* Пока применяется или поднимается — метки тревоги в рельсе нет: находки этих секунд
+       описывают стройплощадку, а не роутер (см. Live.phase). */
+    const warnings = live.phase ? 0 : (live.diag?.fail ?? 0) + (live.diag?.warn ?? 0)
     const counts = {
         rules: spec ? { text: String(spec.channels.length) } : undefined,
         /* Служебные части пулов — не выходы для человека (Output.part_of): пул из двух

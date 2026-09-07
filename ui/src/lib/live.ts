@@ -3,6 +3,7 @@ import { cacheGet, cacheSet } from '@/lib/cache'
 import { rpc } from './rpc'
 import { type Releases, type SelfUpdateInfo } from './engine'
 import { type Status } from './model'
+import { pending } from './pending'
 
 /** Живые данные экрана — ОДИН опрос на всё.
  *
@@ -71,6 +72,13 @@ export interface Live {
      *  приходит на первом, быстром круге. Разные они только тем, где лежали; для человека
      *  оба значат одно — «числа ещё не сегодняшние, свежие уже едут». */
     stale: boolean
+    /** Переход, о котором мы ЗНАЕМ: только что нажали «Применить» (движок перестраивает
+     *  правила и перезапускает клиентов) или служба движка включена, но ещё не поднялась
+     *  (роутер загружается). В это время «выход не поднят», «правил в ядре нет» и «движок не
+     *  ответил» — не находки, а стройплощадка, и экран говорит нейтральное слово, оставляя
+     *  последнюю хорошую картину. Отдельно от `stale`: то — про давность чисел, это — про то,
+     *  что роутер занят. */
+    phase: 'applying' | 'starting' | null
     diag: Diag | null
     /** Движок старее проверок состояния. Не ошибка страницы, а отдельное сообщение: иначе
      *  выглядело бы как поломка интерфейса на исправном роутере. */
@@ -109,6 +117,12 @@ export function rate(bytes: number, ms: number) {
 }
 
 const PERIOD_MS = 5000
+/** Сколько кругов подряд движок должен промолчать вне известного перехода, чтобы это стало
+ *  «Движок не отвечает». Один круг — это пять секунд, за которые движок мог просто
+ *  перечитывать спеку после правки; три — пятнадцать, столько не молчит ни одна штатная
+ *  операция. Ложная тревога дороже отсутствующей: по ней настраивают лишнее и перестают
+ *  верить сообщениям (тот же довод, что у ожидания обработчика в m-spec.sh). */
+const FAIL_K = 3
 /** Как долго верить запомненным версиям выпусков. Шесть часов — как у памяти бэкенда. */
 const VERSIONS_TTL_MS = 6 * 3600 * 1000
 
@@ -127,6 +141,15 @@ export function useLive(): Live {
     const [stale, setStale] = useState(!!saved.current)
     const [status, setStatus] = useState<Status | null>(saved.current?.status ?? null)
     const [error, setError] = useState<string | null>(null)
+    /** Неудачные круги подряд. В ref, а не в state: сбрасывать его при перезапуске эффекта
+     *  (refresh) нельзя — иначе каждое «Применить» обнуляло бы счёт и продлевало молчание. */
+    const fails = useRef(0)
+    /** Шёл ли переход на прошлом круге — чтобы по его окончании спросить проверки сразу, а не
+     *  через двадцать секунд: приговор после применения должен быть измерен, не вспомнен. */
+    const wasSettling = useRef(false)
+    /** Служба движка включена, но не работает — по последнему ответу `engine`. Перечитывается,
+     *  когда движок молчит: до этого сборка спрашивается один раз на открытие страницы. */
+    const [starting, setStarting] = useState(false)
     const [diag, setDiag] = useState<Diag | null>(saved.current?.diag ?? null)
     /* Снимок для следующего открытия страницы кладётся каждым кругом, а проверки приходят не
      * каждым: без этой ссылки круг без проверок стирал бы из снимка вердикт, который у нас
@@ -134,6 +157,10 @@ export function useLive(): Live {
      * ради снятия которого снимок и заведён. */
     const diagNow = useRef<Diag | null>(saved.current?.diag ?? null)
     useEffect(() => { diagNow.current = diag }, [diag])
+    /* То же для состояния: круг опроса читает его, решая, есть ли что показывать как прошлое,
+     * а перезапускаться от каждого нового ответа эффект не должен. */
+    const statusNow = useRef<Status | null>(saved.current?.status ?? null)
+    useEffect(() => { statusNow.current = status }, [status])
     const [diagOld, setDiagOld] = useState(false)
     const [devs, setDevs] = useState<Record<string, { rx: string; tx: string }> | null>(null)
     const [speed, setSpeed] = useState<Live['speed']>({ ch: {}, dev: {} })
@@ -227,6 +254,23 @@ export function useLive(): Live {
         }
         const asText = (e: unknown): string => String(e instanceof Error ? e.message : e)
 
+        /** Движок промолчал. Первые круги — не приговор: см. FAIL_K и pending.settling().
+         *  Прежняя картина остаётся на экране как прошлое (`stale`), а не стирается и не
+         *  краснеет. Дойдя до порога, спрашиваем сборку заново: если служба включена и не
+         *  работает — это загрузка роутера, и слово ей «Запускается…», а не «не отвечает». */
+        const failed = (why: string) => {
+            fails.current++
+            if (pending.settling() || fails.current < FAIL_K) {
+                if (fails.current === 1 && statusNow.current) setStale(true)
+                return
+            }
+            rpc.engine()
+                .then((b) => { if (!stop) { setBuild(b); setStarting(!!b.enabled && b.running === false) } })
+                .catch(() => { if (!stop) setStarting(false) })
+            setError(why)
+            setStale(false)
+        }
+
         /** Один круг прежними вызовами — для объекта, который не знает `live`.
          *
          *  Памяти движка здесь нет и не будет: объект, не знающий `live`, тем более не знает
@@ -240,8 +284,8 @@ export function useLive(): Live {
                 withDiag ? rpc.diag() : Promise.resolve(null), rpc.netInfo(),
             ])
             if (stop) return
-            if (s.status === 'fulfilled' && !failure(s.value)) { setStatus(s.value); setError(null) }
-            else setError(s.status === 'fulfilled' ? failure(s.value)! : asText(s.reason))
+            if (s.status === 'fulfilled' && !failure(s.value)) { setStatus(s.value); setError(null); fails.current = 0 }
+            else failed(s.status === 'fulfilled' ? failure(s.value)! : asText(s.reason))
             const devices = d.status === 'fulfilled' && !failure(d.value) ? d.value.devices || {} : null
             if (withDiag) {
                 if (g.status === 'fulfilled' && g.value && !failure(g.value)) {
@@ -334,7 +378,16 @@ export function useLive(): Live {
              * прошлое — тем же признаком `stale`, что и сама память движка.
              *
              * Свежие проверки приезжают догоняющим кругом, который выпускается сразу за этим. */
-            const withDiag = !fast && (force === 'diag' || round % DIAG_EVERY === 0)
+            /* Пока идёт применение, проверки не спрашиваются вовсе: `steer diag` в это время
+             * честно находит «правил в ядре нет» и «выход не поднят» — стройплощадку, а не
+             * поломку, — и этот приговор висел бы до следующего планового круга проверок
+             * (двадцать секунд) уже на исправном роутере. Как только окно закрылось — проверки
+             * спрашиваются первым же кругом: приговор после применения измеряется, а не
+             * вспоминается. */
+            const settling = pending.settling()
+            const closed = wasSettling.current && !settling
+            wasSettling.current = settling
+            const withDiag = !fast && !settling && (closed || force === 'diag' || round % DIAG_EVERY === 0)
             /* Спрошенные ПО ПРОСЬБЕ проверки перезапускают отсчёт двадцати секунд, а не
              * сбивают его фазу. Иначе догоняющий круг (и любой refresh, и возврат на вкладку)
              * оставлял бы следующий плановый опрос проверок там, где он и стоял, — то есть
@@ -351,15 +404,26 @@ export function useLive(): Live {
                     if (stop) return
                     if (typeof r === 'string') {
                         /* Метода нет — это не отказ роутера, а старый объект. Переходим на
-                         * прежние вызовы молча: человеку показывать нечего, всё работает. */
-                        legacy = true
-                        await loadLegacy(withDiag)
+                         * прежние вызовы молча: человеку показывать нечего, всё работает.
+                         *
+                         * ТОЛЬКО ПО ЭТОМУ ОТКАЗУ. Любой другой обрыв — перезапуск rpcd во
+                         * время применения, таймаут, оборванный запрос — прежде тоже включал
+                         * прежние вызовы, навсегда и молча: круг дорожал впятеро, а текст
+                         * исключения уезжал на экран как причина «Движок не отвечает». */
+                        if (/Method not found|not found|not supported|unavailable outside LuCI/i.test(r)) {
+                            legacy = true
+                            await loadLegacy(withDiag)
+                            return
+                        }
+                        failed(r)
                         return
                     }
                     const bad = failure(r)
-                    if (bad) { setError(bad); setStale(false); return }
+                    if (bad) { failed(bad); return }
                     setStatus(r.status)
                     setError(null)
+                    setStarting(false)
+                    fails.current = 0
                     /* Ответ движка ЗАПОМНЕННЫЙ — значит показанное всё ещё прошлое, и свежий
                      * круг уже выпущен ниже. Экран говорит «Обновление…» до его ответа. */
                     cachedNow = r.status?.cached === true
@@ -469,8 +533,18 @@ export function useLive(): Live {
         return () => { stop = true; clearTimeout(t) }
     }, [nonce])
 
+    /* Переход известен из двух источников: своё «Применить» (окно в pending) и служба
+     * движка, включённая, но не работающая (роутер поднимается). Второе показывается только
+     * пока движок и правда молчит — иначе устаревший ответ `engine` держал бы «Запускается…»
+     * на работающем роутере. */
+    const phase: Live['phase'] = pending.settling()
+        ? 'applying'
+        : error && starting
+          ? 'starting'
+          : null
+
     return {
-        status, error, diag, diagOld, devs, speed, build, net, releases, selfUpdate, stale,
+        status, error, diag, diagOld, devs, speed, build, net, releases, selfUpdate, stale, phase,
         refresh: () => setNonce((n) => n + 1),
     }
 }

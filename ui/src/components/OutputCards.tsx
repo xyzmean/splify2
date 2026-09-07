@@ -37,6 +37,9 @@ export interface OutRef {
     facts?: Facts
     /** Короткая приписка к строке — например, «в пуле vpn» у локации, взятой в пул. */
     note?: string
+    /** Идёт применение или загрузка (Live.phase): неподнятый выход в это время — не беда, а
+     *  подъём, и слово ему «Поднимается…». */
+    phase?: 'applying' | 'starting' | null
 }
 
 /** Что блок показывал в прошлый раз. Рисуется сразу при открытии — до первого ответа ubus.
@@ -303,7 +306,7 @@ export function SubBlock({ outs = [], sub }: {
  *  СВОИМ БЛОКОМ, а не строкой внутри подписки. Локация — это то, чем человек выходит в
  *  интернет прямо сейчас: у неё своё состояние (поднята ли), свой отклик и свой адрес, и
  *  сложенные в один блок три локации читаются как одно целое, которым они не являются. */
-function Location({ name, st, facts, note }: OutRef) {
+function Location({ name, st, facts, note, phase }: OutRef) {
     /** Имя узла, выбранного движком, — ЗАПАСНАЯ подпись локации: пока измерение не пришло
      *  (или устарело), из него берётся хотя бы страна, которую назвал продавец. */
     const [node, setNode] = useState<string | null>(null)
@@ -320,7 +323,7 @@ function Location({ name, st, facts, note }: OutRef) {
         return () => { stop = true }
     }, [name, st?.device])
 
-    return <Where name={name} st={st} facts={facts} fallback={node} note={note} showIp />
+    return <Where name={name} st={st} facts={facts} fallback={node} note={note} phase={phase} showIp />
 }
 
 /** Блок своего туннеля: WireGuard, AmneziaWG, xsteer.
@@ -329,7 +332,7 @@ function Location({ name, st, facts, note }: OutRef) {
  *  устройства на роутере отвечает на другой вопрос — «сколько прошло с перезагрузки», — и
  *  рядом с остатком подписки читался бы как остаток. Знак бесконечности говорит ровно то,
  *  что есть: ограничения нет. */
-export function TunnelBlock({ name, st, facts }: OutRef) {
+export function TunnelBlock({ name, st, facts, phase }: OutRef) {
     return (
         <Card>
             <CardHeader className="flex-row items-baseline justify-between gap-x-2 space-y-0">
@@ -343,7 +346,7 @@ export function TunnelBlock({ name, st, facts }: OutRef) {
                 </span>
             </CardHeader>
             <CardContent>
-                <Where name={name} st={st} facts={facts} fallback={st?.device || null} />
+                <Where name={name} st={st} facts={facts} fallback={st?.device || null} phase={phase} />
             </CardContent>
         </Card>
     )
@@ -354,7 +357,7 @@ export function TunnelBlock({ name, st, facts }: OutRef) {
  *  Пока выход не поднят, локации нет и выдумывать её нечем: показывается беда. Прошлое
  *  измерение рядом со сломанным туннелем читалось бы как «всё в порядке». */
 function Where({
-    name, st, facts, fallback, showIp, note,
+    name, st, facts, fallback, showIp, note, phase,
 }: {
     name: string
     st?: OutputStatus
@@ -362,9 +365,10 @@ function Where({
     fallback: string | null
     showIp?: boolean
     note?: string
+    phase?: OutRef['phase']
 }) {
     const up = st?.up === true
-    if (st && !up) return <Trouble st={st} name={name} />
+    if (st && !up) return <Trouble st={st} name={name} phase={phase} />
     /* Страна — измеренная, а если её нет, та, что назвал продавец в имени узла. Измерения не
      * бывает не только на сломанном выходе: бэкенд помнит ответ пятнадцать минут, и пустой
      * ответ он помнит так же — до следующей проверки страны не будет вовсе. Подпись продавца
@@ -458,8 +462,11 @@ function Address({ ip }: { ip?: string }) {
  *
  *  Перебор узлов — отдельное состояние, а не отказ: движок обходит узлы подписки по восемь
  *  секунд на узел, и «нет соединения» в этот момент было бы неправдой (I-100). */
-function Trouble({ st, name }: { st?: OutputStatus; name: string }) {
-    if (st?.probe?.state === 'probing') {
+function Trouble({ st, name, phase }: { st?: OutputStatus; name: string; phase?: OutRef['phase'] }) {
+    /* Применение или загрузка — та же ветка, что перебор узлов: клиент туннеля только что
+     * получил сигнал и перечитывает узлы, файла пробы у него ещё нет, и «нет соединения» в
+     * эти секунды — неправда того же рода. */
+    if (st?.probe?.state === 'probing' || (phase && st?.probe?.state === undefined)) {
         const n = st?.probe?.node
         const total = st?.probe?.total
         return (

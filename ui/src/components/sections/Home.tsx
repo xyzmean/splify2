@@ -72,6 +72,12 @@ function verdict(live: Live): Verdict {
  *  что слово стоит доли секунды, а не пять. */
 function verdictNow(live: Live): Verdict {
     const v = verdict(live)
+    /* Переход, о котором мы знаем (см. Live.phase), — нейтральное слово серой точкой и без
+     * находок: то, что движок находит, пока перестраивает правила или поднимается, — не
+     * поломки, а стройплощадка. Выше «Обновление…» нарочно: пока применяется, ответы
+     * приезжают, и «свежие» они ровно в том смысле, в котором бесполезны. */
+    if (live.phase)
+        return { ...v, text: live.phase === 'applying' ? 'Применяется…' : 'Запускается…', tone: 'idle', why: '', notes: [] }
     return live.stale ? { ...v, text: 'Обновление…', tone: 'warn' } : v
 }
 
@@ -217,7 +223,7 @@ export default function Home({
     const inSystem = (d: string) => (sysDevs?.has(d) ?? false) || d in (live.devs || {})
     /* Молчим, пока систему знаем не целиком, и пока состояние не пришло: пустой `outputs` до
      * первого ответа движка — это «ещё не знаем», а не «выходов нет». */
-    const known = live.status !== null && !live.error
+    const known = live.status !== null && !live.error && !live.phase
     const dead =
         known && sysDevs !== null && live.devs !== null
             ? named.filter((n) => n.want.length > 0 && n.want.every((d) => !inSystem(d)))
@@ -260,7 +266,7 @@ export default function Home({
                 он принадлежит движку и живёт в диагностике целиком. */}
             {/* `> 0`, а не просто `&&`: нуль в JSX печатается как «0», и на исправном роутере
                 под вердиктом висела одинокая цифра — поймано на снимке живого роутера. */}
-            {((live.diag?.fail ?? 0) > 0 || (live.diag?.warn ?? 0) > 0) && (
+            {!live.phase && ((live.diag?.fail ?? 0) > 0 || (live.diag?.warn ?? 0) > 0) && (
                 <button
                     type="button"
                     onClick={() => onSection('settings', 'diag')}
@@ -440,6 +446,7 @@ function RulesBoard({
                         <ul className="divide-y divide-border">
                             {rows.map((r, i) => (
                                 <RuleRow
+                                    phase={live.phase}
                                     key={`${r.name}-${i}`}
                                     n={i + 1}
                                     row={r}
@@ -458,13 +465,14 @@ function RulesBoard({
 }
 
 function RuleRow({
-    n, row, set, st, facts, onSection,
+    n, row, set, st, facts, phase, onSection,
 }: {
     n: number
     row: { name: string; out: string; enabled: boolean }
     set?: ChannelStatus
     st?: OutputStatus
     facts?: Facts
+    phase: Live['phase']
     onSection: (s: SectionId, at?: string) => void
 }) {
     /* Кандидаты выхода в порядке предпочтения: первый здоровый побеждает, поэтому нынешний —
@@ -501,7 +509,8 @@ function RuleRow({
                 {!row.enabled && (
                     <span className="text-[11px] text-muted-foreground">выключено</span>
                 )}
-                {row.enabled && set && !set.live && (
+                {/* Пока применяется — набор и должен отсутствовать: таблица пересобирается. */}
+                {row.enabled && set && !set.live && !phase && (
                     <span className="text-[11px] text-destructive">нет в ядре</span>
                 )}
                 <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -621,7 +630,7 @@ function OutputsColumn({
                 панели смешал бы их числа. Локации — строками внутри своей подписки. */}
             {subs === null
                 ? vless.length > 0 && (
-                      <SubBlock outs={vless.map(([name, st]) => ({ name, st, facts: facts[name] }))} />
+                      <SubBlock outs={vless.map(([name, st]) => ({ name, st, facts: facts[name], phase: live.phase }))} />
                   )
                 : subs.map((s) => (
                       <SubBlock
@@ -630,7 +639,7 @@ function OutputsColumn({
                           outs={vless
                               .filter(([n, o]) => (spec?.outputs?.[n]?.sub_file || o.sub_file || '') === s.path)
                               .map(([name, st]) => ({
-                                  name, st, facts: facts[name],
+                                  name, st, facts: facts[name], phase: live.phase,
                                   /* Локация, взятая в пул, так и подписана: иначе строка под
                                      подпиской и строка в блоке пула читались как два туннеля. */
                                   note: spec?.outputs?.[name]?.part_of ? `в пуле ${spec.outputs[name].part_of}` : undefined,
@@ -645,7 +654,7 @@ function OutputsColumn({
                 const o = spec?.outputs?.[name]
                 const devs = devList(o).length ? devList(o) : devList(st)
                 if (devs.some((d) => isPart(spec?.outputs?.[d]))) return null
-                return <TunnelBlock key={name} name={name} st={st} facts={facts[name]} />
+                return <TunnelBlock key={name} name={name} st={st} facts={facts[name]} phase={live.phase} />
             })}
 
         </div>

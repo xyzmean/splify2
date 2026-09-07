@@ -192,13 +192,14 @@ describe('круг опроса: один вызов вместо пяти', () 
         expect(result.current.error).toBeNull()
     })
 
-    it('беда приезжает успешным ответом — и остаётся бедой', async () => {
+    it('беда приезжает успешным ответом — и не принимается за состояние', async () => {
         // Бэкенд по контракту отвечает на ошибку объектом {ok:false,error} и кодом нуль.
         // Принять его за состояние значит нарисовать «Работает» зелёной точкой на роутере,
-        // где движок не отвечает.
+        // где движок не отвечает. Когда именно молчание становится приговором — в
+        // settling.test.tsx: первый круг им ещё не является.
         vi.spyOn(rpc, 'live').mockResolvedValue({ ok: false, error: 'движок не ответил' } as never)
         const { result } = renderHook(() => useLive())
-        await waitFor(() => expect(result.current.error).toBe('движок не ответил'))
+        await waitFor(() => expect(rpc.live).toHaveBeenCalled())
         expect(result.current.status).toBeNull()
     })
 })
