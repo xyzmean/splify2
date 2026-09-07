@@ -4,6 +4,14 @@ import react from "@vitejs/plugin-react"
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    // Приписка к имени выпуска, которую печатает рельс: «26.9 Andromeda beta 1». Версия
+    // пакета остаётся числом (VERSION: только цифры и точки — из неё собираются имя файла и
+    // ?v= бандлов), а слова «beta 1» живут только в интерфейсе. Задаётся на сборке:
+    //   SPLIFY_RELEASE_SUFFIX="beta 1" ./build.sh
+    // Пусто — выпуск без приписки, и строка остаётся «26.9 Andromeda».
+    __RELEASE_SUFFIX__: JSON.stringify(process.env.SPLIFY_RELEASE_SUFFIX ?? ""),
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

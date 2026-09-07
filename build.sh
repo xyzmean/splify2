@@ -131,6 +131,8 @@ bad="$(grep -rEn --include='*.tsx' '<h[1-6][^>]*className="[^"]*(text-\[[0-9]|te
     exit 1
 }
 
+# Приписка к имени выпуска в интерфейсе — «26.9 Andromeda beta 1» — берётся из окружения
+# (SPLIFY_RELEASE_SUFFIX, см. ui/vite.config.ts) и версию пакета не трогает: та из VERSION.
 ( cd ui && npm run build ) > "$BUILD_LOG" 2>&1 || {
     echo "сборка интерфейса провалилась:"
     cat "$BUILD_LOG"

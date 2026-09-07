@@ -1,6 +1,7 @@
 import { House, Lock, Route, Settings, ShieldCheck, Waves } from 'lucide-react'
 import EngineToggle from '@/components/EngineToggle'
 import { type Live } from '@/lib/live'
+import { assetUrl } from '@/lib/assets'
 import { type SectionId } from '@/lib/sections'
 
 /** Рельс разделов: шесть пунктов, у каждого своя роль.
@@ -46,6 +47,13 @@ export interface RailProps {
     counts: Partial<Record<SectionId, { text: string; alarm?: boolean }>>
 }
 
+
+/** Приписка к имени выпуска — «beta 1» у предвыпуска. Пишется на сборке (vite.config.ts,
+ *  SPLIFY_RELEASE_SUFFIX); версия пакета при этом остаётся числом. На стенде не определена. */
+function releaseSuffix(): string {
+    return typeof __RELEASE_SUFFIX__ === 'string' ? __RELEASE_SUFFIX__ : ''
+}
+
 export default function Rail({ live, section, onSection, counts }: RailProps) {
     return (
         <>
@@ -54,18 +62,23 @@ export default function Rail({ live, section, onSection, counts }: RailProps) {
                 обязан тянуться вместе с ней — иначе под ним видна ступенька другого фона. */}
             <aside className="hidden shrink-0 self-stretch flex-col gap-4 border-r border-border bg-rail p-4 lg:flex lg:w-[236px]">
                 <div className="flex items-center gap-2.5 px-1.5">
-                    <span
-                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-primary text-[15px] font-semibold text-primary-foreground"
+                    {/* Логотип — тот же знак, что на иконке (favicon.svg из сборки), а не квадрат
+                        с буквой, который стоял здесь заглушкой (владелец: «у нас же логотип
+                        лежит»). Файлом рядом со стилем, а не в бандле: 10 КБ ради картинки,
+                        которую браузер и так запомнит. */}
+                    <img
+                        src={assetUrl('favicon.svg')}
+                        alt=""
                         aria-hidden="true"
-                    >
-                        s
-                    </span>
+                        className="h-8 w-8 shrink-0 select-none"
+                        draggable={false}
+                    />
                     <div className="min-w-0 leading-tight">
                         <div className="text-[15px] font-semibold">splify2</div>
                         {/* Версия — та, что стоит, а не та, что задумана: строку читают, чтобы
                             сверить с релизом. Пока её не спросили, места она не занимает. */}
                         <div className="truncate text-[11px] text-muted-foreground">
-                            {live.selfUpdate?.current ? `${live.selfUpdate.current} Andromeda` : 'Andromeda'}
+                            {[live.selfUpdate?.current, 'Andromeda', releaseSuffix()].filter(Boolean).join(' ')}
                         </div>
                     </div>
                 </div>
