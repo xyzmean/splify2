@@ -58,6 +58,9 @@ src/
     sections.ts  шесть разделов пульта и их заголовки
   components/
     Console      оболочка: рельс разделов слева, раздел справа
+    Flag         флаг страны эмодзи — вшитым шрифтом public/TwemojiCountryFlags.woff2 (Twemoji,
+                 CC-BY 4.0, см. TwemojiCountryFlags.LICENSE.txt): в Windows своего шрифта с
+                 флагами нет, а спрайт картинок знал только сорок пять стран
     Rail         рельс: шесть разделов, движок, «Остановить всё»
     OutputsStatus живое состояние выходов и отклик
     SubscriptionCard остаток трафика подписки

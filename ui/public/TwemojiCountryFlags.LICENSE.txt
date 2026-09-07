@@ -1,0 +1,4 @@
+Twemoji Country Flags — подмножество шрифта Twemoji Mozilla (флаги стран), собранное
+проектом country-flag-emoji-polyfill (MIT). Графика Twemoji © Twitter, Inc. и другие
+участники, лицензия CC-BY 4.0: https://creativecommons.org/licenses/by/4.0/
+Источник: https://github.com/talkjs/country-flag-emoji-polyfill
