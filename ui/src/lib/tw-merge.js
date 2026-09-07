@@ -72,7 +72,7 @@ const SIMPLE_PREFIXES = [
   ['top-', 'top'], ['right-', 'right'], ['bottom-', 'bottom'], ['left-', 'left'],
   ['grid-cols-', 'grid-cols'], ['grid-rows-', 'grid-rows'],
   ['col-span-', 'col-span'], ['col-start-', 'col-start'], ['col-end-', 'col-end'],
-  ['row-span-', 'row-span'], ['order-', 'order'],
+  ['row-span-', 'row-span'], ['row-start-', 'row-start'], ['row-end-', 'row-end'], ['order-', 'order'],
   ['items-', 'align-items'], ['justify-', 'justify-content'], ['content-', 'align-content'],
   ['self-', 'align-self'], ['place-items-', 'place-items'],
   ['basis-', 'basis'], ['grow-', 'grow'], ['shrink-', 'shrink'],

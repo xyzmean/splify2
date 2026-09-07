@@ -173,7 +173,7 @@ describe('вкладка Zapret', () => {
         // Стратегия по-прежнему названа в строке: она не стёрта.
         expect(screen.getAllByText('v5').length).toBeGreaterThan(0)
         // И сказано, что выходы обхода продолжают работать.
-        expect(document.body.textContent).toMatch(/выходы обхода ниже работают/)
+        expect(document.body.textContent).toMatch(/выходы обхода работают/)
         fireEvent.click(btn)
         await waitFor(() => expect(en).toHaveBeenCalledWith(true))
     })
@@ -382,6 +382,9 @@ describe('вкладка Zapret', () => {
             ...cat, outputs: [...cat.outputs, { name: 'yt2', strategy: '', queue: 0, up: false }],
         })
         render(<Zapret />)
+        // Форма свёрнута за кнопкой «новый выход»: выход заводят один раз, а поле ввода при
+        // каждом открытии вкладки читалось как незаконченная настройка.
+        fireEvent.click(await screen.findByRole('button', { name: /новый выход/ }))
         await waitFor(() => expect(screen.getByLabelText('имя нового выхода')).toBeInTheDocument())
         fireEvent.input(screen.getByLabelText('имя нового выхода'), { target: { value: 'yt2' } })
         fireEvent.click(screen.getByText('Завести выход'))
@@ -406,6 +409,7 @@ describe('вкладка Zapret', () => {
         mockAll()
         const edit = vi.spyOn(pending, 'edit').mockImplementation(() => undefined)
         render(<Zapret />)
+        fireEvent.click(await screen.findByRole('button', { name: /новый выход/ }))
         await waitFor(() => expect(screen.getByLabelText('имя нового выхода')).toBeInTheDocument())
         fireEvent.input(screen.getByLabelText('имя нового выхода'), { target: { value: 'ютуб!' } })
         fireEvent.click(screen.getByText('Завести выход'))

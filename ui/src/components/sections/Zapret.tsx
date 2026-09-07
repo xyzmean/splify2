@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Check, ChevronDown, ChevronRight, LoaderCircle, Play, RefreshCw, Square, Waves } from 'lucide-react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Check, ChevronDown, ChevronRight, LoaderCircle, Play, Plus, RefreshCw, Square, Waves } from 'lucide-react'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { rpc, type ZapretFamily, type ZapretResults, type ZapretSet } from '@/lib/rpc'
 import { notify } from '@/lib/notify'
@@ -35,7 +35,22 @@ import { type Output, type Spec } from '@/lib/model'
  *  строка-заголовок со своей кнопкой проверки, у каждой стратегии — своя, а общая «Проверить»
  *  честно называется проверкой всех. У развёрнутой стратегии видны её ключи и то, какие
  *  именно сайты с ней открылись: число «14/18» само по себе не говорит, YouTube это или
- *  госуслуги. */
+ *  госуслуги.
+ *
+ *  КОМПОНОВКА — ЧЕТЫРЕ КАРТОЧКИ, А НЕ ШЕСТЬ, и не равного веса. Прежде вкладка была столбом из
+ *  шести одинаковых карточек с абзацем пояснений в каждой, и владелец назвал это хаосом: «куда
+ *  применить» и «стратегии» — один выбор, разнесённый по двум карточкам; проверка и её кнопка
+ *  «Проверить» стояли в третьей, отдельно от списка, который она заполняет числами. Теперь:
+ *    - «Обход DPI» — состояние и служебные кнопки, одной строкой;
+ *    - «Стратегия» — место применения (весь роутер и выходы обхода — кнопками в ряд, там же
+ *      заводится новый выход), под ним список семейств, а «Проверить» и ход проверки — в
+ *      шапке этого же списка: проверка существует ради чисел в нём;
+ *    - «Автоподбор» — кнопка, приговор и расписание;
+ *    - «Игровой фильтр» — как был, только короче.
+ *  На широком экране список стратегий — правая, широкая колонка; остальное — левая, узкая:
+ *  список длинный и живёт прокруткой, а три остальные карточки короткие и читаются сверху
+ *  вниз. На узком экране всё в один столбец в том же порядке чтения. Пояснения ужаты до
+ *  строки: длинный абзац над каждой кнопкой читался как предупреждение, а не как подсказка. */
 
 const FAMILY: Record<ZapretFamily, string> = {
     flowseal: 'Flowseal',
@@ -113,6 +128,10 @@ export default function Zapret() {
      *  удобство: у выхода обхода нет устройства вовсе, а без стратегии он не значит ничего —
      *  стратегии же живут тут. */
     const [newOut, setNewOut] = useState('')
+    /** Форма нового выхода развёрнута. Свёрнута по умолчанию: выход заводят один раз, а поле
+     *  ввода с абзацем пояснения при каждом открытии вкладки читалось как незаконченная
+     *  настройка. */
+    const [adding, setAdding] = useState(false)
 
     const reloadState = useCallback(
         () => Promise.all([
@@ -223,6 +242,7 @@ export default function Zapret() {
             await pending.flush()
             await reloadState()
             setTarget(n)
+            setAdding(false)
             notify(`${t('Выход заведён')}: ${n}. ${t('Выберите ему стратегию ниже; заработает после «Применить»')}`)
         } catch (e) {
             notify(String(e instanceof Error ? e.message : e), 'error')
@@ -277,34 +297,67 @@ export default function Zapret() {
         })
     const families = FAMILY_ORDER.filter((f) => all.some((s) => s.family === f))
     const testable = st.curl && st.strategies > 0 && !running && busy === ''
+    const targetOut = target ? outs.find((o) => o.name === target) : undefined
 
+    /** Кнопка места применения. Имя крупно, применённая стратегия мелко под ним: за этой
+     *  парой человек и смотрит на ряд — «что где стоит». Отметки состояния (выключен, не
+     *  применён, обработчик не запущен, изменилась в каталоге) — там же, третьей строкой
+     *  не нужны: их одна-две и они короткие. */
+    const chip = (key: string, on: boolean, name: string, sub: string, notes: React.ReactNode[]) => (
+        <button
+            key={key}
+            type="button"
+            onClick={() => setTarget(key)}
+            aria-pressed={on}
+            className={[
+                'flex min-w-0 max-w-full flex-col items-start rounded-xl border px-3 py-1.5 text-left',
+                'transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+                on ? 'border-primary bg-primary/10' : 'border-border hover:bg-accent',
+            ].join(' ')}
+        >
+            <span className={`text-sm ${on ? 'font-medium text-primary' : ''}`}>{name}</span>
+            <span className="flex max-w-full flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+                <span>{sub}</span>
+                {/* Разделитель — своим элементом, а не приклеенным к слову: отметка должна
+                    оставаться отдельным текстом, по которому её находят и глазом, и стендом. */}
+                {notes.filter(Boolean).map((n, i) => (
+                    <span key={i} className="flex items-center gap-x-1.5">
+                        <span aria-hidden="true">·</span>
+                        {n}
+                    </span>
+                ))}
+            </span>
+        </button>
+    )
+
+    /* Ряды сетки — auto, auto, 1fr, а не равные: карточка стратегий тянется на три ряда, и без
+     * явных размеров её высота делилась между рядами поровну — три левые карточки расползались
+     * по высоте списка с пустотой между ними (владелец, со скрина). Первые два ряда — по
+     * содержимому левых карточек, остаток отдаётся третьему. */
     return (
-        <div className="space-y-4">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,23rem)_minmax(0,1fr)] xl:grid-rows-[auto_auto_1fr] xl:items-start">
+            {/* ---- состояние ------------------------------------------------------------ */}
             <Card>
                 <CardHeader>
                     <CardTitle className="text-base flex items-center gap-2">
                         <Waves className="h-4 w-4" aria-hidden="true" />
-                        {t('Обход DPI')}
-                    </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2 text-sm">
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                        <span>
-                            {/* Три состояния, а не два: «выключен» — решение человека
-                                (кнопка в строке «Весь роутер»), «не запущен» — поломка. */}
+                        <span className="flex-1">{t('Обход DPI')}</span>
+                        {/* Три состояния, а не два: «выключен» — решение человека (кнопка у
+                            места «Весь роутер»), «не запущен» — поломка. */}
+                        <span className="text-sm font-normal">
                             {st.running
                                 ? <span className="text-success">{t('работает')}</span>
                                 : !st.enabled
                                     ? <span className="text-muted-foreground">{t('выключен')}</span>
                                     : <span className="text-warning-fg">{t('не запущен')}</span>}
                         </span>
-                        {st.version && <span className="text-muted-foreground">{st.version}</span>}
-                        <span className="text-muted-foreground">
-                            {t('стратегий')}: {st.strategies}
-                        </span>
-                        <span className="text-muted-foreground">
-                            {t('каталог обновлён')}: {ago(st.updated)}
-                        </span>
+                    </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2 text-sm">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                        {st.version && <span>{st.version}</span>}
+                        <span>{t('стратегий')}: {st.strategies}</span>
+                        <span>{t('каталог обновлён')}: {ago(st.updated)}</span>
                     </div>
                     {/* Каталог обновляется сам раз в сутки, и обновление НЕ ТРОГАЕТ активную
                         стратегию — иначе правка у автора меняла бы работающий роутер ночью, с
@@ -331,7 +384,7 @@ export default function Zapret() {
                             {busy === 'sync' ? t('обновляю…') : t('Обновить каталог')}
                         </Button>
                         <Button
-                            variant="outline"
+                            variant="ghost"
                             size="sm"
                             disabled={busy !== '' || running}
                             onClick={() => void act('remove', () => rpc.zapretRemove(), t('Обход DPI удалён'))}
@@ -342,19 +395,157 @@ export default function Zapret() {
                 </CardContent>
             </Card>
 
-            {/* ---- проверка ------------------------------------------------------------- */}
-            <Card>
-                <CardHeader><CardTitle className="text-base">{t('Проверка стратегий')}</CardTitle></CardHeader>
+            {/* ---- стратегия: куда и какую ---------------------------------------------- */}
+            <Card className="xl:col-start-2 xl:row-start-1 xl:row-span-3">
+                <CardHeader>
+                    <CardTitle className="text-base">{t('Стратегия')}</CardTitle>
+                </CardHeader>
                 <CardContent className="space-y-3">
-                    <div className="text-xs text-muted-foreground">
-                        {t('Идёт в фоне: окно роутера можно закрыть. Пользовательского трафика проверка не касается — она поднимает свой обработчик и отдаёт в него только свои запросы, а ваша стратегия всё это время работает как обычно. Наборов целей два, как у Zapret Manager: общий (сайты и dpi-checkers) для Flowseal и v, домены YouTube — для Yv.')}
+                    {/* Места применения — в ряд, а не столбиком: их два-три, и выбор между ними
+                        читается как переключатель, которым он и является. */}
+                    <div className="flex flex-wrap items-stretch gap-2">
+                        {chip(
+                            '',
+                            target === '',
+                            t('Весь роутер'),
+                            st.active || t('стратегия не отмечена'),
+                            [!st.enabled && <span key="off" className="rounded bg-accent px-1.5 py-0.5">{t('выключен')}</span>],
+                        )}
+                        {outs.map((o) => chip(
+                            o.name,
+                            target === o.name,
+                            `${t('выход')} ${o.name}`,
+                            o.strategy || t('нет стратегии'),
+                            [
+                                /* Не применённый выход — не поломка: его обработчик и не должен
+                                   быть запущен, пока спеку не применили. Предупреждение оставлено
+                                   тому, что применено и всё равно не поднялось. */
+                                !o.up && (
+                                    pending.applied && !pending.applied.outputs?.[o.name]
+                                        ? <span key="down">{t('не применён')}</span>
+                                        : <span key="down" className="text-warning-fg">{t('обработчик не запущен')}</span>
+                                ),
+                                /* То же расхождение, что у стратегии всего роутера, и по той же
+                                   причине: ночное обновление каталога файл ключей выхода не
+                                   трогает. */
+                                o.drifted && <span key="drift" className="text-warning-fg">{t('изменилась в каталоге')}</span>,
+                            ],
+                        ))}
+                        {/* Завести выход — здесь же, потому что иначе «стратегия только для
+                            YouTube» остаётся недостижимой: выход есть куда применить, а завести
+                            его негде. Правило в него человек создаёт во вкладке «Правила». */}
+                        <button
+                            type="button"
+                            onClick={() => setAdding((v) => !v)}
+                            aria-expanded={adding}
+                            className={[
+                                'flex items-center gap-1 rounded-xl border border-dashed px-3 py-1.5 text-sm text-muted-foreground',
+                                'transition-colors duration-200 hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+                                adding ? 'border-primary text-primary' : 'border-border',
+                            ].join(' ')}
+                        >
+                            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                            {t('новый выход')}
+                        </button>
+                    </div>
+
+                    {/* Строка о выбранном месте: у роутера — выключатель службы; выключается
+                        служба, а не стирается стратегия: отметка остаётся, Zapret Manager видит
+                        своё, а выходы обхода (свои обработчики) продолжают работать. Выключатель
+                        стоит РЯДОМ с местом применения, а не в шапке: вопрос человека — «как
+                        отключить стратегию на весь роутер», и ответ должен быть там, где эта
+                        стратегия названа. */}
+                    {target === '' && (
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={busy !== ''}
+                                onClick={() => void act(
+                                    'enable',
+                                    () => rpc.zapretEnable(!st.enabled),
+                                    st.enabled ? t('Обход на весь роутер выключен') : t('Обход на весь роутер включён'),
+                                )}
+                            >
+                                {busy === 'enable' ? '…' : st.enabled ? t('Выключить обход') : t('Включить обход')}
+                            </Button>
+                            {!st.enabled && (
+                                <span>
+                                    {t('Стратегия выше не действует, а выходы обхода работают своими обработчиками. «Применить» стратегию всему роутеру включит его обратно.')}
+                                </span>
+                            )}
+                        </div>
+                    )}
+                    {targetOut && !targetOut.up && pending.applied && !pending.applied.outputs?.[targetOut.name] && (
+                        <div className="text-xs text-muted-foreground">
+                            {t('Выход заведён, но ещё не применён: заработает после «Применить».')}
+                        </div>
+                    )}
+
+                    {adding && (
+                        <div className="space-y-2 rounded-xl border border-dashed border-border p-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <input
+                                    value={newOut}
+                                    onChange={(e) => setNewOut(e.currentTarget.value)}
+                                    placeholder={t('имя нового выхода')}
+                                    aria-label={t('имя нового выхода')}
+                                    className="h-9 min-w-[10rem] flex-1 rounded-lg border border-border bg-background px-3 text-sm"
+                                />
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={busy !== '' || newOut.trim() === ''}
+                                    onClick={() => void addOutput()}
+                                >
+                                    {t('Завести выход')}
+                                </Button>
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                                {t('Выход — это то, во что ведёт правило. Заведите его, выберите ему стратегию ниже, а правило «эти домены — сюда» создайте во вкладке «Правила». Заработает после «Применить».')}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ---- список --------------------------------------------------------- */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                        <h3 className="sp-sub">
+                            {t('Стратегии')}
+                            <span className="ml-2 text-xs font-normal text-muted-foreground">
+                                {target ? `${t('для выхода')} ${target}` : t('для всего роутера')}
+                            </span>
+                        </h3>
+                        {/* «Проверить» — в шапке списка, а не в отдельной карточке: проверка
+                            существует ради чисел напротив стратегий, и кнопка должна стоять над
+                            ними. Семейство или одну — кнопками в самом списке. */}
+                        {!running && (
+                            <Button
+                                size="sm"
+                                disabled={busy !== '' || !st.curl || st.strategies === 0}
+                                onClick={() => void startTest('all')}
+                            >
+                                <Play className="h-3.5 w-3.5" aria-hidden="true" />
+                                {t('Проверить')}
+                            </Button>
+                        )}
                     </div>
                     {running ? (
                         <div className="space-y-2">
-                            <div className="text-sm">
-                                {test?.state === 'starting'
-                                    ? t('собираю цели…')
-                                    : `${t('стратегия')} ${test?.done ?? 0} ${t('из')} ${test?.total ?? 0}${test?.current ? ` · ${test.current}` : ''}`}
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                                <span>
+                                    {test?.state === 'starting'
+                                        ? t('собираю цели…')
+                                        : `${t('стратегия')} ${test?.done ?? 0} ${t('из')} ${test?.total ?? 0}${test?.current ? ` · ${test.current}` : ''}`}
+                                </span>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={busy !== ''}
+                                    onClick={() => void act('stop', () => rpc.zapretTestStop(), t('Проверка остановлена'))}
+                                >
+                                    <Square className="h-3.5 w-3.5" aria-hidden="true" />
+                                    {t('Остановить')}
+                                </Button>
                             </div>
                             {/* Полоса, а не проценты числом: доля от полусотни шагов читается
                                 глазом быстрее, чем «14%». */}
@@ -368,38 +559,19 @@ export default function Zapret() {
                                     }}
                                 />
                             </div>
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                disabled={busy !== ''}
-                                onClick={() => void act('stop', () => rpc.zapretTestStop(), t('Проверка остановлена'))}
-                            >
-                                <Square className="h-3.5 w-3.5" aria-hidden="true" />
-                                {t('Остановить')}
-                            </Button>
                         </div>
                     ) : (
-                        <div className="flex flex-wrap items-center gap-2">
-                            <Button
-                                size="sm"
-                                disabled={busy !== '' || !st.curl || st.strategies === 0}
-                                onClick={() => void startTest('all')}
-                            >
-                                <Play className="h-3.5 w-3.5" aria-hidden="true" />
-                                {t('Проверить')}
-                            </Button>
-                            <span className="text-xs text-muted-foreground">
-                                {t('все стратегии; семейство или одну — кнопками в списке ниже')}
-                            </span>
-                        </div>
+                        <p className="text-xs text-muted-foreground">
+                            {t('Проверка идёт в фоне — окно можно закрыть. Пользовательского трафика проверка не касается: у неё свой обработчик и свои запросы, ваша стратегия работает как обычно.')}
+                        </p>
                     )}
                     {test?.state === 'error' && test.error_text && (
                         <div className="text-xs text-destructive">{test.error_text}</div>
                     )}
-                    {/* Без этого числа результат не значит ничего: «30 из 54» может быть и
-                        отличным, и никаким — смотря сколько открывается без обхода вовсе. */}
+                    {/* Без числа «без обхода» результат не значит ничего: «30 из 54» может быть
+                        и отличным, и никаким — смотря сколько открывается без обхода вовсе. */}
                     {res && res.at > 0 && (
-                        <div className="text-xs text-muted-foreground">
+                        <p className="text-xs text-muted-foreground">
                             {t('последняя проверка')}: {ago(res.at)}
                             {res.sets && Object.keys(res.sets).length ? (
                                 (['general', 'youtube'] as ZapretSet[])
@@ -415,22 +587,170 @@ export default function Zapret() {
                                     {' · '}{t('целей')} {res.targets} · {t('без обхода открылось')} {res.baseline}
                                 </>
                             )}
+                            {' · '}
+                            <span className="text-success">{t('зелёное')}</span> — {t('больше, чем без обхода')},{' '}
+                            <span className="text-warning-fg">{t('жёлтое')}</span> — {t('меньше')}.
+                        </p>
+                    )}
+                    {all.length === 0 && (
+                        <div className="py-3 text-sm text-muted-foreground">
+                            {t('Каталог пуст — обновите его.')}
                         </div>
                     )}
+                    <div className="space-y-1">
+                        {families.map((fam) => {
+                            const list = all.filter((s) => s.family === fam)
+                            const open = isOpen(fam)
+                            /* Лучшее число семейства — в заголовок: так свёрнутое семейство всё
+                               же отвечает на вопрос «стоит ли сюда заглядывать». */
+                            const best = list
+                                .map((s) => scoreOf(res, s.name, fam))
+                                .filter((x): x is NonNullable<typeof x> => !!x && x.ok >= 0)
+                                .sort((a, b) => b.ok / Math.max(1, b.total) - a.ok / Math.max(1, a.total))[0]
+                            const hasApplied = list.some((s) => s.name === applied)
+                            return (
+                                <div key={fam} className="rounded-xl border border-border">
+                                    <div className="flex items-center gap-1 px-2 py-1.5">
+                                        <button
+                                            type="button"
+                                            onClick={() => toggleFam(fam)}
+                                            aria-expanded={open}
+                                            aria-label={`${open ? t('свернуть') : t('развернуть')} ${FAMILY[fam]}`}
+                                            className="flex min-w-0 flex-1 items-center gap-2 rounded-lg bg-transparent px-1 py-1 text-left text-sm hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                                        >
+                                            {open
+                                                ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                                                : <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+                                            <span className="shrink-0 font-medium">{FAMILY[fam]}</span>
+                                            {/* Одной неразрывной строкой с обрезкой: на телефоне число
+                                                «21» рассыпалось на две строки по цифре. */}
+                                            <span className="min-w-0 truncate text-xs text-muted-foreground">
+                                                {list.length}
+                                                {hasApplied ? ` · ${t('применена')} ${applied}` : ''}
+                                                {best ? ` · ${t('лучшая')} ${best.ok}/${best.total}` : ''}
+                                            </span>
+                                        </button>
+                                        {!running && (
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                disabled={!testable}
+                                                aria-label={`${t('проверить семейство')} ${FAMILY[fam]}`}
+                                                title={`${t('проверить семейство')} ${FAMILY[fam]}`}
+                                                onClick={() => void startTest(fam)}
+                                                className="shrink-0"
+                                            >
+                                                <Play className="h-3.5 w-3.5" aria-hidden="true" />
+                                                <span className="hidden sm:inline">{t('проверить семейство')}</span>
+                                            </Button>
+                                        )}
+                                    </div>
+                                    {open && (
+                                        <div className="border-t border-border p-1">
+                                            {list.map((s) => {
+                                                const on = applied === s.name
+                                                const sc = scoreOf(res, s.name, fam)
+                                                const expanded = openRow === s.name
+                                                return (
+                                                    <div key={s.name} className={on ? 'rounded-lg bg-primary/10' : ''}>
+                                                        <div className="flex items-center gap-2 px-2 py-1.5 text-sm">
+                                                            {on
+                                                                ? <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                                                                : <span className="h-4 w-4 shrink-0" aria-hidden="true" />}
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => toggleRow(s.name)}
+                                                                aria-expanded={expanded}
+                                                                className={`flex min-w-0 flex-1 items-center gap-1 rounded bg-transparent px-1 text-left hover:underline decoration-dotted focus:outline-none focus-visible:ring-2 focus-visible:ring-primary ${on ? 'font-medium text-primary' : ''}`}
+                                                            >
+                                                                {/* Шеврон — знак, что строка раскрывается: без него никто не
+                                                                    догадывался нажать на имя. */}
+                                                                {expanded
+                                                                    ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                                                                    : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />}
+                                                                <span className="min-w-0 truncate">{s.name}</span>
+                                                            </button>
+                                                            {/* Число проверки стоит НАПРОТИВ стратегии, а не отдельным
+                                                                списком: вопрос человека — «какую выбрать», и ответ должен
+                                                                быть в той же строке, где кнопка выбора. -1 значит «не
+                                                                поднялась вовсе» — такой же ответ, как плохое число. */}
+                                                            <span className="w-14 shrink-0 text-right text-xs">
+                                                                {sc === undefined ? (
+                                                                    <span className="text-muted-foreground">—</span>
+                                                                ) : sc.ok < 0 ? (
+                                                                    <span className="text-destructive">{t('не идёт')}</span>
+                                                                ) : (
+                                                                    <span
+                                                                        className={
+                                                                            sc.ok > sc.baseline
+                                                                                ? 'font-medium text-success'
+                                                                                : sc.ok < sc.baseline
+                                                                                  ? 'text-warning-fg'
+                                                                                  : 'text-muted-foreground'
+                                                                        }
+                                                                    >
+                                                                        {sc.ok}/{sc.total}
+                                                                    </span>
+                                                                )}
+                                                            </span>
+                                                            {/* Слой к выходу не применяется: у выхода стратегия лежит
+                                                                одним файлом ключей целиком, и «слой поверх» означал бы
+                                                                файл, собранный из двух источников. Бэкенд это и отвечает
+                                                                отказом — значит предлагать кнопку, которая не может
+                                                                сработать, нечестно. Слой берётся у бэкенда полем `layer`,
+                                                                а не выводится здесь из имени. */}
+                                                            {target && s.layer !== 'main' ? (
+                                                                <span className="shrink-0 text-xs text-muted-foreground">
+                                                                    {t('только всему роутеру')}
+                                                                </span>
+                                                            ) : (
+                                                                <Button
+                                                                    variant="outline"
+                                                                    size="sm"
+                                                                    disabled={busy !== '' || on}
+                                                                    className="shrink-0"
+                                                                    onClick={() =>
+                                                                        void act(
+                                                                            `apply:${s.name}`,
+                                                                            () => rpc.zapretApply(s.name, target),
+                                                                            `${t('Применена')} ${s.name}`,
+                                                                        )}
+                                                                >
+                                                                    {busy === `apply:${s.name}` ? t('…') : t('Применить')}
+                                                                </Button>
+                                                            )}
+                                                        </div>
+                                                        {expanded && (
+                                                            <StrategyDetails
+                                                                opts={opts[s.name]}
+                                                                score={sc}
+                                                                testable={testable}
+                                                                running={running}
+                                                                onTest={() => void startTest(`one:${s.name}`)}
+                                                            />
+                                                        )}
+                                                    </div>
+                                                )
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            )
+                        })}
+                    </div>
                 </CardContent>
             </Card>
 
             {/* ---- автоподбор ------------------------------------------------------------ */}
-            {/* ПОСЛЕ проверки и ДО списка нарочно: подбор — это та же проверка плюс решение,
-                и человек читает страницу сверху вниз ровно в этом порядке. Кнопка честно
-                называется «Подобрать и применить»: подбор без применения был бы обманом, а
-                применить победителя, не сказав, — тем, за что этот продукт и переписывали.  */}
+            {/* Кнопка честно называется «Подобрать и применить»: подбор без применения был бы
+                обманом, а применить победителя, не сказав, — тем, за что этот продукт и
+                переписывали. */}
             <Card>
                 <CardHeader><CardTitle className="text-base">{t('Автоподбор')}</CardTitle></CardHeader>
                 <CardContent className="space-y-3 text-sm">
-                    <div className="text-xs text-muted-foreground">
-                        {t('Гоняет ту же проверку в изоляции, ранжирует и применяет победителя. Применяет НЕ ВСЕГДА: только если он открывает больше, чем открывается без обхода вовсе, и больше, чем ваша нынешняя стратегия. Менять работающее на равное — риск без выигрыша.')}
-                    </div>
+                    <p className="text-xs text-muted-foreground">
+                        {t('Та же проверка в изоляции, затем применяется победитель — и только если он открывает больше, чем без обхода и чем нынешняя стратегия: менять работающее на равное — риск без выигрыша.')}
+                    </p>
 
                     {/* Приговор. Строка отказа здесь ценнее пустоты: «уже применена лучшая» и
                         «проверка не проходила» — разные состояния, и человек по ним решает,
@@ -456,6 +776,39 @@ export default function Zapret() {
                                 : ''}
                             {' · '}{ago(auto.at)}
                             {auto.prev ? ` · ${t('было')}: ${auto.prev}` : ''}
+                        </div>
+                    )}
+
+                    {/* Ход подбора — здесь, под приговором, а не только в списке стратегий:
+                        человек нажал кнопку в этой карточке и здесь же ждёт ответа. Проверку
+                        подбор гоняет ту же, поэтому числа берутся из её хода; между проверкой
+                        и применением — короткие слова о том, что делается. */}
+                    {auto?.running && (
+                        <div className="space-y-1.5">
+                            <div className="flex flex-wrap items-center justify-between gap-x-2 text-xs">
+                                <span>
+                                    {running
+                                        ? (test?.state === 'starting'
+                                            ? t('собираю цели…')
+                                            : `${t('проверяю')} ${test?.done ?? 0} ${t('из')} ${test?.total ?? 0}`)
+                                        : auto.state === 'ranking'
+                                            ? t('ранжирую и применяю…')
+                                            : t('готовлю проверку…')}
+                                </span>
+                                {running && test?.current && (
+                                    <span className="min-w-0 truncate text-muted-foreground">{test.current}</span>
+                                )}
+                            </div>
+                            <div className="h-1.5 w-full overflow-hidden rounded-full bg-accent">
+                                <div
+                                    className={`h-full bg-primary transition-all duration-500 ${running ? '' : 'animate-pulse'}`}
+                                    style={{
+                                        width: running
+                                            ? `${Math.round((100 * (test?.done ?? 0)) / Math.max(1, test?.total ?? 1))}%`
+                                            : auto.state === 'ranking' ? '100%' : '4%',
+                                    }}
+                                />
+                            </div>
                         </div>
                     )}
 
@@ -492,8 +845,8 @@ export default function Zapret() {
 
                     {/* Расписание. ВЫКЛЮЧЕНО по умолчанию, и это видно: применение стратегии
                         перезапускает обход и меняет то, что работает у всех клиентов роутера. */}
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
-                        <span className="text-xs text-muted-foreground">{t('по расписанию')}:</span>
+                    <div className="flex flex-wrap items-center gap-1.5 border-t border-border pt-3">
+                        <span className="mr-1 text-xs text-muted-foreground">{t('по расписанию')}:</span>
                         {AUTO_EVERY.map((d) => (
                             <Button
                                 key={d}
@@ -510,113 +863,9 @@ export default function Zapret() {
                             </Button>
                         ))}
                     </div>
-                    <div className="text-xs text-muted-foreground">
-                        {t('По расписанию подбор идёт вместе с ночным обновлением списков и только когда роутер не занят: если через него идёт трафик, подбор откладывается до следующей ночи.')}
-                    </div>
-                </CardContent>
-            </Card>
-
-            {/* ---- куда применять ------------------------------------------------------- */}
-            <Card>
-                <CardHeader><CardTitle className="text-base">{t('Куда применить')}</CardTitle></CardHeader>
-                <CardContent className="space-y-1.5">
-                    {/* Выключатель стоит РЯДОМ с местом применения, а не в шапке: вопрос
-                        человека — «как отключить стратегию на весь роутер», и ответ должен быть
-                        в той строке, где эта стратегия названа. Выключается служба, а не
-                        стирается стратегия: отметка остаётся, Zapret Manager видит своё, а
-                        выходы обхода (свои обработчики) продолжают работать. */}
-                    <div className="flex items-center gap-1">
-                        <button
-                            type="button"
-                            onClick={() => setTarget('')}
-                            className={[
-                                'flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-2 text-left text-sm',
-                                target === '' ? 'bg-primary/10 font-medium text-primary' : 'hover:bg-accent',
-                            ].join(' ')}
-                        >
-                            <span className="min-w-0 flex-1">{t('Весь роутер')}</span>
-                            <span className="text-xs text-muted-foreground">
-                                {!st.enabled && <span className="mr-1 rounded bg-accent px-1.5 py-0.5">{t('выключен')}</span>}
-                                {st.active || t('стратегия не отмечена')}
-                            </span>
-                        </button>
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            disabled={busy !== ''}
-                            className="shrink-0"
-                            onClick={() => void act(
-                                'enable',
-                                () => rpc.zapretEnable(!st.enabled),
-                                st.enabled ? t('Обход на весь роутер выключен') : t('Обход на весь роутер включён'),
-                            )}
-                        >
-                            {busy === 'enable' ? '…' : st.enabled ? t('Выключить обход') : t('Включить обход')}
-                        </Button>
-                    </div>
-                    {!st.enabled && (
-                        <div className="px-3 text-xs text-muted-foreground">
-                            {t('Обход на весь роутер выключен: стратегия выше не действует, а выходы обхода ниже работают своими обработчиками. «Применить» стратегию всему роутеру включит его обратно.')}
-                        </div>
-                    )}
-                    {outs.map((o) => (
-                        <button
-                            key={o.name}
-                            type="button"
-                            onClick={() => setTarget(o.name)}
-                            className={[
-                                'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm',
-                                target === o.name ? 'bg-primary/10 font-medium text-primary' : 'hover:bg-accent',
-                            ].join(' ')}
-                        >
-                            <span className="min-w-0 flex-1 truncate">
-                                {t('выход')} {o.name}
-                                {/* Не применённый выход — не поломка: его обработчик и не
-                                    должен быть запущен, пока спеку не применили. Предупреждение
-                                    оставлено тому, что применено и всё равно не поднялось. */}
-                                {!o.up && (
-                                    pending.applied && !pending.applied.outputs?.[o.name]
-                                        ? <span className="ml-2 text-xs text-muted-foreground">{t('не применён')}</span>
-                                        : <span className="ml-2 text-xs text-warning-fg">{t('обработчик не запущен')}</span>
-                                )}
-                            </span>
-                            {/* То же расхождение, что у стратегии всего роутера выше, и по
-                                той же причине: ночное обновление каталога файл ключей выхода
-                                не трогает. Отметкой рядом с именем, а не полосой: выходов
-                                бывает несколько, и полоса на каждый заслонила бы список. */}
-                            {o.drifted && (
-                                <span className="text-xs text-warning-fg">
-                                    {t('изменилась в каталоге')}
-                                </span>
-                            )}
-                            <span className="text-xs text-muted-foreground">
-                                {o.strategy || t('нет стратегии')}
-                            </span>
-                        </button>
-                    ))}
-                    {/* Завести выход — здесь же, потому что иначе «стратегия только для
-                        YouTube» остаётся недостижимой: выход есть куда применить, а завести
-                        его негде. Правило в него человек создаёт во вкладке «Правила». */}
-                    <div className="flex flex-wrap items-center gap-2 pt-2">
-                        <input
-                            value={newOut}
-                            onChange={(e) => setNewOut(e.currentTarget.value)}
-                            placeholder={t('имя нового выхода')}
-                            aria-label={t('имя нового выхода')}
-                            className="h-9 min-w-[10rem] flex-1 rounded-lg border border-border bg-background px-3 text-sm"
-                        />
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={busy !== '' || newOut.trim() === ''}
-                            onClick={() => void addOutput()}
-                        >
-                            {t('Завести выход')}
-                        </Button>
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                        {t('Выход — это то, во что ведёт правило. Заведите его здесь — он сразу появится в списке выше, — выберите ему стратегию ниже, а правило «эти домены — сюда» создайте во вкладке «Правила». Заработает после «Применить».')}
-                    </div>
+                    <p className="text-xs text-muted-foreground">
+                        {t('Ночью, вместе с обновлением списков, и только когда через роутер не идёт трафик — иначе откладывается до следующей ночи.')}
+                    </p>
                 </CardContent>
             </Card>
 
@@ -628,12 +877,10 @@ export default function Zapret() {
             {st.game && (
                 <Card>
                     <CardHeader>
-                        <CardTitle className="text-base">
-                            {t('Игровой фильтр')}
-                            <span className="ml-2 text-xs font-normal text-muted-foreground">
-                                {t('на весь роутер · игровой UDP и порты игр, как Gv в Zapret Manager')}
-                            </span>
-                        </CardTitle>
+                        <CardTitle className="text-base">{t('Игровой фильтр')}</CardTitle>
+                        <CardDescription>
+                            {t('На весь роутер: игровой UDP и порты игр, как Gv в Zapret Manager. Что подойдёт, зависит от провайдера — пробуйте по очереди прямо в игре.')}
+                        </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3 text-sm">
                         <div className="flex flex-wrap items-center gap-1.5">
@@ -660,15 +907,13 @@ export default function Zapret() {
                                     </button>
                                 )
                             })}
-                            {st.game.gv === '0' && (
-                                <span className="text-xs text-muted-foreground">
-                                    {t('сейчас — встроенный фильтр стратегии Flowseal (GvF); Gv1–Gv4 встанут вместо него')}
-                                </span>
-                            )}
                         </div>
-                        <div className="text-xs text-muted-foreground">
-                            {t('Gv1 — одна подделка на первые два пакета; Gv2–Gv4 — по десять подделок, обрыв после 2, 3 или 4 пакетов. Что подойдёт, зависит от провайдера — пробуйте по очереди прямо в игре.')}
-                        </div>
+                        <p className="text-xs text-muted-foreground">
+                            {st.game.gv === '0'
+                                ? t('сейчас — встроенный фильтр стратегии Flowseal (GvF); Gv1–Gv4 встанут вместо него.') + ' '
+                                : ''}
+                            {t('Gv1 — одна подделка на первые два пакета; Gv2–Gv4 — по десять подделок, обрыв после 2, 3 или 4 пакетов.')}
+                        </p>
                         {st.game.gv !== '' && (
                             <div className="flex flex-wrap items-center gap-3">
                                 <label className="flex items-center gap-2">
@@ -709,176 +954,13 @@ export default function Zapret() {
                                     {st.game.xtreme ? t('Выключить Xtreme') : t('Включить Xtreme')}
                                 </Button>
                                 <span className="text-xs text-warning-fg">
-                                    {t('Xtreme расширяет фильтр почти на все порты — может мешать приложениям и соединениям; только чтобы проверить игру.')}
+                                    {t('Xtreme расширяет фильтр почти на все порты — может мешать приложениям; только чтобы проверить игру.')}
                                 </span>
                             </div>
                         )}
                     </CardContent>
                 </Card>
             )}
-
-            {/* ---- список стратегий ----------------------------------------------------- */}
-            <Card>
-                <CardHeader>
-                    <CardTitle className="text-base">
-                        {t('Стратегии')}
-                        <span className="ml-2 text-xs font-normal text-muted-foreground">
-                            {target ? `${t('для выхода')} ${target}` : t('для всего роутера')}
-                        </span>
-                    </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-1">
-                    {res && res.at > 0 && (
-                        <p className="pb-1 text-xs text-muted-foreground">
-                            {t('Число — сколько целей открылось со стратегией.')}{' '}
-                            <span className="text-success">{t('Зелёное')}</span> — {t('больше, чем без обхода')},{' '}
-                            <span className="text-warning-fg">{t('жёлтое')}</span> — {t('меньше')}, {t('серое — столько же')}.{' '}
-                            {t('Нажмите на имя стратегии — покажутся её ключи и открывшиеся сайты.')}
-                        </p>
-                    )}
-                    {all.length === 0 && (
-                        <div className="py-3 text-sm text-muted-foreground">
-                            {t('Каталог пуст — обновите его.')}
-                        </div>
-                    )}
-                    {families.map((fam) => {
-                        const list = all.filter((s) => s.family === fam)
-                        const open = isOpen(fam)
-                        /* Лучшее число семейства — в заголовок: так свёрнутое семейство всё
-                           же отвечает на вопрос «стоит ли сюда заглядывать». */
-                        const best = list
-                            .map((s) => scoreOf(res, s.name, fam))
-                            .filter((x): x is NonNullable<typeof x> => !!x && x.ok >= 0)
-                            .sort((a, b) => b.ok / Math.max(1, b.total) - a.ok / Math.max(1, a.total))[0]
-                        const hasApplied = list.some((s) => s.name === applied)
-                        return (
-                            <div key={fam} className="rounded-xl border border-border">
-                                <div className="flex items-center gap-2 px-2 py-1.5">
-                                    <button
-                                        type="button"
-                                        onClick={() => toggleFam(fam)}
-                                        aria-expanded={open}
-                                        aria-label={`${open ? t('свернуть') : t('развернуть')} ${FAMILY[fam]}`}
-                                        className="flex min-w-0 flex-1 items-center gap-2 rounded-lg bg-transparent px-1 py-1 text-left text-sm hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                                    >
-                                        {open
-                                            ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                                            : <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-                                        <span className="font-medium">{FAMILY[fam]}</span>
-                                        <span className="text-xs text-muted-foreground">
-                                            {list.length}
-                                            {hasApplied ? ` · ${t('применена')} ${applied}` : ''}
-                                            {best ? ` · ${t('лучшая')} ${best.ok}/${best.total}` : ''}
-                                        </span>
-                                    </button>
-                                    {!running && (
-                                        <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            disabled={!testable}
-                                            aria-label={`${t('проверить семейство')} ${FAMILY[fam]}`}
-                                            onClick={() => void startTest(fam)}
-                                        >
-                                            <Play className="h-3.5 w-3.5" aria-hidden="true" />
-                                            {t('проверить семейство')}
-                                        </Button>
-                                    )}
-                                </div>
-                                {open && (
-                                    <div className="border-t border-border p-1">
-                                        {list.map((s) => {
-                                            const on = applied === s.name
-                                            const sc = scoreOf(res, s.name, fam)
-                                            const expanded = openRow === s.name
-                                            return (
-                                                <div key={s.name} className={on ? 'rounded-lg bg-primary/10' : ''}>
-                                                    <div className="flex items-center gap-2 px-2 py-1.5 text-sm">
-                                                        {on
-                                                            ? <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-                                                            : <span className="h-4 w-4 shrink-0" aria-hidden="true" />}
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => toggleRow(s.name)}
-                                                            aria-expanded={expanded}
-                                                            className={`flex min-w-0 flex-1 items-center gap-1 rounded bg-transparent px-1 text-left hover:underline decoration-dotted focus:outline-none focus-visible:ring-2 focus-visible:ring-primary ${on ? 'font-medium text-primary' : ''}`}
-                                                        >
-                                                            {/* Шеврон — знак, что строка раскрывается: без него никто не
-                                                                догадывался нажать на имя. */}
-                                                            {expanded
-                                                                ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-                                                                : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />}
-                                                            <span className="min-w-0 truncate">{s.name}</span>
-                                                        </button>
-                                                        {/* Число проверки стоит НАПРОТИВ стратегии, а не отдельным
-                                                            списком: вопрос человека — «какую выбрать», и ответ должен
-                                                            быть в той же строке, где кнопка выбора. -1 значит «не
-                                                            поднялась вовсе» — такой же ответ, как плохое число. */}
-                                                        <span className="w-16 shrink-0 text-right text-xs">
-                                                            {sc === undefined ? (
-                                                                <span className="text-muted-foreground">—</span>
-                                                            ) : sc.ok < 0 ? (
-                                                                <span className="text-destructive">{t('не идёт')}</span>
-                                                            ) : (
-                                                                <span
-                                                                    className={
-                                                                        sc.ok > sc.baseline
-                                                                            ? 'font-medium text-success'
-                                                                            : sc.ok < sc.baseline
-                                                                              ? 'text-warning-fg'
-                                                                              : 'text-muted-foreground'
-                                                                    }
-                                                                >
-                                                                    {sc.ok}/{sc.total}
-                                                                </span>
-                                                            )}
-                                                        </span>
-                                                        {/* Слой к выходу не применяется: у выхода
-                                                            стратегия лежит одним файлом ключей
-                                                            целиком, и «слой поверх» означал бы файл,
-                                                            собранный из двух источников. Бэкенд это
-                                                            и отвечает отказом — значит предлагать
-                                                            кнопку, которая не может сработать,
-                                                            нечестно. Слой берётся у бэкенда полем
-                                                            `layer`, а не выводится здесь из имени. */}
-                                                        {target && s.layer !== 'main' ? (
-                                                            <span className="text-xs text-muted-foreground">
-                                                                {t('только всему роутеру')}
-                                                            </span>
-                                                        ) : (
-                                                        <Button
-                                                            variant="outline"
-                                                            size="sm"
-                                                            disabled={busy !== '' || on}
-                                                            onClick={() =>
-                                                                void act(
-                                                                    `apply:${s.name}`,
-                                                                    () => rpc.zapretApply(s.name, target),
-                                                                    `${t('Применена')} ${s.name}`,
-                                                                )}
-                                                        >
-                                                            {busy === `apply:${s.name}` ? t('…') : t('Применить')}
-                                                        </Button>
-                                                        )}
-                                                    </div>
-                                                    {expanded && (
-                                                        <StrategyDetails
-                                                            opts={opts[s.name]}
-                                                            score={sc}
-                                                            testable={testable}
-                                                            running={running}
-                                                            onTest={() => void startTest(`one:${s.name}`)}
-                                                        />
-                                                    )}
-                                                </div>
-                                            )
-                                        })}
-                                    </div>
-                                )}
-                            </div>
-                        )
-                    })}
-                </CardContent>
-            </Card>
         </div>
     )
 }

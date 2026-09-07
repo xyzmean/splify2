@@ -127,6 +127,15 @@ case "$2" in
         done
         rm -rf "$tmpd"
         zp_installed || fail "пакеты не встали:${err:- неизвестно почему}"
+        # СЛУЖБА ПОСЛЕ УСТАНОВКИ ВЫКЛЮЧАЕТСЯ. Пакет zapret-openwrt приезжает с заводским
+        # NFQWS_OPT — готовой стратегией на порты 80/443 всего роутера — и его post-install
+        # запускает nfqws с ней сразу. Для нас это стратегия, которую никто не выбирал: отметки
+        # `#Имя` у неё нет, вкладка честно писала «стратегия не отмечена» — и при этом обход
+        # РАБОТАЛ, с чужими ключами, на весь трафик дома. Снято с живого роутера: сразу после
+        # установки github.com стал отвечать ERR_CONNECTION_RESET, и ожил ровно после `stop`.
+        # Выключается служба, а не стирается конфигурация: Zapret Manager видит свою как есть.
+        # «Применить» стратегию всему роутеру включит службу обратно (zapret_apply, ниже).
+        zp_disable >/dev/null 2>&1
         # curl нужен проверке стратегий, и ставится он ЗДЕСЬ, а не при нажатии «Проверить»:
         # там человек ждёт результата, а не установки пакета. Неудача не отменяет установки
         # обхода — она только лишает проверки, о чём скажет zapret_state.
@@ -509,8 +518,20 @@ case "$2" in
         # Жив ли процесс НА САМОМ ДЕЛЕ. Файл хода мог остаться от проверки, которую убили
         # (снятие питания, OOM): без этой проверки страница показывала бы «идёт» вечно и не
         # давала запустить новую.
-        start-stop-daemon -K -t -p "$ZP_PIDFILE" >/dev/null 2>&1 &&
-            json_add_boolean running 1 || json_add_boolean running 0
+        #
+        # ИЛИ ПРОВЕРКУ ГОНЯЕТ ПОДБОР. Он запускает её в переднем плане своего процесса, без
+        # pid-файла проверки (см. splify2-zapret-autoselect, шаг 1), и по одному pid-файлу
+        # она считалась не идущей: файл хода писал «15 из 58», а страница не показывала ни
+        # полосы, ни номера — только «подбираю…» (владелец: «нормального прогресс-бара со
+        # статусом нема»). Живой подбор при state=running в файле хода — та же идущая проверка.
+        if start-stop-daemon -K -t -p "$ZP_PIDFILE" >/dev/null 2>&1; then
+            json_add_boolean running 1
+        elif [ -e "$ZA_LOCK" ] && kill -0 "$(cat "$ZA_LOCK" 2>/dev/null || echo 0)" 2>/dev/null &&
+             grep -qx 'state=running' "$ZP_PROGRESS" 2>/dev/null; then
+            json_add_boolean running 1
+        else
+            json_add_boolean running 0
+        fi
         json_add_int results_at "$(sed -n 's/.*"at":\([0-9]*\).*/\1/p' "$ZP_RESULTS" 2>/dev/null | head -1 || echo 0)"
         json_dump
         ;;
@@ -582,6 +603,17 @@ case "$2" in
             [ -e "${ZA_LOCK:-/var/lock/splify2-zapret-autoselect.lock}" ] &&
             kill -0 "$(cat "${ZA_LOCK:-/var/lock/splify2-zapret-autoselect.lock}" 2>/dev/null || echo 0)" 2>/dev/null &&
             echo 1 || echo 0)"
+        # Где подбор сейчас — из его файла хода: testing (гоняет проверку — её собственный
+        # ход отдаёт zapret_test), ranking, done, error, skipped. Страница по этому слову
+        # решает, что писать под кнопкой: полосу проверки или «ранжирую…».
+        if [ -s "${ZA_PROGRESS:-/var/run/splify2-zapret-autoselect.progress}" ]; then
+            while IFS='=' read -r _ap_k _ap_v; do
+                case "$_ap_k" in
+                    state) json_add_string state "$_ap_v" ;;
+                    note)  json_add_string state_note "$_ap_v" ;;
+                esac
+            done < "${ZA_PROGRESS:-/var/run/splify2-zapret-autoselect.progress}"
+        fi
         json_dump
         ;;
 
