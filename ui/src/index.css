@@ -284,6 +284,26 @@
    *  Значения — из дизайн-пака: вердикт 26/600, заголовок раздела 22/600, заголовок
    *  карточки 15/600. Третий здесь для заголовков ВНЕ карточки (её собственный CardTitle —
    *  div, и его утилиты работают). */
+  /* ЗАГОЛОВКИ — БЕЗ ОФОРМЛЕНИЯ ТЕМЫ. Argon рисует у `h1` рамку снизу и отступ под ней
+   * (`padding-bottom: .5rem; border-bottom: thin solid`), а `h2` и `h3` превращает в плашки с
+   * фоном, тенью и отступами — так у неё оформлены заголовки страниц LuCI. Наши заголовки
+   * стоят на тех же тегах, и под вердиктом «Маршрутизация работает» появлялась полоска (снято
+   * владельцем в Argon). Сброс здесь, а не в утилитах: у темы правило по тегу, и утилита
+   * `border-0` его перекрывает, а вот `padding`/`background`/`box-shadow` в разметке никто не
+   * просил, и перекрывать их нечем. */
+  .splify-react-root h1,
+  .splify-react-root h2,
+  .splify-react-root h3,
+  .splify-react-root h4 {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    width: auto;
+    color: inherit;
+  }
   .splify-react-root .sp-verdict {
     font-size: 22px;
     font-weight: 600;
