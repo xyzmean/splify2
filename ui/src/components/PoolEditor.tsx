@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowDown, ArrowUp, Check, GripVertical, Search, Trash2, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Check, Gauge, GripVertical, LoaderCircle, Search, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { notify } from '@/lib/notify'
@@ -9,6 +9,7 @@ import Flag from '@/components/Flag'
 import { country } from '@/lib/geo'
 import { ccFromName, plainName } from '@/lib/nodename'
 import { poolsSupported } from '@/lib/engine'
+import { latencyTone, probeKey, useNodeProbe } from '@/lib/probe'
 import {
     devList, isPart, ON_FAIL_TEXT, type OnFail, type Output, type Spec, type VlessNode,
 } from '@/lib/model'
@@ -159,6 +160,20 @@ export default function PoolEditor({
     /** Узлы каждой подписки глазами движка. `undefined` — ещё не спрашивали, `null` — спросить
      *  не удалось (подписка не скачана или бэкенд постарше без выхода на ней). */
     const [nodesBySub, setNodesBySub] = useState<Record<string, VlessNode[] | null>>({})
+    /** Проверка узлов — здесь, где их выбирают: см. lib/probe.ts. Спрашивается у подписки
+     *  её файлом; движок или бэкенд постарше пути не знают — тогда через любой выход, уже
+     *  стоящий на этой подписке (тот же запасной ход, что у списка узлов ниже). */
+    const probe = useNodeProbe(async (sub, index) => {
+        const asker = Object.entries(spec.outputs).find(
+            ([, o]) => o.kind === 'vless' && o.sub_file === sub,
+        )?.[0]
+        try {
+            return await rpc.vlessProbeOfSub(sub, index)
+        } catch (e) {
+            if (!asker) throw e
+            return rpc.vlessProbe(asker, index)
+        }
+    })
     /** Какая строка сейчас тащится мышью — индекс в `rows`. */
     const [drag, setDrag] = useState<number | null>(null)
     const [over, setOver] = useState<number | null>(null)
@@ -511,7 +526,15 @@ export default function PoolEditor({
                             const nodes = nodesBySub[s.path]
                             const any = has({ kind: 'any', sub: s.path })
                             /* Что показывать из локаций: при поиске — совпавшие; иначе выбранные
-                               и первые FOLD, пока подписку не развернули целиком. */
+                               и первые FOLD, пока подписку не развернули целиком.
+
+                               В ПОРЯДКЕ ПОДПИСКИ, а не «выбранные наверх». Прежде отмеченная
+                               строка переезжала в начало блока, и все строки над ней сдвигались
+                               на одну вниз — второй щелчок по тому же месту попадал в другую
+                               локацию, а щелчок по верху блока снимал только что поставленную
+                               отметку. Владелец описал это как «нельзя набрать несколько
+                               локаций одной подписки». Строки не двигаются: выбранные остаются
+                               где были, свёртка лишь прячет невыбранные после лимита. */
                             const q = query.trim().toLowerCase()
                             const all = nodes || []
                             const hit = (nd: VlessNode) => {
@@ -521,14 +544,12 @@ export default function PoolEditor({
                             const picked = new Set(
                                 rows.filter((r) => r.kind === 'node' && r.sub === s.path).map((r) => (r as { idx: number }).idx),
                             )
+                            let spare = Math.max(0, FOLD - picked.size)
                             const shown = q
                                 ? all.filter(hit)
                                 : openSubs[s.path]
                                   ? all
-                                  : [
-                                        ...all.filter((nd) => picked.has(nd.index)),
-                                        ...all.filter((nd) => !picked.has(nd.index)).slice(0, Math.max(0, FOLD - picked.size)),
-                                    ]
+                                  : all.filter((nd) => picked.has(nd.index) || spare-- > 0)
                             const folded = !q && !openSubs[s.path] && shown.length < all.length
                             if (q && !shown.length && !all.length) return null
                             return (
@@ -541,9 +562,27 @@ export default function PoolEditor({
                                             <span className="text-[11px] text-warning-fg">не скачана</span>
                                         )}
                                         {s.present && nodes && (
-                                            <span className="text-[11px] text-muted-foreground">
-                                                локаций: {nodes.length}
-                                                {picked.size ? ` · взято: ${picked.size}` : any ? ' · взята любая' : ''}
+                                            <span className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                                                <span>
+                                                    локаций: {nodes.length}
+                                                    {picked.size ? ` · взято: ${picked.size}` : any ? ' · взята любая' : ''}
+                                                </span>
+                                                {/* Проверка всех узлов подписки — рядом с их числом:
+                                                    вопрос «какие из них живые» задают до выбора, а
+                                                    не после. Повторное нажатие останавливает. */}
+                                                {nodes.length > 0 && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void probe.probeAll(s.path, nodes.map((n) => n.index))}
+                                                        disabled={!!probe.batchSub && probe.batchSub !== s.path}
+                                                        className="flex items-center gap-1 bg-transparent p-0 text-primary underline decoration-dotted disabled:opacity-50"
+                                                    >
+                                                        {probe.batchSub === s.path
+                                                            ? <LoaderCircle className="h-3 w-3 animate-spin" aria-hidden="true" />
+                                                            : <Gauge className="h-3 w-3" aria-hidden="true" />}
+                                                        {probe.batchSub === s.path ? `остановить (осталось ${probe.left})` : 'проверить все'}
+                                                    </button>
+                                                )}
                                             </span>
                                         )}
                                     </div>
@@ -576,8 +615,13 @@ export default function PoolEditor({
                                                «Германия №2 … Германия» повторяло слово дважды. */
                                             const cName = country(cc)
                                             const hint = cName && !plainName(nd.name).toLowerCase().includes(cName.toLowerCase()) ? cName : undefined
+                                            const key = probeKey(s.path, nd.index)
+                                            const ph = probe.phase[key]
+                                            const err = probe.fails[key]
+                                            const pr = probe.probes[key]
+                                            const label = plainName(nd.name) || `узел ${nd.index + 1}`
                                             return (
-                                                <li key={nd.index}>
+                                                <li key={nd.index} className="flex items-center gap-1">
                                                     <Choice
                                                         on={on}
                                                         /* Квадрат — набор, круг — одно из. Движок
@@ -588,9 +632,44 @@ export default function PoolEditor({
                                                         round={!pools}
                                                         onClick={() => toggleNode(s.path, nd.index)}
                                                         flag={cc}
-                                                        title={plainName(nd.name) || `узел ${nd.index + 1}`}
+                                                        title={label}
                                                         hint={hint}
+                                                        /* Замер — в строке узла, напротив имени: вопрос
+                                                           человека «какую взять», и ответ обязан стоять
+                                                           там же, где отметка. Пока строка в работе,
+                                                           показывается состояние, а не прошлый замер:
+                                                           старое «90 мс» рядом с идущей проверкой
+                                                           читается как её результат. */
+                                                        trail={
+                                                            ph === 'queued' ? <span className="text-muted-foreground">в очереди</span>
+                                                            : ph === 'running' ? <span className="flex items-center gap-1 text-muted-foreground"><LoaderCircle className="h-3 w-3 animate-spin" aria-hidden="true" />проверяю…</span>
+                                                            : err ? <span className="text-destructive" title={err}>не проверился</span>
+                                                            : pr ? (pr.ok
+                                                                ? <span className={latencyTone(pr.ttfb_ms) === 'good' ? 'text-success' : latencyTone(pr.ttfb_ms) === 'ok' ? 'text-muted-foreground' : 'text-warning-fg'}>
+                                                                    {pr.ttfb_ms} мс
+                                                                  </span>
+                                                                /* Причину показываем целиком: «не работает» без
+                                                                   причины заставляет угадывать между ключом,
+                                                                   транспортом и мёртвым сервером — а движок это
+                                                                   различает. */
+                                                                : <span className="text-destructive" title={pr.why}>{pr.why || 'не отвечает'}</span>)
+                                                            : undefined
+                                                        }
                                                     />
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        className="h-7 w-7 shrink-0 p-0"
+                                                        disabled={!!ph}
+                                                        /* Имя узла в подписи не повторяется: строка рядом уже
+                                                           названа им, а второй элемент с тем же именем путал
+                                                           бы и читалку, и стенды. */
+                                                        aria-label="проверить отклик"
+                                                        title={`проверить отклик: ${label}`}
+                                                        onClick={() => void probe.probeOne(s.path, nd.index)}
+                                                    >
+                                                        <Gauge className="h-3.5 w-3.5" aria-hidden="true" />
+                                                    </Button>
                                                 </li>
                                             )
                                         })}
@@ -700,7 +779,11 @@ export default function PoolEditor({
                                                 }}
                                                 onDragEnd={() => { setDrag(null); setOver(null) }}
                                                 className={[
-                                                    'flex items-center gap-2 rounded-xl border p-2 transition-colors',
+                                                    /* min-w-0: строка обязана ужиматься вместе с карточкой, иначе
+                                                       кнопки справа уезжают за её край и режутся (владелец: «сами
+                                                       пилюли обрезаются»). Ужимаются название и подпись подписки;
+                                                       кнопки — нет. */
+                                                    'flex min-w-0 items-center gap-2 rounded-xl border p-2 transition-colors',
                                                     over === i && drag !== null && drag !== i
                                                         ? 'border-primary bg-primary/10'
                                                         : r.kind === 'dev'
@@ -724,7 +807,7 @@ export default function PoolEditor({
                                                 {r.kind === 'node' && <Flag cc={cc} />}
                                                 <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{label}</span>
                                                 {hint && (
-                                                    <span className="hidden max-w-[9rem] shrink-0 truncate text-[11px] text-muted-foreground sm:inline">
+                                                    <span className="hidden min-w-0 max-w-[9rem] truncate text-[11px] text-muted-foreground sm:inline">
                                                         {hint}
                                                     </span>
                                                 )}
@@ -786,7 +869,7 @@ export default function PoolEditor({
 
 /** Строка выбора: квадратная отметка — набор, круглая (`round`) — одно из нескольких. */
 function Choice({
-    on, onClick, disabled, title, hint, flag, dot, round,
+    on, onClick, disabled, title, hint, flag, dot, round, trail,
 }: {
     on: boolean
     onClick: () => void
@@ -797,6 +880,9 @@ function Choice({
     /** Точка состояния устройства: поднято или нет. */
     dot?: boolean
     round?: boolean
+    /** Хвост строки — замер узла или его состояние. Виден и на узком экране: ради этого
+     *  числа строку и проверяли. */
+    trail?: React.ReactNode
 }) {
     return (
         <button
@@ -835,6 +921,7 @@ function Choice({
             {/* Подсказка справа на узком экране прячется: она отъедала место у названия, и
                 «любая рабочая» обрезалось до «любая р…». */}
             {hint && <span className="hidden shrink-0 text-[11px] text-muted-foreground sm:inline">{hint}</span>}
+            {trail && <span className="shrink-0 text-[11px] tabular-nums">{trail}</span>}
         </button>
     )
 }

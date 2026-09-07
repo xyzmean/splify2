@@ -9,6 +9,7 @@ import {
     normalizeSpec,
     toCatalog,
     type AllowDomains,
+    type Narrow,
     type ClientNet,
     type RawManifest,
     type Spec,
@@ -209,7 +210,9 @@ export const rpc = {
          *  закрывают githubusercontent.com, и бэкенд достаёт список с хостов самого
          *  GitHub или через туннель роутера (splify2#15). Показать это надо: обход идёт
          *  дольше прямого пути, и без строки обновление выглядит как беспричинная пауза. */
-        { ok: boolean; count?: number; error?: string; via?: string }
+        /** `narrow` — у подсетей второго издателя, суженных протоколом и портами (Discord):
+         *  правило получает их сразу, в момент выбора сервиса (см. Channel.narrow). */
+        { ok: boolean; count?: number; error?: string; via?: string; narrow?: Narrow }
     >('list_fetch', ['id', 'kind']),
 
     /** Каталог ВТОРОГО издателя (itdoginfo/allow-domains) и то, что из него уже лежит
@@ -797,6 +800,13 @@ export const rpc = {
         'vless_probe',
         ['output', 'node'],
     ),
+    /** Та же проверка — у ПОДПИСКИ, путём к её файлу, как vlessNodesOfSub: узел выбирают там,
+     *  где выход собирают, и знать «какой из них живой» надо до того, как выход заведён.
+     *  Бэкенд постарше параметра не знает и отвечает «не указан выход». */
+    vlessProbeOfSub: declare<{ output?: string; results?: VlessProbe[]; working?: number; error?: string }>(
+        'vless_probe',
+        ['sub', 'node'],
+    ),
 
     /** ---- DNS over HTTPS ------------------------------------------------------------
      *
@@ -812,7 +822,8 @@ export const rpc = {
          *  стоит чужая ссылка, которой в каталоге нет (urls непуст). */
         active: string
         urls: string[]
-        providers: { id: string; title: string }[]
+        /** Каталог и свои резолверы одним списком; у своих `custom` — их можно удалить. */
+        providers: { id: string; title: string; custom?: boolean }[]
         via_tunnel: boolean
         /** Через какой выход пойдёт DoH. Выбора здесь нет: это первый поднятый выход со
          *  своей меткой, тот же, что у фикса Zapret Manager. */
@@ -829,6 +840,14 @@ export const rpc = {
         'doh_set', ['provider'],
     ),
     dohOff: declare<{ ok: boolean; error?: string }>('doh_off'),
+    /** Свой резолвер: ссылка https://…/dns-query, название по желанию. Добавленный сразу
+     *  выбирается; `warn` — записан, но включить не удалось (причина — человеку). */
+    dohCustomAdd: declare<{ ok: boolean; error?: string; id?: string; warn?: string }>(
+        'doh_custom_add', ['url', 'title'],
+    ),
+    /** Удалить свой резолвер. Удалённый работающий заменяется пунктом по умолчанию, а не
+     *  выключением: выключение — отдельное решение (dohOff). */
+    dohCustomDel: declare<{ ok: boolean; error?: string }>('doh_custom_del', ['id']),
     dohTunnelSet: declare<{ ok: boolean; error?: string; on?: boolean; out?: string }>(
         'doh_tunnel_set', ['on'],
     ),
@@ -959,6 +978,10 @@ export const rpc = {
         /** По убыванию доли удач; при равной доле выше та, у которой меньше ключей nfqws. */
         rank: { name: string; ok: number; total: number; keys: number; set: ZapretSet }[]
         running: boolean
+        /** Где подбор: testing — гоняет проверку (её ход отдаёт zapret_test), ranking,
+         *  done, error, skipped. Нет — бэкенд постарше или подбор не запускался. */
+        state?: 'testing' | 'ranking' | 'done' | 'error' | 'skipped' | string
+        state_note?: string
     }>('zapret_autoselect'),
 
     /** Число дней между подборами; 0 выключает, больше 90 — отказ. */
