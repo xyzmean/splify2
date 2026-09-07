@@ -50,6 +50,8 @@ case "$2" in
                 json_add_object
                 json_add_string id "$pid"
                 json_add_string title "$ptitle"
+                # Свой — тот, что можно удалить; у каталожных этой кнопки нет.
+                case "$pid" in my_*) json_add_boolean custom 1 ;; esac
                 json_close_object
             fi
             IFS='
@@ -112,6 +114,43 @@ case "$2" in
         doh_installed || fail "https-dns-proxy не установлен"
         doh_off
         doh_rules_sync
+        json_init; json_add_boolean ok 1; json_dump
+        ;;
+
+    doh_custom_add)
+        need_doh
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var url url
+        json_get_var title title
+        json_get_var bootstrap bootstrap
+        [ -n "$url" ] || fail "нужна ссылка резолвера"
+        case "$url" in https://?*) ;; *) fail "ссылка резолвера начинается с https://" ;; esac
+        _ca_id="$(doh_custom_add "$url" "${title:-}" "${bootstrap:-}")" ||
+            fail "резолвер не записался: в ссылке или названии недопустимые знаки, либо кончилось место"
+        # Добавленное сразу и выбирается: ради этого его и вписывали. Отказ выбора не отменяет
+        # записи — резолвер остаётся в списке, а причина уходит человеку.
+        if doh_installed; then
+            doh_write "$_ca_id" && doh_apply && doh_rules_sync ||
+                { json_init; json_add_boolean ok 1; json_add_string id "$_ca_id"
+                  json_add_string warn "резолвер добавлен, но включить его не удалось"; json_dump; exit 0; }
+        fi
+        json_init; json_add_boolean ok 1; json_add_string id "$_ca_id"; json_dump
+        ;;
+
+    doh_custom_del)
+        need_doh
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var id id
+        case "$id" in my_?*) ;; *) fail "удалять можно только свои резолверы" ;; esac
+        _cd_active="$(doh_active 2>/dev/null)"
+        doh_custom_del "$id" || fail "нет такого резолвера"
+        # Удалили тот, что работает, — DoH не остаётся с пустотой: возвращается пункт по
+        # умолчанию, а не выключается молча. Выключение — отдельное решение (doh_off).
+        if [ "$_cd_active" = "$id" ] && doh_installed; then
+            doh_write default && doh_apply && doh_rules_sync
+        fi
         json_init; json_add_boolean ok 1; json_dump
         ;;
 

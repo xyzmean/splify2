@@ -121,3 +121,60 @@ describe('вкладка DoH', () => {
             expect(screen.getByText(/только самого роутера/)).toBeInTheDocument())
     })
 })
+
+// Переключатель «Системный DNS / DoH» и свои резолверы (владелец: «в идеале переключатель
+// dnsmasq/наш DoH + возможность добавлять свои»).
+describe('вкладка DoH: режим и свои резолверы', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks()
+        document.body.innerHTML = ''
+    })
+
+    it('«Системный DNS» выключает DoH, «DoH» включает выбранный или пункт по умолчанию', async () => {
+        vi.spyOn(rpc, 'dohState')
+            .mockResolvedValueOnce(base)
+            .mockResolvedValue({ ...base, running: false, active: '', urls: [] })
+        const off = vi.spyOn(rpc, 'dohOff').mockResolvedValue({ ok: true })
+        const set = vi.spyOn(rpc, 'dohSet').mockResolvedValue({ ok: true, active: 'default' })
+        render(<Doh live={live} />)
+        const sys = await screen.findByRole('radio', { name: 'Системный DNS' })
+        expect(screen.getByRole('radio', { name: 'DoH' }).getAttribute('aria-checked')).toBe('true')
+        fireEvent.click(sys)
+        await waitFor(() => expect(off).toHaveBeenCalled())
+        await waitFor(() => expect(screen.getByRole('radio', { name: 'Системный DNS' }).getAttribute('aria-checked')).toBe('true'))
+        fireEvent.click(screen.getByRole('radio', { name: 'DoH' }))
+        // Выбранного нет — включается «по умолчанию», а не пустота.
+        await waitFor(() => expect(set).toHaveBeenCalledWith('default'))
+    })
+
+    it('свой резолвер добавляется ссылкой и сразу включается; удалить можно только свой', async () => {
+        const custom = { id: 'my_dns_example_com', title: 'Мой', custom: true }
+        vi.spyOn(rpc, 'dohState')
+            .mockResolvedValueOnce(base)
+            .mockResolvedValue({ ...base, active: custom.id, providers: [...base.providers, custom] })
+        const add = vi.spyOn(rpc, 'dohCustomAdd').mockResolvedValue({ ok: true, id: custom.id })
+        const del = vi.spyOn(rpc, 'dohCustomDel').mockResolvedValue({ ok: true })
+        render(<Doh live={live} />)
+        fireEvent.click(await screen.findByRole('button', { name: /свой резолвер/ }))
+        fireEvent.input(screen.getByLabelText('ссылка резолвера'), { target: { value: 'https://dns.example.com/dns-query' } })
+        fireEvent.input(screen.getByLabelText('название резолвера'), { target: { value: 'Мой' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Добавить' }))
+        await waitFor(() => expect(add).toHaveBeenCalledWith('https://dns.example.com/dns-query', 'Мой'))
+        await waitFor(() => expect(screen.getByText('Мой')).toBeInTheDocument())
+        // У каталожных корзины нет — только у своего.
+        expect(screen.queryByRole('button', { name: 'удалить Cloudflare' })).toBeNull()
+        fireEvent.click(screen.getByRole('button', { name: 'удалить Мой' }))
+        await waitFor(() => expect(del).toHaveBeenCalledWith(custom.id))
+    })
+
+    it('ссылка не https — не отправляется', async () => {
+        vi.spyOn(rpc, 'dohState').mockResolvedValue(base)
+        const add = vi.spyOn(rpc, 'dohCustomAdd').mockResolvedValue({ ok: true })
+        render(<Doh live={live} />)
+        fireEvent.click(await screen.findByRole('button', { name: /свой резолвер/ }))
+        fireEvent.input(screen.getByLabelText('ссылка резолвера'), { target: { value: 'http://dns.example.com/dns-query' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Добавить' }))
+        await waitFor(() => expect(screen.getByText(/начинается с https/)).toBeInTheDocument())
+        expect(add).not.toHaveBeenCalled()
+    })
+})

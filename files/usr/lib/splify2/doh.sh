@@ -16,6 +16,10 @@
 DOH_CONF=${DOH_CONF:-/etc/config/https-dns-proxy}
 DOH_INIT=${DOH_INIT:-/etc/init.d/https-dns-proxy}
 DOH_LIST=${DOH_LIST:-/usr/share/splify2/doh-providers.conf}
+# Свои резолверы человека — тем же форматом, что каталог, но в /etc: каталог приезжает с
+# пакетом и переписывается обновлением, а своё должно пережить и обновление, и прошивку
+# (keep.d). id у своих начинается с `my_` — так их отличают и список, и удаление.
+DOH_CUSTOM=${DOH_CUSTOM:-/etc/splify2/doh-custom.conf}
 DOH_STEER=${DOH_STEER:-/usr/sbin/steer}
 DOH_SPEC=${DOH_SPEC:-/etc/steer/spec.json}
 # С какого порта раздавать резолверам listen_port. 5053 — то же, что у менеджера и у
@@ -45,10 +49,43 @@ doh_enabled()   {
 }
 
 # ---- каталог ------------------------------------------------------------------------
-# Строки каталога без комментариев и пустых.
+# Строки каталога без комментариев и пустых — сначала общий каталог, за ним свои резолверы.
+# Одним перечнем нарочно: всё, что ниже (выбор, активный, запись конфигурации), знает один
+# источник строк и не различает, откуда резолвер, — различает только список на странице.
 doh_providers() {
-    [ -s "$DOH_LIST" ] || return 1
-    grep -v '^[[:space:]]*#' "$DOH_LIST" | grep '|'
+    [ -s "$DOH_LIST" ] || [ -s "$DOH_CUSTOM" ] || return 1
+    { [ -s "$DOH_LIST" ] && cat "$DOH_LIST"; [ -s "$DOH_CUSTOM" ] && cat "$DOH_CUSTOM"; } |
+        grep -v '^[[:space:]]*#' | grep '|'
+}
+
+# ---- свои резолверы -----------------------------------------------------------------
+# Владелец: «в идеале переключатель dnsmasq/наш DoH + возможность добавлять свои». Свой
+# резолвер — строка того же формата, что у каталога; название необязательно (тогда — хост
+# из ссылки). Ссылка обязана быть https: DoH по http — не DoH, и https-dns-proxy её отвергнет
+# уже после того, как мы переписали конфигурацию.
+doh_custom_id() {  # ССЫЛКА → my_<хост_с_подчёркиваниями>
+    printf 'my_%s' "$(printf '%s' "$1" | sed -e 's#^https://##' -e 's#/.*$##' -e 's/[^A-Za-z0-9]/_/g' | cut -c1-40)"
+}
+doh_custom_add() {  # ССЫЛКА [НАЗВАНИЕ] [BOOTSTRAP]; печатает id
+    case "${1:-}" in
+        https://?*) ;;
+        *) return 1 ;;
+    esac
+    case "$1${2:-}${3:-}" in *'|'*|*"'"*) return 1 ;; esac
+    _dc_id="$(doh_custom_id "$1")"
+    _dc_title="${2:-${1#https://}}"; _dc_title="${_dc_title%%/*}"
+    mkdir -p "$(dirname "$DOH_CUSTOM")" 2>/dev/null || return 1
+    # Повтор по ссылке — замена строки, а не вторая: два пункта с одной ссылкой были бы
+    # неразличимы и в списке, и для doh_active.
+    { [ -s "$DOH_CUSTOM" ] && awk -F'|' -v id="$_dc_id" '$1 != id' "$DOH_CUSTOM"
+      printf '%s|%s|%s|%s\n' "$_dc_id" "$_dc_title" "$1" "${3:-}"
+    } > "$DOH_CUSTOM.tmp" && mv "$DOH_CUSTOM.tmp" "$DOH_CUSTOM" || return 1
+    printf '%s' "$_dc_id"
+}
+doh_custom_del() {  # ID
+    case "${1:-}" in my_?*) ;; *) return 1 ;; esac
+    [ -s "$DOH_CUSTOM" ] || return 1
+    awk -F'|' -v id="$1" '$1 != id' "$DOH_CUSTOM" > "$DOH_CUSTOM.tmp" && mv "$DOH_CUSTOM.tmp" "$DOH_CUSTOM"
 }
 
 # Пункты списка: id и название, по одному на пункт. Несколько строк с одним id — это один

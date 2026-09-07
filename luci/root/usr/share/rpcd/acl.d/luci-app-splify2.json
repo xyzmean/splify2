@@ -80,6 +80,8 @@
           "xsteer_link_put",
           "doh_set",
           "doh_off",
+          "doh_custom_add",
+          "doh_custom_del",
           "doh_tunnel_set",
           "zapret_install",
           "zapret_remove",

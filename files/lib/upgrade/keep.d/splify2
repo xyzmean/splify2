@@ -1,2 +1,3 @@
 /etc/config/splify2
 /etc/splify2/fw-owned
+/etc/splify2/doh-custom.conf
