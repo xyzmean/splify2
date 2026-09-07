@@ -147,6 +147,15 @@ describe('автоподбор стратегии обхода', () => {
         expect(b.className).toMatch(/bg-primary/)
     })
 
+    it('отложенный подбор назван с причиной, а не молчит', async () => {
+        // Кнопку нажали, а подбор тут же вышел: через роутер шёл трафик. Прежде страница
+        // показывала прежний приговор и ничего больше (владелец: «подбор вообще ничего не
+        // отдаёт»). Причина приезжает из файла хода подбора.
+        mockAll({ state: 'skipped', state_note: 'идёт трафик' } as never)
+        render(<Zapret />)
+        await waitFor(() => expect(screen.getByText(/Подбор отложен: идёт трафик/)).toBeInTheDocument())
+    })
+
     it('без curl подбор не предлагается: мерить нечем', async () => {
         vi.spyOn(rpc, 'zapretState').mockResolvedValue({ ...state, curl: false })
         vi.spyOn(rpc, 'zapretStrategies').mockResolvedValue(cat)

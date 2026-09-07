@@ -558,7 +558,9 @@ case "$2" in
         # каталога результатов на каждое открытие вкладки.
         json_init
         _as_days="$(uci -q get splify2.main.zapret_autoselect 2>/dev/null || true)"
-        case "${_as_days:-0}" in ''|*[!0-9]*) _as_days=0 ;; esac
+        # Пусто — тоже ноль: прежняя проверка подставляла ноль только в сравнение, а переменную
+        # оставляла пустой, и `[ "" -gt 0 ]` ниже ругался «out of range» в stderr каждого вызова.
+        case "$_as_days" in ''|*[!0-9]*) _as_days=0 ;; esac
         json_add_int every_days "$_as_days"
         json_add_boolean on "$([ "$_as_days" -gt 0 ] && echo 1 || echo 0)"
         # Запись о последнем применении. Пустая запись — законное состояние «ни разу не
@@ -607,7 +609,10 @@ case "$2" in
         # ход отдаёт zapret_test), ranking, done, error, skipped. Страница по этому слову
         # решает, что писать под кнопкой: полосу проверки или «ранжирую…».
         if [ -s "${ZA_PROGRESS:-/var/run/splify2-zapret-autoselect.progress}" ]; then
-            while IFS='=' read -r _ap_k _ap_v; do
+            # `|| [ -n "$_ap_k" ]` — последняя строка без перевода строки тоже читается: read
+            # возвращает отказ на ней, хотя переменные заполнил, и пояснение «идёт трафик»
+            # терялось ровно тогда, когда оно и нужно (подбор отложен — а страница молчит).
+            while IFS='=' read -r _ap_k _ap_v || [ -n "$_ap_k" ]; do
                 case "$_ap_k" in
                     state) json_add_string state "$_ap_v" ;;
                     note)  json_add_string state_note "$_ap_v" ;;

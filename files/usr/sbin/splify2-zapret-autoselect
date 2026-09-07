@@ -68,8 +68,12 @@ while [ $# -gt 0 ]; do
 done
 
 progress() {  # СОСТОЯНИЕ [ПОЯСНЕНИЕ]
-    printf 'state=%s\nat=%s\nscope=%s\n%s' "$1" "$(date +%s)" "$scope" \
-        "${2:+note=$2$(printf '\n')}" > "$ZA_PROGRESS" 2>/dev/null
+    # Каждая строка — с переводом строки, и пояснение тоже: подстановка `$(printf '\n')`
+    # перевод строки отрезала, и читатель файла (`while read`) терял последнюю строку.
+    {
+        printf 'state=%s\nat=%s\nscope=%s\n' "$1" "$(date +%s)" "$scope"
+        [ -n "${2:-}" ] && printf 'note=%s\n' "$2"
+    } > "$ZA_PROGRESS" 2>/dev/null
     return 0
 }
 
