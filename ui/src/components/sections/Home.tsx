@@ -599,7 +599,7 @@ function OutputsColumn({
      * разъезжают всё, что под ними, тем заметнее, чем подписок больше. Запомнены только
      * имена и пути; числа каждая подписка помнит сама (см. lib/subs.ts). */
     const [subs, setSubs] = useState<
-        { name: string; title?: string; kind?: string; path: string; quota?: SubQuota }[] | null
+        { name: string; title?: string; kind?: string; path: string; quota?: SubQuota; link?: string }[] | null
     >(() => subsRemembered())
     useEffect(() => {
         let stop = false

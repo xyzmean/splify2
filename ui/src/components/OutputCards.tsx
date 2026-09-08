@@ -73,7 +73,7 @@ export function SubBlock({ outs = [], sub }: {
     outs?: OutRef[]
     /** Какая это подписка. Нет — единственная, та, что лежит на своём месте: так отвечает
      *  бэкенд постарше, который про несколько подписок не знает. */
-    sub?: { name: string; title?: string; kind?: string; quota?: SubQuota }
+    sub?: { name: string; title?: string; kind?: string; quota?: SubQuota; link?: string }
 }) {
     /** Ключ памяти У КАЖДОЙ ПОДПИСКИ СВОЙ.
      *
@@ -176,7 +176,27 @@ export function SubBlock({ outs = [], sub }: {
             {/* Строка переносится: «обновлено 12 мин назад» плюс кнопка не влезают рядом с
                 заголовком в 390 пикселях, и кнопка уезжала за край карточки. */}
             <CardHeader className="flex-row flex-wrap items-baseline justify-between gap-x-2 gap-y-1 space-y-0">
-                <CardTitle>{sub?.title || (sub && sub.name !== 'main' ? sub.name : 'Подписка')}</CardTitle>
+                {/* Название опознанного источника ведёт к продавцу. Ссылка приходит полем
+                    `link` и опознаётся бэкендом (sub_brand в m-sub.sh) — здесь она только
+                    рисуется; второй признак того же источника в интерфейсе разошёлся бы с
+                    первым молча.
+
+                    Именно ЗДЕСЬ, на карточке выхода, она и нужна: остаток трафика и срок
+                    человек смотрит на обзоре, и к продавцу идёт отсюда же — за продлением. */}
+                <CardTitle>
+                    {sub?.link ? (
+                        <a
+                            href={sub.link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary underline decoration-dotted underline-offset-2"
+                        >
+                            {sub.title || sub.name}
+                        </a>
+                    ) : (
+                        sub?.title || (sub && sub.name !== 'main' ? sub.name : 'Подписка')
+                    )}
+                </CardTitle>
                 <div className="flex items-baseline gap-2 text-xs text-muted-foreground">
                     {v?.age && <span>обновлено {v.age}</span>}
                     {/* Кнопка есть и когда числа свежие: «обновлено 3 мин назад» — это повод

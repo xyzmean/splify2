@@ -28,6 +28,11 @@ interface Sub {
     bytes?: number
     mtime?: number
     used?: number
+    /** Сколько ЛОКАЦИЙ подписки взято выходами: выход бывает пулом и берёт несколько. */
+    used_nodes?: number
+    /** Ссылка на продавца у опознанного источника. Опознаёт бэкенд (sub_brand в m-sub.sh),
+     *  здесь она только рисуется. */
+    link?: string
 }
 
 export default function VlessScreen() {
@@ -156,7 +161,32 @@ export default function VlessScreen() {
             {subs.map((s) => (
                 <Card key={s.name}>
                     <CardHeader className="flex-row flex-wrap items-baseline justify-between gap-x-2 gap-y-1 space-y-0">
-                        <CardTitle>{s.title || s.name}</CardTitle>
+                        {/* Название опознанного источника ведёт к самому продавцу: из панели
+                            человеку к нему всё равно идти — за продлением, за вопросом, —
+                            и пусть идёт по нажатию, а не поиском в переписке.
+
+                            Признак приходит с бэкенда полем `link` и разбирается ТАМ (sub_brand
+                            в m-sub.sh). Здесь ссылка только рисуется: опознавать источник второй
+                            раз по адресу подписки значило бы завести второй признак того же
+                            самого, и однажды они разойдутся — молча, потому что и название, и
+                            ссылка по отдельности выглядят исправными.
+
+                            rel обязателен: target=_blank без noopener отдаёт открытой странице
+                            доступ к window.opener, а ведёт ссылка наружу. */}
+                        <CardTitle>
+                            {s.link ? (
+                                <a
+                                    href={s.link}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-primary underline decoration-dotted underline-offset-2"
+                                >
+                                    {s.title || s.name}
+                                </a>
+                            ) : (
+                                (s.title || s.name)
+                            )}
+                        </CardTitle>
                         <div className="flex items-center gap-3 text-xs">
                             {s.kind === 'url' && (
                                 <button
@@ -197,7 +227,18 @@ export default function VlessScreen() {
                             ) : (
                                 <span className="text-warning-fg">не скачана</span>
                             )}
-                            <span>выходов: {s.used ?? 0}</span>
+                            {/* Число говорит, ЧЕМ ЗАНЯТА подписка, а не сколько в ней
+                                узлов, и подпись обязана это называть. «выходов: 0» читалось
+                                как «подписка ничего не даёт», хотя означало «её пока никто
+                                не использует» — а это разные новости. Рядом стоит число
+                                локаций: выход бывает пулом и берёт из подписки несколько
+                                строк, и без него «выходов: 1» спорило с пулом, где человек
+                                только что выбрал две. */}
+                            <span>
+                                {s.used
+                                    ? `взята выходами: ${s.used}${s.used_nodes ? ` · локаций: ${s.used_nodes}` : ''}`
+                                    : 'не используется'}
+                            </span>
                         </div>
                     </CardContent>
                 </Card>

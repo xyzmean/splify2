@@ -34,6 +34,12 @@ export interface SubRow {
     bytes?: number
     mtime?: number
     used?: number
+    /** Сколько локаций подписки взято выходами. */
+    used_nodes?: number
+    /** Ссылка на продавца, если источник опознан бэкендом (см. sub_brand в m-sub.sh).
+     *  Опознаётся ТАМ и только там: разбирать ссылку второй раз здесь значило бы завести
+     *  второй признак того же источника, и однажды они разойдутся. */
+    link?: string
     quota?: SubQuota
 }
 
@@ -53,8 +59,8 @@ export function subsRemembered(): SubRow[] | null {
 export function subsRemember(rows: SubRow[] | undefined): void {
     cacheSet(
         KEY,
-        (rows || []).map(({ name, title, url, kind, path, present, bytes, mtime, used }) => ({
-            name, title, url, kind, path, present, bytes, mtime, used,
+        (rows || []).map(({ name, title, url, kind, path, present, bytes, mtime, used, used_nodes, link }) => ({
+            name, title, url, kind, path, present, bytes, mtime, used, used_nodes, link,
         })),
     )
 }

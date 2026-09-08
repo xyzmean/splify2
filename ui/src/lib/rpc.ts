@@ -516,6 +516,10 @@ export const rpc = {
             bytes?: number
             mtime?: number
             used?: number
+            /** Сколько локаций подписки взято выходами (выход бывает пулом). */
+            used_nodes?: number
+            /** Ссылка на продавца — приходит только у опознанных источников (sub_brand). */
+            link?: string
             quota?: SubQuota
         }[]
         hwid?: string
