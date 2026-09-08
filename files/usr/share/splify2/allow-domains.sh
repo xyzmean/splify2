@@ -280,6 +280,36 @@ ad_get() {  # СЕРВИС
     mv "$AD_DOM.new" "$AD_DOM" && mv "$AD_PFX.new" "$AD_PFX" && mv "$AD_META.new" "$AD_META"
 }
 
+# То же, что ad_get, но ссылка задана снаружи, а не выведена из тега издателя.
+#
+# ЗАЧЕМ. Каталог списков (lists.json) научился называть наборы сам: у записи есть `url` и
+# `format: "srs"`. Тогда «откуда качать» знает КАТАЛОГ, а не таблица в пакете, — и это
+# главное, ради чего каталог заводился: добавить сервис можно правкой каталога, а не новой
+# сборкой splify2. Разбор набора при этом тот же самый, и второй его экземпляр здесь
+# означал бы, что коды отказов и их объяснения надо помнить в двух местах.
+#
+# Коды возврата и смысл AD_DOM/AD_PFX/AD_META — как у ad_get.
+ad_get_url() {  # ССЫЛКА ИМЯ_ДЛЯ_ФАЙЛОВ
+    AD_DOM="$AD_TMP/$2.dom"
+    AD_PFX="$AD_TMP/$2.pfx"
+    AD_META="$AD_TMP/$2.meta"
+    AD_NOTE=""
+    [ -f "$AD_DOM" ] && [ -f "$AD_PFX" ] && return 0
+    command -v download >/dev/null 2>&1 || return 1
+    mkdir -p "$AD_TMP" 2>/dev/null || return 1
+    _agu_srs="$AD_TMP/$2.srs"
+    download "$1" "$_agu_srs" || { rm -f "$_agu_srs"; return 1; }
+    ad_split "$_agu_srs" "$AD_DOM.new" "$AD_PFX.new" "$AD_META.new"
+    _agu_rc=$?
+    rm -f "$_agu_srs"
+    if [ "$_agu_rc" != 0 ]; then
+        rm -f "$AD_DOM.new" "$AD_PFX.new" "$AD_META.new"
+        [ "$_agu_rc" = 2 ] && return 2
+        return 3
+    fi
+    mv "$AD_DOM.new" "$AD_DOM" && mv "$AD_PFX.new" "$AD_PFX" && mv "$AD_META.new" "$AD_META"
+}
+
 # Положить (или убрать) сужение рядом с УСТАНОВЛЕННЫМ списком подсетей: `<список без .lst>.meta`.
 # Зовётся везде, где список подсетей встаёт на диск, — иначе один путь установки знал бы про
 # сужение, а два других нет, и тот же набор то сужался бы, то нет. Пустое сужение — файла нет:

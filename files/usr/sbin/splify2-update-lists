@@ -171,14 +171,37 @@ MANIFEST_ALIAS=/tmp/splify2-manifest.alias
 
 parse_manifest() {
     base="$(jsonfilter -i "$MANIFEST" -e '@.base_url' 2>/dev/null)"
-    [ -n "$base" ] || return 1
     rm -f "$MANIFEST_MAP" "$MANIFEST_ALIAS"
     for key in categories domain_lists; do
-        jsonfilter -i "$MANIFEST" -e "@.$key[*].file" 2>/dev/null |
+        # НАБОРЫ SING-BOX, НАЗВАННЫЕ КАТАЛОГОМ, — ПЕРВЫМИ. У такой записи есть своя ссылка и
+        # `format: "srs"`: качать надо не «base_url плюс путь», а вот это, и класть на диск
+        # не скачанное, а половину разобранного набора. Третье поле строки карты и говорит,
+        # что это набор.
+        #
+        # ДВА ЗАПРОСА С ОДНИМ УСЛОВИЕМ, склеенные построчно. Так можно потому, что фильтр у
+        # обоих один и тот же (`@.format='srs'`), а jsonfilter отдаёт значения в порядке
+        # документа: строки соответствуют друг другу по построению. Спросить оба поля одним
+        # выражением он не умеет, а запрашивать их по индексу — это три запуска на запись,
+        # то есть двести с лишним процессов на каталог из восьмидесяти списков.
+        #
+        # ПЕРВЫМИ — не косметика. Читатели карты (url_for, fmt_for) берут ПЕРВОЕ совпадение
+        # по пути, и обычная строка того же файла, попав в карту раньше, отменила бы набор
+        # целиком: файл качался бы как текст с base_url, которого там нет.
+        jsonfilter -i "$MANIFEST" -e "@.$key[@.format='srs'].file" 2>/dev/null > "$MANIFEST_MAP.f"
+        jsonfilter -i "$MANIFEST" -e "@.$key[@.format='srs'].url"  2>/dev/null > "$MANIFEST_MAP.u"
+        if [ -s "$MANIFEST_MAP.f" ]; then
+            awk 'NR == FNR { a[FNR] = $0; next } { sub(/^\/*/, "", a[FNR]); print a[FNR], $0, "srs" }' \
+                "$MANIFEST_MAP.f" "$MANIFEST_MAP.u" >> "$MANIFEST_MAP"
+        fi
+        [ -n "$base" ] && jsonfilter -i "$MANIFEST" -e "@.$key[*].file" 2>/dev/null |
         while read -r p; do
-            echo "$(echo "$p" | sed 's|^/*||') $base/$p" >> "$MANIFEST_MAP"
+            # У записи своя ссылка — обычной строки для неё быть не должно (см. выше).
+            grep -qxF "$p" "$MANIFEST_MAP.f" 2>/dev/null && continue
+            echo "$(echo "$p" | sed 's|^/*||') $base/$p plain" >> "$MANIFEST_MAP"
         done
+        rm -f "$MANIFEST_MAP.f" "$MANIFEST_MAP.u"
     done
+    [ -s "$MANIFEST_MAP" ] || return 1
     # Переименования читаются двумя проходами и склеиваются построчно: jsonfilter отдаёт
     # по одному значению на строку и не умеет доставать пару полей одним выражением.
     jsonfilter -i "$MANIFEST" -e '@.aliases[*].from' 2>/dev/null > "$MANIFEST_ALIAS.from"
@@ -217,6 +240,12 @@ url_for() {
     url="$(awk -v v="$new" '$1 == v { print $2; exit }' "$MANIFEST_MAP")"
     [ -n "$url" ] && { printf '%s' "$url"; return 0; }
     return 1
+}
+
+# Набор это или обычный файл. Третье поле карты; пусто — обычный, как было всегда.
+fmt_for() {  # ПУТЬ_У_ИЗДАТЕЛЯ
+    [ -f "$MANIFEST_MAP" ] || return 1
+    awk -v v="$1" '$1 == v { print $3; exit }' "$MANIFEST_MAP"
 }
 
 mkdir -p "$LISTS" "$(dirname "$STAMP")" "$(dirname "$MANIFEST")"
@@ -309,12 +338,44 @@ for kind in ip domains; do
             # но человек должен знать, что у издателя он теперь называется иначе.
             renamed="$(alias_for "$rel")" && log "$rel: издатель переименовал в $renamed, обновляем по прежнему пути"
 
-            if ! download "$url" "$new"; then
+            if [ "$(fmt_for "$rel")" = srs ] && [ "$AD_ON" = 1 ]; then
+                # НАБОР, НАЗВАННЫЙ КАТАЛОГОМ. Скачивается по своей ссылке и раскладывается
+                # тем же движком, что и наборы зашитого издателя: механика одна, разное
+                # только то, кто назвал ссылку. Память прогона (AD_TMP) общая, поэтому
+                # вторая половина того же набора следующим кругом цикла не качается заново.
+                AD_TMP="${AD_TMP:-/tmp/splify2-srs}"
+                [ "$kind" = domains ] && ml_kind=domains || ml_kind=prefixes
+                # ИМЯ ВРЕМЕННЫХ ФАЙЛОВ — ОТ ССЫЛКИ, а не от пути списка. Набор один даёт
+                # обе половины, а по видам этот цикл ходит по очереди; имя от пути у половин
+                # разное, и тот же набор качался бы дважды за прогон. Хвост ссылки берётся
+                # целиком (60 знаков), чтобы два издателя с файлом `telegram.srs` не сошлись
+                # в одном имени.
+                ml_name="$(printf '%s' "$url" | tr -c 'A-Za-z0-9' '_' | tail -c 61)"
+                ad_get_url "$url" "$ml_name"
+                ad_rc=$?
+                case "$ad_rc" in
+                    0) ;;
+                    1)  log "$name: набор не скачался, оставлен прежний${FETCH_NOTE:+ — $FETCH_NOTE}"
+                        rm -f "$new"; echo failed >> "$LOCK/flags"; continue ;;
+                    2)  log "$name: такой список нам пока не подходит — $AD_NOTE; оставлен прежний"
+                        rm -f "$new"; echo failed >> "$LOCK/flags"; continue ;;
+                    *)  log "$name: скачался испорченный набор — $AD_NOTE; оставлен прежний"
+                        rm -f "$new"; echo failed >> "$LOCK/flags"; continue ;;
+                esac
+                [ -n "$FETCH_NOTE" ] && log "$name: $FETCH_NOTE"
+                if ! ad_src="$(ad_out_of "$ml_kind")"; then
+                    log "$name: в наборе нет $(ad_kind_ru "$ml_kind") — оставлен прежний"
+                    rm -f "$new"; echo failed >> "$LOCK/flags"; continue
+                fi
+                cp "$ad_src" "$new"
+                [ "$ml_kind" = prefixes ] && ad_meta_install "$path"
+            elif ! download "$url" "$new"; then
                 log "$name: не скачался, оставлен прежний${FETCH_NOTE:+ — $FETCH_NOTE}"
                 echo failed >> "$LOCK/flags"
                 continue
+            else
+                [ -n "$FETCH_NOTE" ] && log "$name: $FETCH_NOTE"
             fi
-            [ -n "$FETCH_NOTE" ] && log "$name: $FETCH_NOTE"
         fi
 
         # Записи в скачанном считаются ЗДЕСЬ, до подгонки: подгонка под память сама

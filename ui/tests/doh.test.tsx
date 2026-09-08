@@ -35,7 +35,6 @@ const base = {
     managed: true,
     force_dns_now: '0',
     force_conflict: false,
-    sys: [] as string[],
     out_pick: '',
 }
 
@@ -182,68 +181,22 @@ describe('вкладка DoH: режим и свои резолверы', () => 
         fireEvent.click(await screen.findByRole('button', { name: /свой резолвер/ }))
         fireEvent.input(screen.getByLabelText('ссылка резолвера'), { target: { value: 'http://dns.example.com/dns-query' } })
         fireEvent.click(screen.getByRole('button', { name: 'Добавить' }))
-        // Текст называет ОБА рода резолвера: адрес здесь тоже принимается, и подсказка про
-        // одну лишь ссылку отправляла бы человека с адресом провайдера искать другое место.
-        await waitFor(() => expect(screen.getByText(/ссылка https|адрес 1\.2\.3\.4/)).toBeInTheDocument())
+        await waitFor(() => expect(screen.getByText(/начинается с https/)).toBeInTheDocument())
         expect(add).not.toHaveBeenCalled()
     })
 })
 
-// ВТОРОЙ РОД РЕЗОЛВЕРА И ЧУЖОЕ ХОЗЯЙСТВО — обратка владельца двумя пунктами.
-//
-//   «Не хватает опции вносить не формат https://…/dns-query, а просто ip (если я хочу внести
-//   днс провайдера своего интернета)» — резолвер бывает адресом, и живёт он не в прокси, а в
-//   dnsmasq. Это не поле ввода, а второй режим, и «Системный DNS» перестал означать «ничего
-//   не настраиваем».
-//
-//   «Если выбрать системный днс и накатить https dns proxy рядом — сплифу перехватывает
-//   управление им будто энивей» — пакет приезжает нашей зависимостью, но он не наш: человек
-//   вправе держать свой DoH без нас. Тогда мы не правим ни его файл, ни автозапуск, а спор за
-//   порт 53 показываем и предлагаем исправить нажатием.
-describe('вкладка DoH: системный DNS адресом и чужое хозяйство', () => {
+// ЧУЖОЕ ХОЗЯЙСТВО — обратка владельца: «если выбрать системный днс и накатить https dns proxy
+// рядом — сплифу перехватывает управление им будто энивей». Пакет приезжает нашей
+// зависимостью, но он не наш: человек вправе держать свой DoH без нас. Тогда мы не правим ни
+// его файл, ни автозапуск, а спор за порт 53 показываем и предлагаем исправить нажатием.
+describe('вкладка DoH: чужое хозяйство', () => {
     beforeEach(() => {
         vi.restoreAllMocks()
         document.body.innerHTML = ''
     })
 
     const off = { ...base, running: false, active: '', urls: [] as string[] }
-
-    it('адрес добавляется в системный DNS и убирается оттуда', async () => {
-        vi.spyOn(rpc, 'dohState')
-            .mockResolvedValueOnce(off)
-            .mockResolvedValue({ ...off, sys: ['192.168.1.1'] })
-        const set = vi.spyOn(rpc, 'dohSysSet').mockResolvedValue({ ok: true })
-        render(<Doh live={live} />)
-        fireEvent.input(await screen.findByLabelText('адрес резолвера'), { target: { value: '192.168.1.1' } })
-        fireEvent.click(screen.getByRole('button', { name: 'Добавить адрес' }))
-        await waitFor(() => expect(set).toHaveBeenCalledWith('192.168.1.1'))
-        await waitFor(() => expect(screen.getByText('192.168.1.1')).toBeInTheDocument())
-        fireEvent.click(screen.getByRole('button', { name: 'удалить 192.168.1.1' }))
-        // Список пишется целиком: «убрать» — это запись оставшегося, а не отдельное действие.
-        await waitFor(() => expect(set).toHaveBeenCalledWith(''))
-    })
-
-    it('не адрес в поле адреса — не отправляется', async () => {
-        vi.spyOn(rpc, 'dohState').mockResolvedValue(off)
-        const set = vi.spyOn(rpc, 'dohSysSet').mockResolvedValue({ ok: true })
-        render(<Doh live={live} />)
-        fireEvent.input(await screen.findByLabelText('адрес резолвера'), { target: { value: 'dns.example.com' } })
-        fireEvent.click(screen.getByRole('button', { name: 'Добавить адрес' }))
-        await waitFor(() => expect(screen.getByText(/пишется как 1\.2\.3\.4/)).toBeInTheDocument())
-        expect(set).not.toHaveBeenCalled()
-    })
-
-    it('адрес, вписанный в поле «свой резолвер», уезжает в системный DNS, а не в прокси', async () => {
-        vi.spyOn(rpc, 'dohState').mockResolvedValue(off)
-        const sys = vi.spyOn(rpc, 'dohSysSet').mockResolvedValue({ ok: true })
-        const add = vi.spyOn(rpc, 'dohCustomAdd').mockResolvedValue({ ok: true })
-        render(<Doh live={live} />)
-        fireEvent.click(await screen.findByRole('button', { name: /свой резолвер/ }))
-        fireEvent.input(screen.getByLabelText('ссылка резолвера'), { target: { value: '77.88.8.8' } })
-        fireEvent.click(screen.getByRole('button', { name: 'Добавить' }))
-        await waitFor(() => expect(sys).toHaveBeenCalledWith('77.88.8.8'))
-        expect(add).not.toHaveBeenCalled()
-    })
 
     it('чужая настройка: сказано, что она не наша, и есть чем запустить службу', async () => {
         vi.spyOn(rpc, 'dohState').mockResolvedValue({ ...off, managed: false, urls: ['https://dns.example/dns-query'] })

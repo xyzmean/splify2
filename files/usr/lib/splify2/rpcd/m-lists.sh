@@ -181,9 +181,66 @@ case "$2" in
         base="$(jsonfilter -i "$MANIFEST" -e '@.base_url')"
         file="$(manifest_file "$id" "$kind")"
         [ -n "$file" ] || fail "списка $id нет в манифесте"
-        [ -n "$base" ] || fail "в манифесте нет base_url"
         dest="$(local_path "$file")" || fail "издатель прислал недопустимый путь списка: $file"
         mkdir -p "$(dirname "$dest")"
+
+        # НАБОР SING-BOX, НАЗВАННЫЙ САМИМ КАТАЛОГОМ. У записи есть своя ссылка и
+        # `format: "srs"` — значит качать надо не «base_url плюс путь», а вот это, и класть
+        # на диск не то, что приехало, а половину разобранного набора.
+        #
+        # ЧЕМ ЭТО ОТЛИЧАЕТСЯ ОТ ВЕТКИ `itdog:` ВЫШЕ. Там таблица сервисов и тег зашиты в
+        # пакет, здесь их называет каталог. Разница не в механике (разбор один и тот же), а
+        # в том, кто решает: во втором случае добавить сервис можно правкой каталога, а не
+        # новой сборкой splify2, — ради этого каталог и заводился.
+        srs_url="$(manifest_field "$id" "$kind" format)"
+        if [ "$srs_url" = srs ]; then
+            srs_url="$(manifest_field "$id" "$kind" url)"
+            [ -n "$srs_url" ] || fail "у списка $id в каталоге нет ссылки на набор"
+            [ -r "$AD_SH" ] || fail "описания источника $AD_SH нет — пакет собран не целиком"
+            . "$AD_SH"
+            AD_TMP="/tmp/splify2-srs.$$"
+            ad_get_url "$srs_url" set
+            ad_rc=$?
+            if [ "$ad_rc" != 0 ]; then
+                rm -rf "$AD_TMP"
+                case "$ad_rc" in
+                    1) fail "набор не скачался${FETCH_NOTE:+: $FETCH_NOTE}" ;;
+                    2) fail "такой список нам пока не подходит: $AD_NOTE" ;;
+                    *) fail "скачался испорченный набор: $AD_NOTE" ;;
+                esac
+            fi
+            # КЛАДЁМ ОБЕ ПОЛОВИНЫ, если каталог назвал обе: набор один и уже разобран, а
+            # выбросить вторую значило бы скачать те же байты второй раз, когда человек
+            # включит её. Вторая ищется ПО ССЫЛКЕ — id у половин разные, набор один.
+            for k in prefixes domains; do
+                kfile="$(manifest_file_by_url "$srs_url" "$k")"
+                [ -n "$kfile" ] || continue
+                ksrc="$(ad_out_of "$k")" || continue
+                kdest="$(local_path "$kfile")" ||
+                    fail "издатель прислал недопустимый путь списка: $kfile"
+                mkdir -p "$(dirname "$kdest")"
+                cp "$ksrc" "$kdest.new.$$" && mv "$kdest.new.$$" "$kdest" || {
+                    rm -f "$kdest.new.$$"; rm -rf "$AD_TMP"
+                    fail "список не записался — кончилось место?"; }
+                [ "$k" = prefixes ] && ad_meta_install "$kdest"
+            done
+            # Запрошенной половины в наборе может не оказаться вовсе (у youtube нет
+            # подсетей). Молчать нельзя: человек нажал «Загрузить» и вправе узнать, что
+            # получил не то, за чем шёл.
+            [ -s "$dest" ] || { rm -rf "$AD_TMP"; fail "в наборе нет $(ad_kind_ru "$kind")"; }
+            rm -rf "$AD_TMP"
+            json_init
+            json_add_boolean ok 1
+            json_add_int count "$(grep -c . "$dest")"
+            json_add_string path "$dest"
+            json_add_string tag "$(manifest_field "$id" "$kind" tag)"
+            [ -n "$FETCH_NOTE" ] && json_add_string via "$FETCH_NOTE"
+            [ "$kind" = prefixes ] && ad_meta_json "$dest"
+            json_dump
+            exit 0
+        fi
+
+        [ -n "$base" ] || fail "в манифесте нет base_url"
         download "$base/$file" "$dest" || fail "список не скачался${FETCH_NOTE:+: $FETCH_NOTE}"
         json_init
         json_add_boolean ok 1
@@ -766,6 +823,56 @@ AD_EOF
         # Память — только целиком записанная: обрубок при нехватке места в /tmp хуже её отсутствия.
         [ -s "$_ll_c.tmp" ] && mv "$_ll_c.tmp" "$_ll_c" && printf '%s' "$_ll_n" > "$_ll_c.n"
         rm -f "$_ll_c.tmp"
+        ;;
+
+    lists_source|lists_source_set)
+        # ОТКУДА БЕРУТСЯ СПИСКИ — выбор человека, а не зашитое умолчание.
+        #
+        # Ссылка на каталог и раньше жила в uci (splify2.main.manifest_url), но задать её
+        # можно было только по ssh: в интерфейсе выбора не было вовсе. А выбор здесь
+        # осмысленный и не редкий — свой форк каталога с собственными списками, каталог
+        # соседа, каталог без чужих источников. Держать такую настройку в консоли значит
+        # держать её для одного человека из ста.
+        #
+        # ЧТО ИМЕННО МЕНЯЕТСЯ: адрес файла-перечня. Списки, УЖЕ скачанные на роутер, при
+        # этом не трогаются: они лежат в /etc/steer/lists и на них ссылаются каналы, а
+        # смена каталога — это не «выбросить всё», это «дальше спрашивать вот здесь».
+        # Сам перечень перечитывается при первом же обращении: файл кеша убирается, и
+        # метод `lists` скачает его заново.
+        uci_file || fail "не удалось создать $UCI_SPLIFY2 — кончилось место?"
+        uci -q get splify2.main >/dev/null 2>&1 || uci -q set splify2.main=splify2
+        if [ "$2" = lists_source_set ]; then
+            read -r input
+            json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+            json_get_var url url
+            case "${url:-}" in
+                # Пусто — вернуться к своему каталогу. Это отдельный и нужный ответ:
+                # человек, попробовавший чужой, должен уметь вернуться, не помня адреса.
+                '') uci -q delete splify2.main.manifest_url 2>/dev/null ;;
+                https://*|http://*)
+                    # Пробелы и кавычки в ссылке — это не ссылка, а способ передать в
+                    # скачивание что-то ещё: значение уезжает в аргумент wget.
+                    case "$url" in
+                        *[\ \'\"\`\$]*|*'
+'*) fail "в ссылке недопустимые знаки" ;;
+                    esac
+                    uci -q set "splify2.main.manifest_url=$url" ;;
+                *) fail "ссылка каталога начинается с https:// (или http://)" ;;
+            esac
+            uci -q commit splify2
+            # Кеш перечня — от прежнего каталога, и оставить его значило бы показать
+            # человеку старые списки под именем нового источника.
+            rm -f "$MANIFEST" 2>/dev/null
+        fi
+        json_init
+        json_add_boolean ok 1
+        json_add_string url "$(manifest_url)"
+        json_add_string default_url "$MANIFEST_URL_DEFAULT"
+        # Свой это каталог или чужой — считает бэкенд, а не интерфейс: умолчание живёт
+        # здесь, и второе его написание разошлось бы с первым при первой же смене.
+        [ "$(manifest_url)" = "$MANIFEST_URL_DEFAULT" ] &&
+            json_add_boolean default 1 || json_add_boolean default 0
+        json_dump
         ;;
 
     fetch_mode|fetch_mode_set)

@@ -294,36 +294,6 @@ check "и хозяином настройки нас не делает" "0" \
 doh_stop
 check "остановка из вкладки останавливает" "1" "$(doh_running; echo $?)"
 
-# ---- системный DNS адресом ----------------------------------------------------
-#
-# Второй род резолвера: не ссылка, а адрес, и обслуживает его сам dnsmasq. «Не хватает опции
-# вносить не формат https://…/dns-query, а просто ip» — обратка. Чужие записи того же списка
-# (петля прокси, доменные заглушки canary) не наши и обязаны уцелеть.
-"$DOH_UCI" -q add_list 'dhcp.@dnsmasq[0].server=127.0.0.1#5053'
-"$DOH_UCI" -q add_list 'dhcp.@dnsmasq[0].server=/mask.icloud.com/'
-"$DOH_UCI" -q add_list 'dhcp.@dnsmasq[0].server=9.9.9.9'
-check "свой адрес виден, чужие записи — нет" "9.9.9.9" "$(doh_sys_get | tr '\n' ' ' | sed 's/ $//')"
-
-doh_sys_set '1.1.1.1 8.8.8.8#5353'
-check "адреса записаны" "1.1.1.1 8.8.8.8#5353" "$(doh_sys_get | tr '\n' ' ' | sed 's/ $//')"
-check "провайдерские резолверы отключены" "1" "$("$DOH_UCI" -q get 'dhcp.@dnsmasq[0].noresolv')"
-check "петля прокси уцелела" "1" \
-    "$("$DOH_UCI" -q get 'dhcp.@dnsmasq[0].server' | tr ' ' '\n' | grep -c '127.0.0.1#5053')"
-check "доменная заглушка уцелела" "1" \
-    "$("$DOH_UCI" -q get 'dhcp.@dnsmasq[0].server' | tr ' ' '\n' | grep -c '/mask.icloud.com/')"
-check "исходный адрес лежит в копии" "9.9.9.9" \
-    "$("$DOH_UCI" -q get 'dhcp.@dnsmasq[0].splify2_orig_server')"
-
-doh_sys_set 'не адрес'
-check "не адрес — отказ" "1" "$?"
-check "и список не тронут" "1.1.1.1 8.8.8.8#5353" "$(doh_sys_get | tr '\n' ' ' | sed 's/ $//')"
-
-doh_sys_set ''
-check "пусто — вернулось как было" "9.9.9.9" "$(doh_sys_get | tr '\n' ' ' | sed 's/ $//')"
-check "и noresolv вернулся к своему отсутствию" "" \
-    "$("$DOH_UCI" -q get 'dhcp.@dnsmasq[0].noresolv')"
-check "копии после возврата нет" "" "$("$DOH_UCI" -q get 'dhcp.@dnsmasq[0].splify2_dns_state')"
-
 printf '\n%d проверок пройдено' "$pass"
 if [ "$fail" -gt 0 ]; then printf ', %d ПРОВАЛЕНО\n' "$fail"; exit 1; fi
 printf '\nвсе проверки прошли\n'

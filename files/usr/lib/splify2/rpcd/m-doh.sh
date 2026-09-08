@@ -101,20 +101,6 @@ case "$2" in
         json_add_string force_dns_now "$(doh_force_now 2>/dev/null)"
         doh_force_conflict && json_add_boolean force_conflict 1 ||
             json_add_boolean force_conflict 0
-        # Системный DNS адресом: второй род резолвера, живёт в dnsmasq. Пустой список —
-        # «как отдаёт провайдер», и это законное состояние, а не «не настроено».
-        _dl_ifs2="$IFS"
-        json_add_array sys
-        IFS='
-'
-        for a in $(doh_sys_get 2>/dev/null); do
-            IFS="$_dl_ifs2"
-            [ -n "$a" ] && json_add_string "" "$a"
-            IFS='
-'
-        done
-        IFS="$_dl_ifs2"
-        json_close_array
         json_dump
         ;;
 
@@ -144,19 +130,6 @@ case "$2" in
         json_init
         json_add_boolean ok 1
         json_add_string force_dns_now "$(doh_force_now 2>/dev/null)"
-        json_dump
-        ;;
-
-    # Системный DNS адресом: список простых адресов для dnsmasq. Пустой — вернуть как было.
-    doh_sys_set)
-        need_doh
-        read -r input
-        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
-        json_get_var servers servers
-        doh_sys_set "${servers:-}" ||
-            fail "адрес резолвера пишется как 1.2.3.4 или 1.2.3.4#порт"
-        json_init
-        json_add_boolean ok 1
         json_dump
         ;;
 

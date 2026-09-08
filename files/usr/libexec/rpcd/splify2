@@ -687,7 +687,6 @@ list)
     json_add_object doh_start; json_close_object
     json_add_object doh_stop; json_close_object
     json_add_object doh_force_fix; json_close_object
-    json_add_object doh_sys_set; json_add_string servers; json_close_object
     # ---- обход DPI ----
     json_add_object zapret_state; json_close_object
     json_add_object zapret_install; json_close_object
@@ -735,6 +734,8 @@ list)
     # отправка. Работает и при выключенной телеметрии — иначе посмотреть можно было бы
     # только после согласия.
     json_add_object telemetry_preview; json_close_object
+    json_add_object lists_source; json_close_object
+    json_add_object lists_source_set; json_add_string url; json_close_object
     json_add_object fetch_mode; json_close_object
     json_add_object fetch_mode_set; json_add_string mode; json_close_object
     # `sub` — путь к файлу подписки: узлы подписки, на которую ещё не заведён ни один выход.
@@ -760,13 +761,14 @@ call)
     case "$2" in
         status|diag|dev_stats|net_info|devices|client_nets|leases|engine_state|outbound_geo|outbound_probe|explain|xsteer_state|vless_nodes|vless_probe|support_report) _grp=state ;;
         spec_set|apply) _grp=spec ;;
-        lists|list_fetch|lists_update|list_put|list_remove|list_custom|list_get|local_lists|allow_domains|fetch_mode|fetch_mode_set|zm_fix|zm_fix_set) _grp=lists ;;
+        lists|list_fetch|lists_update|list_put|list_remove|list_custom|list_get|local_lists|allow_domains|fetch_mode|fetch_mode_set|zm_fix|zm_fix_set|\
+        lists_source|lists_source_set) _grp=lists ;;
         engine|engine_stop|engine_start|steer_versions|splify2_versions|splify2_install|steer_install|ui_get|ui_set) _grp=engine ;;
         sub_set|sub_info|sub_quota|sub_list|sub_del) _grp=sub ;;
         backup_get|backup_put) _grp=backup ;;
         xsteer_link|xsteer_link_put) _grp=xsteer ;;
         doh_state|doh_set|doh_off|doh_tunnel_set|doh_custom_add|doh_custom_del|\
-        doh_start|doh_stop|doh_force_fix|doh_sys_set) _grp=doh ;;
+        doh_start|doh_stop|doh_force_fix) _grp=doh ;;
         zapret_state|zapret_install|zapret_remove|zapret_sync|zapret_strategies|zapret_strategy|zapret_apply|zapret_enable|zapret_game_set|zapret_test_start|zapret_test_stop|zapret_test|zapret_results|zapret_autoselect|zapret_autoselect_set|zapret_autoselect_start|zapret_autoselect_undo) _grp=zapret ;;
         telemetry_state|telemetry_set|telemetry_preview) _grp=telemetry ;;
         *) fail "неизвестный метод" ;;

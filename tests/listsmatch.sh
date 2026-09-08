@@ -71,6 +71,15 @@ for expr in sys.argv[2:]:
     key = 'categories' if 'categories' in expr else 'domain_lists'
     for e in d.get(key, []):
         print(e['file'])
+  elif expr.startswith('@.categories[@.format=') or expr.startswith('@.domain_lists[@.format='):
+    # Записи-наборы: фильтр по format плюс имя поля. Заглушка обязана уметь ровно это
+    # выражение, иначе карта манифеста собиралась бы без наборов, и стенд был бы зелен
+    # при любом их поведении.
+    key = 'categories' if 'categories' in expr else 'domain_lists'
+    field = expr.rsplit('.', 1)[1]
+    for e in d.get(key, []):
+        if e.get('format') == 'srs' and field in e:
+            print(e[field])
   elif expr in ('@.aliases[*].from', '@.aliases[*].to'):
     field = expr.rsplit('.', 1)[1]
     for e in d.get('aliases', []):
@@ -1121,6 +1130,79 @@ check "неизвестный сервис не выдаётся за маниф
 out="$(srs_rpcd list_remove '{"id":"itdog:../../etc/passwd","kind":"domains"}')"
 check "list_remove отвергает выход за каталог списков" "yes" \
       "$(printf '%s' "$out" | grep -q '"ok": *false' && echo yes || echo no)"
+
+# ---- НАБОР, НАЗВАННЫЙ КАТАЛОГОМ: format=srs и своя ссылка в манифесте -------------------
+#
+# ИМЯ ПОЛОВИНЫ — ОТ НАБОРА (`telegram.srs.lst`), и это видно в путях ниже: качается `.srs`, а
+# на диск ложится текстовый список, потому что движок держит в спеке именно списки. Точка в
+# имени заодно разводит эти файлы со вторым издателем: его разбор путей (ad_service_of) имён
+# с точкой не принимает, поэтому свой `itdog/x.lst` он с чужим `itdog/x.srs.lst` не спутает.
+#
+# ЧТО ЗДЕСЬ СТОРОЖИТСЯ. Каталог списков (lists.json репозитория splify2-lists) описывает не
+# только свои плоские файлы, но и чужие наборы: у записи есть `url` и `format: "srs"`. Разница
+# со вторым издателем не в механике — разбор тот же самый, — а в том, КТО называет ссылку:
+# там таблица зашита в пакет, здесь её называет каталог. Ради этого каталог и заводился:
+# добавить сервис можно правкой каталога, а не новой сборкой splify2.
+#
+# Проверяется ночное обновление: оно ходит по файлам СПЕКИ, и набор должен разложиться на две
+# половины по путям, которые назвал каталог, — ровно как у зашитого издателя.
+rm -rf "$T/lists" "$T/var/last-update" "$T/requested" "$T/etc/allow-domains.tag"
+mkdir -p "$T/lists/catalog/domains"
+printf '0.0.0.0/32\n'  > "$T/lists/catalog/telegram.srs.lst"
+printf 'old.example\n' > "$T/lists/catalog/domains/telegram.srs.lst"
+: > "$T/syslog"
+
+cat > "$T/manifest.src" <<EOF
+{
+  "base_url": "https://example.invalid/lists",
+  "categories": [
+    { "id": "src:telegram", "file": "catalog/telegram.srs.lst", "format": "srs",
+      "url": "https://github.com/itdoginfo/allow-domains/releases/download/$AD_TAG/telegram.srs" }
+  ],
+  "domain_lists": [
+    { "id": "svc_src_telegram", "kind": "domains", "file": "catalog/domains/telegram.srs.lst",
+      "format": "srs", "same_as_ip": ["src:telegram"],
+      "url": "https://github.com/itdoginfo/allow-domains/releases/download/$AD_TAG/telegram.srs" }
+  ]
+}
+EOF
+cat > "$T/etc/spec.json" <<EOF
+{
+  "schema": 1,
+  "channels": [
+    { "name": "c1", "match": { "prefixes_files": ["$T/lists/catalog/telegram.srs.lst"],
+                               "domains_files":  ["$T/lists/catalog/domains/telegram.srs.lst"] } }
+  ]
+}
+EOF
+srs_run "$AD_TAG"
+check "набор каталога скачан по СВОЕЙ ссылке" "1" \
+      "$(grep -c "/$AD_TAG/telegram.srs$" "$T/requested" 2>/dev/null)"
+check "и скачан один раз на обе половины" "1" \
+      "$(grep -c "/telegram.srs$" "$T/requested" 2>/dev/null)"
+check "домены легли по пути, который назвал каталог" "20" \
+      "$(grep -c . "$T/lists/catalog/domains/telegram.srs.lst" 2>/dev/null)"
+check "подсети — по своему пути" "10" \
+      "$(grep -c . "$T/lists/catalog/telegram.srs.lst" 2>/dev/null)"
+check "и base_url для набора не при чём" "0" \
+      "$(grep -c 'example.invalid/lists/catalog' "$T/requested" 2>/dev/null)"
+
+# Спека и манифест возвращаются к прежним: разделы ниже написаны под них.
+cat > "$T/manifest.src" <<EOF
+{
+  "base_url": "https://example.invalid/lists",
+  "categories":   [ { "id": "rkn", "file": "rkn.lst" } ],
+  "domain_lists": [ ]
+}
+EOF
+cat > "$T/etc/spec.json" <<EOF
+{
+  "schema": 1,
+  "channels": [
+    { "name": "c1", "match": { "prefixes_files": ["$T/lists/rkn.lst"] } }
+  ]
+}
+EOF
 
 # ---- движок выключен человеком: списки обновляются, правила НЕ ставятся ----------------
 #

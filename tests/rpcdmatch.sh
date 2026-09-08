@@ -1522,11 +1522,11 @@ check "путь файла настройки — шов, а не литерал
       "$(grep -c '^UCI_SPLIFY2=' "$SCRIPT")"
 check "прямых путей /etc/config/splify2 в коде не осталось" "1" \
       "$(grep -c '/etc/config/splify2' "$SCRIPT")"
-# Семь мест: sub_set, sub_put (ключи подписок), ветка настроек, ui_get|ui_set,
-# fetch_mode|fetch_mode_set, zm_fix|zm_fix_set и doh_tunnel_set. Число растёт вместе с
-# методами, которые пишут в uci, — и это ровно тот случай, когда барьер должен ломаться:
-# новый метод обязан заводить файл той же функцией.
-check "файл заводится одной функцией на все места" "7" \
+# Восемь мест: sub_set, sub_put (ключи подписок), ветка настроек, ui_get|ui_set,
+# fetch_mode|fetch_mode_set, lists_source|lists_source_set, zm_fix|zm_fix_set и
+# doh_tunnel_set. Число растёт вместе с методами, которые пишут в uci, — и это ровно тот
+# случай, когда барьер должен ломаться: новый метод обязан заводить файл той же функцией.
+check "файл заводится одной функцией на все места" "8" \
       "$(rpcd_src | grep -c '^ *uci_file ||')"
 check "перенаправлением файл больше не заводится" "0" \
       "$(rpcd_src | grep -c ': > "\?/etc/config')"
