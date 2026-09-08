@@ -466,6 +466,13 @@ cat > "$ZP_CATALOG" <<'CATEOF'
 --hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
 --dpi-desync=fake
 
+#Yv08
+--filter-tcp=443
+--hostlist=/opt/zapret/ipset/zapret-hosts-google.txt
+--dpi-desync=hostfakesplit
+--dpi-desync-hostfakesplit-mod=host=google.com
+--dpi-desync-fooling=ts
+
 #Dv1
 --filter-tcp=2053,2083,2087,2096,8443
 --hostlist-domains=discord.media
@@ -541,13 +548,34 @@ check "замена слоя: номер новый" "02" "$(zp_yv_get)"
 check "замена слоя: метка одна" "1" "$(grep -c '^#Yv' "$ZP_CONF")"
 check "замена слоя: блок Google один" "1" \
     "$(grep -c -- '^--hostlist=/opt/zapret/ipset/zapret-hosts-google.txt$' "$ZP_CONF")"
-check "замена слоя: это блок нового номера" "1" "$(grep -c -- '^--dpi-desync=fake$' "$ZP_CONF")"
+# Признак «это тело именно Yv02» ищется ВНУТРИ его блока, а не по всему значению: с тех пор
+# как применение само дописывает рамку discord (zp_discord_add, как ADD_Yv/discord_str_add у
+# менеджера), строка `--dpi-desync=fake` встречается и в ней — и счёт по всему файлу
+# проверял бы уже не то, что написано в названии проверки.
+check "замена слоя: это блок нового номера" "1" \
+    "$(awk '/^#Yv02$/{f=1;next} f&&/^--new$/{exit} f&&/^--dpi-desync=fake$/{n++} END{print n+0}' "$ZP_CONF")"
 
-# Слой на стратегию БЕЗ его блока не ставится, и это отказ, а не тишина: у разных стратегий
-# разный состав блоков, и притворяться, что поставили, нельзя.
+# ПРИМЕНЕНИЕ САМО СОЗДАЁТ РАМКУ discord — так же, как менеджер зовёт discord_str_add при
+# каждом применении стратегии. До этого блока с портами discord.media у стратегии `v1` нет
+# вовсе, и слой Dv ставить было некуда: ни один #Dv не мог появиться в принципе.
 printf "config zapret 'config'\n\toption NFQWS_OPT '\n#v1\n--filter-tcp=443\n'\n" > "$ZP_CONF"
 zp_apply_global v1 >/dev/null 2>&1
-check "discord на стратегию без его блока — отказ" "1" "$(zp_dv_set 2 >/dev/null 2>&1; echo $?)"
+check "применение дописало рамку discord (UDP)" "1" \
+    "$(grep -c -- '^--filter-udp=19294-19344,50000-50100$' "$ZP_CONF")"
+check "и блок discord.media (TCP) ровно один" "1" \
+    "$(grep -c -- '^--filter-tcp=2053,2083,2087,2096,8443$' "$ZP_CONF")"
+check "рамка пришла с номером по умолчанию" "1" "$(zp_dv_get)"
+check "и слой YouTube по умолчанию тоже поставлен" "08" "$(zp_yv_get)"
+# А теперь слой ставится — потому что есть куда.
+check "discord на стратегию с рамкой — ставится" "0" "$(zp_dv_set 2 >/dev/null 2>&1; echo $?)"
+check "и номер сменился" "2" "$(zp_dv_get)"
+check "и блок по-прежнему один" "1" \
+    "$(grep -c -- '^--filter-tcp=2053,2083,2087,2096,8443$' "$ZP_CONF")"
+
+# Отказ остаётся отказом там, где рамки нет и её никто не создавал: zp_dv_set сам ничего не
+# дописывает, притворяться, что поставил, нельзя.
+printf "config zapret 'config'\n\toption NFQWS_OPT '\n#v1\n--filter-tcp=443\n'\n" > "$ZP_CONF"
+check "discord без рамки и без применения — отказ" "1" "$(zp_dv_set 2 >/dev/null 2>&1; echo $?)"
 check "и метки не появилось" "" "$(zp_dv_get)"
 
 printf '\n%d проверок пройдено' "$pass"
