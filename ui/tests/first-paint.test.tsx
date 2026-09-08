@@ -71,4 +71,49 @@ describe('первая отрисовка: прошлое как прошлое 
         expect(screen.getByRole('heading', { name: /Обновление/ })).toBeInTheDocument()
         await waitFor(() => expect(screen.getByText(/проверок с отказом: 1/)).toBeInTheDocument())
     })
+
+    // Служебное имя набора nft на месте имени правила. Спека приезжает вторым вызовом, и до
+    // неё строки берутся у движка — а `name` набора это имя цепочки (`wg0_dom`), которое
+    // человек не давал. Имена его правил движок печатает рядом, полем `channels`; их и
+    // показываем, иначе при каждом обновлении страницы на секунду мелькает служебное имя
+    // (снято владельцем с экрана).
+    it('до спеки правила названы своими именами, а не именем набора nft', () => {
+        render(
+            <Home
+                live={live({
+                    status: {
+                        schema: 1,
+                        outputs: { wg0: { name: 'wg0', kind: 'interface', device: 'wg0', up: true } },
+                        channels: [
+                            { name: 'wg0_dom', out: 'wg0', live: true, channels: ['YouTube', 'Discord'] },
+                        ],
+                    },
+                })}
+                onSection={() => {}}
+                onAddRule={() => {}}
+            />,
+        )
+        expect(screen.getByText('YouTube')).toBeInTheDocument()
+        expect(screen.getByText('Discord')).toBeInTheDocument()
+        expect(screen.queryByText('wg0_dom')).toBeNull()
+    })
+
+    // Движок постарше перечня участников не печатает — тогда служебное имя это всё, что есть,
+    // и промолчать о работающем правиле было бы хуже.
+    it('без перечня участников остаётся имя набора — это лучше пустоты', () => {
+        render(
+            <Home
+                live={live({
+                    status: {
+                        schema: 1,
+                        outputs: { wg0: { name: 'wg0', kind: 'interface', device: 'wg0', up: true } },
+                        channels: [{ name: 'wg0_dom', out: 'wg0', live: true }],
+                    },
+                })}
+                onSection={() => {}}
+                onAddRule={() => {}}
+            />,
+        )
+        expect(screen.getByText('wg0_dom')).toBeInTheDocument()
+    })
 })
