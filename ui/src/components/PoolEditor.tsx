@@ -806,8 +806,20 @@ export default function PoolEditor({
                                                 </span>
                                                 {r.kind === 'node' && <Flag cc={cc} />}
                                                 <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{label}</span>
-                                                {hint && (
-                                                    <span className="hidden min-w-0 max-w-[9rem] truncate text-[11px] text-muted-foreground sm:inline">
+                                                {/* Подпись подписки — ТОЛЬКО НА ПЕРВОЙ строке блока.
+                                                    Соседние строки одной подписки и так слиты в один
+                                                    блок без зазора, и повторять на каждой «Riot VPN
+                                                    (Основной)» — значит трижды сказать то, что уже
+                                                    видно, и трижды отнять место у названия локации.
+
+                                                    Ширина в долях, а не в rem: девять фиксированных
+                                                    съедали почти всю строку в узкой колонке справа, и
+                                                    название резалось до «Эстония №2 — …», хотя резать
+                                                    надо было подпись. Название важнее: подписка на
+                                                    строке одна, а локаций несколько, и различаются они
+                                                    именно названием. */}
+                                                {hint && !joined && (
+                                                    <span className="hidden min-w-0 max-w-[40%] shrink truncate text-[11px] text-muted-foreground sm:inline">
                                                         {hint}
                                                     </span>
                                                 )}
