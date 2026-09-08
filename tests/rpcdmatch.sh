@@ -210,11 +210,19 @@ def walk(cur, parts):
 for expr in os.environ.get('EXPRS', '').splitlines():
     if not expr:
         continue
-    m = re.match(r"@\.(categories|domain_lists)\[@\.id='([^']*)'\]\.file$", expr)
+    m = re.match(r"@\.(categories|domain_lists)\[@\.id='([^']*)'\]\.([a-z_]+)$", expr)
     if m:
         for e in d.get(m.group(1), []):
-            if e.get('id') == m.group(2):
-                print(e['file'])
+            if e.get('id') == m.group(2) and m.group(3) in e:
+                print(e[m.group(3)])
+        continue
+    # Поле записи, найденной ПО ПУТИ СПИСКА: так доскачивание спрашивает ссылку набора —
+    # ему известен путь из спеки, а не идентификатор.
+    m = re.match(r"@\.(categories|domain_lists)\[@\.file='([^']*)'\]\.([a-z_]+)$", expr)
+    if m:
+        for e in d.get(m.group(1), []):
+            if e.get('file') == m.group(2) and m.group(3) in e:
+                print(e[m.group(3)])
         continue
     # Общий обход: точки — шаги пути, [*] — «все элементы массива или все значения
     # объекта». Ровно тот набор выражений, который встречается в скрипте.
@@ -399,9 +407,14 @@ if [ "$head" = 1 ]; then
 fi
 [ -n "$dump" ] && printf 'HTTP/2 200\r\n%s\r\n' "${CURL_RESP_HDRS:-}" > "$dump"
 if [ -n "$out" ]; then
-    if [ -n "${CURL_BODY:-}" ]; then printf '%s\n' "$CURL_BODY" > "$out"
-    else printf 'remote.example\n10.1.0.0/16\n' > "$out"
-    fi
+    case "$url" in
+        # Набор sing-box: тело двоичное и заглушке безразлично — его разбирает движок,
+        # который здесь тоже заглушка. Важно, что за набором ходили по ЕГО ссылке.
+        *.srs) printf 'SRS\0\0' > "$out" ;;
+        *) if [ -n "${CURL_BODY:-}" ]; then printf '%s\n' "$CURL_BODY" > "$out"
+           else printf 'remote.example\n10.1.0.0/16\n' > "$out"
+           fi ;;
+    esac
 fi
 exit "${CURL_RC:-0}"
 EOF
@@ -419,6 +432,25 @@ echo "$*" >> "$SANDBOX/steer.log"
 # Проверка узла: движок пишет предупреждения в stderr, а JSON — в stdout. Стенду нужно уметь
 # воспроизводить обе половины сразу: именно их смешение и ломало ответ.
 case "${1:-}" in
+    # Разбор набора sing-box: движок кладёт домены в --out, подсети в --prefixes-out.
+    # Содержимое поданного файла заглушке не важно — важно, что её вообще позвали и что
+    # половины разошлись по разным файлам, а не слились в одну.
+    srs-read)
+        _o=""; _p=""; _m=""
+        shift
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --out) _o="$2"; shift 2 ;;
+                --prefixes-out) _p="$2"; shift 2 ;;
+                --meta-out) _m="$2"; shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        [ -n "$_o" ] && printf 'srs-domain.example\n' > "$_o"
+        [ -n "$_p" ] && printf '203.0.113.0/24\n' > "$_p"
+        [ -n "$_m" ] && : > "$_m"
+        exit 0
+        ;;
     vless-probe|vless-nodes)
         [ -n "${STEER_NOISE:-}" ] && echo "$STEER_NOISE" >&2
         [ -n "${STEER_JSON:-}" ] && printf '%s\n' "$STEER_JSON"
@@ -1850,6 +1882,46 @@ check "в восстановлении загрузка идёт ДО прове
 # channel's list» отправляет искать испорченный файл, которого никогда не было.
 check "при неудачной загрузке причина ставится перед ошибкой движка" "yes" \
       "$(rpcd_src | grep -q 'fail "${set_warn:+$set_warn; }' && echo yes || echo no)"
+
+# ДОСКАЧИВАНИЕ ЗНАЕТ ПРО НАБОРЫ КАТАЛОГА. Качальщиков в продукте три — кнопка в каталоге,
+# ночное обновление и вот это доскачивание перед проверкой спеки, — и научить надо было все
+# три. Пока третий не знал про `format: "srs"`, «Применить» честно ходило по несуществующему
+# адресу `base_url` плюс путь и сообщало, что список не скачался; снято с живого роутера:
+# «raw.githubusercontent.com не ответил ни напрямую, ни через выход wg0» на файле
+# itdoginfo/domains/geoblock.srs.lst.
+cat > "$T/etc/manifest.json" <<'MF'
+{
+  "base_url": "https://example.invalid/lists",
+  "categories": [
+    { "id": "src:tg", "file": "cat/tg.srs.lst", "format": "srs",
+      "url": "https://github.com/some/repo/releases/download/2026-01-01/tg.srs" }
+  ],
+  "domain_lists": [
+    { "id": "svc_src_tg", "kind": "domains", "file": "cat/domains/tg.srs.lst", "format": "srs",
+      "same_as_ip": ["src:tg"],
+      "url": "https://github.com/some/repo/releases/download/2026-01-01/tg.srs" }
+  ]
+}
+MF
+rm -rf "$T/lists/cat"
+: > "$T/curl.log"
+cat > "$T/etc/spec.json" <<SPEC
+{ "schema": 1, "outputs": {}, "channels": [
+  { "name": "c", "out": "direct",
+    "match": { "prefixes_files": ["$T/lists/cat/tg.srs.lst"],
+               "domains_files":  ["$T/lists/cat/domains/tg.srs.lst"] } } ] }
+SPEC
+out="$(rpcd apply)"
+check "набор каталога скачан по своей ссылке" "1" \
+      "$(grep -c '/releases/download/2026-01-01/tg.srs$' "$T/curl.log")"
+check "и по base_url за ним не ходили" "0" \
+      "$(grep -c 'example.invalid/lists/cat' "$T/curl.log")"
+check "подсети легли по своему пути" "203.0.113.0/24" \
+      "$(cat "$T/lists/cat/tg.srs.lst" 2>/dev/null)"
+check "домены — по своему" "srs-domain.example" \
+      "$(cat "$T/lists/cat/domains/tg.srs.lst" 2>/dev/null)"
+check "набор скачан ОДИН раз на обе половины" "1" \
+      "$(grep -c '/tg.srs$' "$T/curl.log")"
 
 # ---- R-005: архив настроек ----------------------------------------------------
 # Бекапа и переноса настроек не было вовсе, а штатный архив системы настройки splify2 не
