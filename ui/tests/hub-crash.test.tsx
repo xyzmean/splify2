@@ -277,7 +277,10 @@ describe('подписки: список, добавление, удаление
         render(<VlessScreen />)
         expect(await screen.findByText('Riot')).toBeInTheDocument()
         expect(screen.getByText('Blue')).toBeInTheDocument()
-        expect(screen.getByText('выходов: 2')).toBeInTheDocument()
+        /* Подпись переименована вместе со смыслом: число говорит, ЧЕМ ЗАНЯТА подписка, а не
+           сколько в ней узлов (VlessScreen). Стенд остался на прежних словах и краснел на
+           верном экране. */
+        expect(screen.getByText(/взята выходами: 2/)).toBeInTheDocument()
     })
 
     it('новая подписка уезжает со своим именем', async () => {

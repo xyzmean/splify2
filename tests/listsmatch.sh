@@ -1122,5 +1122,73 @@ out="$(srs_rpcd list_remove '{"id":"itdog:../../etc/passwd","kind":"domains"}')"
 check "list_remove отвергает выход за каталог списков" "yes" \
       "$(printf '%s' "$out" | grep -q '"ok": *false' && echo yes || echo no)"
 
+# ---- движок выключен человеком: списки обновляются, правила НЕ ставятся ----------------
+#
+# ЧТО ЗДЕСЬ СТОРОЖИТСЯ. Ночное обновление заканчивалось двумя действиями — `steer apply` и
+# `reload_dnsd`, — и оба возвращали к жизни движок, который человек выключил кнопкой
+# «Остановить всё»: apply ставил правила в ядро, а reload_dnsd при отсутствии экземпляра
+# резолвера поднимал всю службу. Наутро движок работал сам, а интерфейс показывал
+# «выключено» (он читает автозапуск, а тот остался снятым) — выключатель выглядел сломанным
+# дважды. Обратка владельца: «если отключить splify2, спустя какое-то время он сам
+# включается; причём запускается сам steer, splify2 всё ещё считает, что всё выключено».
+#
+# Признак выключенности — СНЯТАЯ ССЫЛКА автозапуска плюс неработающая служба: остановленная
+# служба бывает случайностью, снятая ссылка ставится ровно одним человеческим действием.
+rm -rf "$T/lists" "$T/var/last-update" "$T/rcd"
+mkdir -p "$T/lists/domains" "$T/rcd"
+cat > "$T/bin/steer" <<'EOF'
+#!/bin/sh
+case "${1:-}" in
+    fit) src=""; for a in "$@"; do src="$a"; done; cat "$src" ;;
+    apply) echo "apply" >> "$SANDBOX/applied.log"; exit 0 ;;
+esac
+exit 0
+EOF
+chmod +x "$T/bin/steer"
+cat > "$T/bin/initd-steer" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$1" >> "$SANDBOX/initd.log"
+case "$1" in running) [ -f "$SANDBOX/steer-running" ] ;; *) : ;; esac
+EOF
+chmod +x "$T/bin/initd-steer"
+rm -f "$T/applied.log" "$T/initd.log" "$T/steer-running"
+: > "$T/syslog"
+
+run_update() {
+    SANDBOX="$T" PATH="$T/bin:$PATH" STEER="$T/bin/steer" SPEC="$T/etc/spec.json" \
+        LISTS="$T/lists" MANIFEST="$T/etc/manifest.json" STAMP="$T/var/last-update" \
+        LOCK="$T/var/update.lock" FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
+        STEER_INIT="$T/bin/initd-steer" RC_D="$T/rcd" \
+        sh "$SCRIPT" > "$T/out-off" 2>&1
+}
+
+run_update
+check "выключенному движку правила не ставятся" "no" \
+      "$([ -s "$T/applied.log" ] && echo yes || echo no)"
+check "и резолвер ему не перезапускается" "no" \
+      "$([ -s "$T/initd.log" ] && grep -q reload_dnsd "$T/initd.log" && echo yes || echo no)"
+check "но списки при этом обновлены" "yes" \
+      "$([ -s "$T/lists/rkn.lst" ] && echo yes || echo no)"
+check "и сказано, почему правила не применены" "yes" \
+      "$(grep -q 'движок выключен' "$T/syslog" && echo yes || echo no)"
+
+# Автозапуск на месте — прежнее поведение целиком: правила ставятся, резолвер перечитывает.
+rm -rf "$T/lists" "$T/var/last-update"
+mkdir -p "$T/lists/domains"
+ln -sf "$T/bin/initd-steer" "$T/rcd/S94steer"
+rm -f "$T/applied.log" "$T/initd.log"
+run_update
+check "включённому движку правила ставятся как прежде" "yes" \
+      "$([ -s "$T/applied.log" ] && echo yes || echo no)"
+
+# Работающая служба со снятой ссылкой — человек поднял её руками, и мешать ему незачем.
+rm -rf "$T/lists" "$T/var/last-update"
+mkdir -p "$T/lists/domains"
+rm -f "$T/rcd/S94steer" "$T/applied.log"
+: > "$T/steer-running"
+run_update
+check "работающей службе правила ставятся, даже если ссылка снята" "yes" \
+      "$([ -s "$T/applied.log" ] && echo yes || echo no)"
+
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo 'ЕСТЬ ПРОВАЛЫ')"
 [ "$fails" -eq 0 ]

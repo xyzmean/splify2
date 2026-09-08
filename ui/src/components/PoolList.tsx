@@ -92,8 +92,11 @@ export default function PoolList({
     }
 
     /* Служебные части пулов — не выходы для человека: их локации показаны строками внутри
-     * своего пула (см. Output.part_of). */
-    const rows = Object.entries(spec.outputs).filter(([, o]) => !isPart(o))
+     * своего пула (см. Output.part_of). Постоянный `direct` — тоже не строка этого списка:
+     * настраивать в нём нечего, а «Выходы» отвечают на вопрос «чем роутер выходит наружу»,
+     * тогда как direct — это отсутствие туннеля. Целью правила он при этом остаётся всегда,
+     * и виден там, где выбирают: в редакторе правила (см. model.ts, withDirect). */
+    const rows = Object.entries(spec.outputs).filter(([, o]) => !isPart(o) && o.kind !== 'direct')
 
     return (
         <div className="space-y-3">

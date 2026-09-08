@@ -1,0 +1,67 @@
+#!/bin/sh
+# Заглушка uci для стендов: настоящего libuci на машине разработчика нет, а проверять надо
+# ИМЕННО то, что мы в uci пишем, — признак «ведём ли мы DoH», список резолверов dnsmasq и
+# ключ noresolv. Без неё эти ветки не исполнялись бы вовсе.
+#
+# Хранилище — файл `$UCI_STUB_DB` строками `ключ=значение`; список — одно значение со
+# словами через пробел, ровно так его печатает и настоящий `uci get`. Секция в ключе берётся
+# как есть, включая `@dnsmasq[0]`: заглушке незачем знать, что это индекс.
+#
+# Умеет ровно то, что зовёт splify2: get / set / add_list / del_list / delete / commit / show.
+# Всё прочее — тихий успех: команда, которой стенд не пользуется, не должна валить стенд.
+set -u
+DB="${UCI_STUB_DB:-/tmp/uci-stub.db}"
+[ -f "$DB" ] || : > "$DB"
+
+q=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -q) q=1; shift ;;
+        -*) shift ;;
+        *) break ;;
+    esac
+done
+cmd="${1:-}"; shift 2>/dev/null || true
+key="${1:-}"
+
+val_of() { sed -n "s|^$(printf '%s' "$1" | sed 's/[][\\.*^$/]/\\&/g')=||p" "$DB" | head -1; }
+put() {  # КЛЮЧ ЗНАЧЕНИЕ
+    _t="$DB.tmp"
+    grep -v "^$(printf '%s' "$1" | sed 's/[][\\.*^$/]/\\&/g')=" "$DB" > "$_t" 2>/dev/null
+    printf '%s=%s\n' "$1" "$2" >> "$_t"
+    mv "$_t" "$DB"
+}
+drop() {
+    _t="$DB.tmp"
+    grep -v "^$(printf '%s' "$1" | sed 's/[][\\.*^$/]/\\&/g')=" "$DB" > "$_t" 2>/dev/null
+    mv "$_t" "$DB"
+}
+
+case "$cmd" in
+    get)
+        v="$(val_of "$key")"
+        [ -n "$v" ] || { [ "$q" = 1 ] || echo "uci: Entry not found" >&2; exit 1; }
+        printf '%s\n' "$v"
+        ;;
+    set)
+        k="${key%%=*}"; v="${key#*=}"
+        put "$k" "$v"
+        ;;
+    add_list)
+        k="${key%%=*}"; v="${key#*=}"
+        cur="$(val_of "$k")"
+        for _w in $cur; do [ "$_w" = "$v" ] && exit 0; done
+        put "$k" "${cur:+$cur }$v"
+        ;;
+    del_list)
+        k="${key%%=*}"; v="${key#*=}"
+        new=''
+        for _w in $(val_of "$k"); do [ "$_w" = "$v" ] || new="${new:+$new }$_w"; done
+        if [ -n "$new" ]; then put "$k" "$new"; else drop "$k"; fi
+        ;;
+    delete) drop "$key" ;;
+    show) cat "$DB" ;;
+    commit|changes|revert|'') : ;;
+    *) : ;;
+esac
+exit 0

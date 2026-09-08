@@ -6,7 +6,13 @@ import { Button } from '@/components/ui/button'
 import { rpc } from '@/lib/rpc'
 import { notify } from '@/lib/notify'
 import { t } from '@/lib/i18n'
+import { usePending } from '@/lib/pending'
+import { isPart } from '@/lib/model'
 import { type Live } from '@/lib/live'
+
+/** Адрес резолвера: 1.2.3.4 или 1.2.3.4#5353. Проверяется и здесь, и в бэкенде — здесь
+ *  чтобы сказать об опечатке до похода на роутер, там чтобы не поверить на слово. */
+const IP_RE = /^(\d{1,3}\.){3}\d{1,3}(#\d{1,5})?$/
 
 /** DoH: DNS по HTTPS.
  *
@@ -38,6 +44,12 @@ export default function Doh({ live }: { live: Live }) {
     const [adding, setAdding] = useState(false)
     const [newUrl, setNewUrl] = useState('')
     const [newTitle, setNewTitle] = useState('')
+    /** Ввод адреса системного резолвера — второе поле того же раздела, а не другой вкладки:
+     *  вопрос «чем разрешаются имена» один, а ответов два. */
+    const [newIp, setNewIp] = useState('')
+    /** Спека — только ради того, чтобы не предлагать в выборе выхода служебные части пулов:
+     *  для человека это строки внутри одного выхода, а не выходы. */
+    const { spec } = usePending()
 
     const reload = () => rpc.dohState().then(setSt).catch(() => setSt(null))
     useEffect(() => { void reload() }, [])
@@ -80,10 +92,83 @@ export default function Doh({ live }: { live: Live }) {
         await choose(st.active || 'default')
     }
 
+    /** Список адресов, каким он сейчас известен. Отдельной строчкой, потому что читают его
+     *  и обработчики (до отрисовки, где `st` ещё может быть null), и разметка. */
+    const sysNow = () => st?.sys ?? []
+
+    /** Системный резолвер адресом. Список целиком, а не по одному: бэкенд пишет `list
+     *  server` заменой, и «добавить» с «убрать» — это одна и та же запись нового списка. */
+    async function sysSet(next: string[]) {
+        if (busy) return
+        setBusy('sys')
+        try {
+            const r = await rpc.dohSysSet(next.join(' '))
+            if (!r.ok) throw new Error(r.error || t('не сохранилось'))
+            await reload()
+        } catch (e) {
+            notify(String(e instanceof Error ? e.message : e), 'error')
+        } finally {
+            setBusy('')
+        }
+    }
+
+    async function addIp() {
+        const ip = newIp.trim()
+        if (!IP_RE.test(ip)) {
+            notify(t('Адрес резолвера пишется как 1.2.3.4 или 1.2.3.4#порт'), 'warning')
+            return
+        }
+        if (st?.sys?.includes(ip)) { setNewIp(''); return }
+        await sysSet([...sysNow(), ip])
+        setNewIp('')
+    }
+
+    /** Запустить или остановить ЧУЖУЮ службу. Хозяином её настройки мы от этого не
+     *  становимся — и об этом же говорит подпись рядом с кнопкой. */
+    async function service(on: boolean) {
+        if (busy) return
+        setBusy('svc')
+        try {
+            const r = on ? await rpc.dohStart() : await rpc.dohStop()
+            if (!r.ok) throw new Error(r.error || t('не получилось'))
+            await reload()
+        } catch (e) {
+            notify(String(e instanceof Error ? e.message : e), 'error')
+        } finally {
+            setBusy('')
+        }
+    }
+
+    async function fixForce() {
+        if (busy) return
+        setBusy('force')
+        try {
+            const r = await rpc.dohForceFix()
+            if (!r.ok) throw new Error(r.error || t('не получилось'))
+            notify(t('Перенаправление DNS оставлено движку'))
+            await reload()
+        } catch (e) {
+            notify(String(e instanceof Error ? e.message : e), 'error')
+        } finally {
+            setBusy('')
+        }
+    }
+
     async function addCustom() {
         const url = newUrl.trim()
+        /* АДРЕС ЗДЕСЬ ТОЖЕ ПРИНИМАЕТСЯ, а не отвергается подсказкой про https://. Человек
+           пришёл в поле «свой резолвер» с адресом провайдера — это законный резолвер, просто
+           другого рода: его обслуживает не прокси, а dnsmasq. Отправить за этим в соседнюю
+           карточку значило бы объяснять человеку устройство роутера вместо ответа. */
+        if (IP_RE.test(url)) {
+            if (!st?.sys?.includes(url)) await sysSet([...sysNow(), url])
+            setNewUrl('')
+            setAdding(false)
+            notify(t('Адрес добавлен в системный DNS'))
+            return
+        }
         if (!/^https:\/\/\S+/.test(url)) {
-            notify(t('Ссылка резолвера начинается с https://'), 'warning')
+            notify(t('Резолвер — это ссылка https://…/dns-query или адрес 1.2.3.4'), 'warning')
             return
         }
         if (busy) return
@@ -122,7 +207,26 @@ export default function Doh({ live }: { live: Live }) {
         if (!st || busy) return
         setBusy('tunnel')
         try {
-            const r = await rpc.dohTunnelSet(!st.via_tunnel)
+            /* Выбранный выход передаётся как есть: метод понимает отсутствие поля как «не
+               трогать», но передать своё же значение честнее — так вызов не зависит от того,
+               что бэкенд помнит между двумя нажатиями. */
+            const r = await rpc.dohTunnelSet(!st.via_tunnel, st.out_pick ?? '')
+            if (!r.ok) throw new Error(r.error || t('не сохранилось'))
+            await reload()
+        } catch (e) {
+            notify(String(e instanceof Error ? e.message : e), 'error')
+        } finally {
+            setBusy('')
+        }
+    }
+
+    /** Через какой выход. Пустая строка — «решайте сами»: тогда берётся первый поднятый, и
+     *  это законный выбор, а не отсутствие настройки. */
+    async function pickOut(name: string) {
+        if (!st || busy) return
+        setBusy('tunnel')
+        try {
+            const r = await rpc.dohTunnelSet(st.via_tunnel, name)
             if (!r.ok) throw new Error(r.error || t('не сохранилось'))
             await reload()
         } catch (e) {
@@ -133,6 +237,14 @@ export default function Doh({ live }: { live: Live }) {
     }
 
     if (!st) return <div className="p-5 text-sm text-muted-foreground">{t('Загрузка…')}</div>
+
+    /* Поля, которых у бэкенда постарше нет вовсе. Читаются через умолчание, а не в лоб:
+     * `sys.length` на таком ответе роняет ВКЛАДКУ ЦЕЛИКОМ, и человек видит пустой экран
+     * вместо одной недостающей строки. Умолчание `managed = true` — прежнее поведение: до
+     * различения хозяина настройку всегда вели мы. */
+    const sys = st.sys ?? []
+    const managed = st.managed ?? true
+    const outPick = st.out_pick ?? ''
 
     if (!st.installed) {
         return (
@@ -157,6 +269,14 @@ export default function Doh({ live }: { live: Live }) {
        этот момент разрешает dnsmasq сам. */
     const dohOn = st.running && (!!st.active || foreign)
 
+    /* Выходы, куда можно увести запросы к резолверу. Спрашиваются у ДВИЖКА (он же их и
+       поднимает), а не у спеки: спека могла быть сохранена и не применена. `direct` не выход
+       — через него «DoH через туннель» это DoH напрямую; служебные части пулов человеку не
+       показываются нигде (см. Output.part_of). */
+    const outNames = Object.entries(live.status?.outputs || {})
+        .filter(([n, o]) => o.kind !== 'direct' && !isPart(spec?.outputs?.[n]))
+        .map(([n]) => n)
+
     return (
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] xl:items-start">
             <Card>
@@ -175,6 +295,34 @@ export default function Doh({ live }: { live: Live }) {
                             {t('автозапуск выключен — после перезагрузки не вернётся')}
                         </CardDescription>
                     )}
+                    {/* ЧЬЯ ЭТО СЛУЖБА. Пакет приезжает нашей зависимостью, но он не наш:
+                        человек вправе настроить его сам — руками, Zapret Manager'ом или
+                        страницей luci-app-https-dns-proxy. Тогда мы не трогаем ни его файл,
+                        ни автозапуск, и говорим об этом вслух: иначе выключенный у нас DoH
+                        при работающем прокси читается как поломка.
+
+                        Кнопки запуска здесь — не дубль чужой страницы. Про DoH спрашивают на
+                        этой вкладке, а «Start» на той у людей не срабатывает; хозяином
+                        настройки эти две кнопки нас не делают. */}
+                    {!managed && (
+                        <CardDescription className="flex flex-wrap items-center gap-2">
+                            <span>
+                                {st.urls.length
+                                    ? t('Прокси настроен не нами — мы его настройку не трогаем.')
+                                    : t('Прокси не настроен нами — выберите резолвер ниже, и вести настройку будем мы.')}
+                            </span>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={busy !== ''}
+                                onClick={() => void service(!st.running)}
+                            >
+                                {busy === 'svc'
+                                    ? t('минуту…')
+                                    : st.running ? t('Остановить прокси') : t('Запустить прокси')}
+                            </Button>
+                        </CardDescription>
+                    )}
                     {foreign && (
                         <CardDescription>
                             {t('Сейчас настроен резолвер не из этого списка:')}{' '}
@@ -186,9 +334,23 @@ export default function Doh({ live }: { live: Live }) {
                     {/* force_dns — единственная тонкость, о которой человек обязан знать: у
                         движка своё перенаправление DNS, и два на одном порту дают гонку,
                         после которой доменные правила молча перестают действовать. */}
-                    {st.needs_dnsd && (
+                    {st.needs_dnsd && st.force_conflict !== true && (
                         <div className="mb-2 rounded-lg bg-accent px-3 py-2 text-xs text-muted-foreground">
                             {t('У вас есть правила по доменам, поэтому DNS сети заворачивает движок, а не https-dns-proxy (force_dns = 0). Иначе два перенаправления на порт 53 спорят между собой, и правила по доменам перестают действовать.')}
+                        </div>
+                    )}
+                    {/* СПОР ЗА ПОРТ 53, а не отчёт о нашей же настройке. Возникает он там,
+                        где настройку прокси ведём не мы: править чужой ключ молча — это и
+                        есть перехват управления, от которого ушли. Поэтому здесь сказано, что
+                        именно происходит, и предложено нажатие, а не сделано за спиной. */}
+                    {st.force_conflict === true && (
+                        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning-fg">
+                            <span className="min-w-0 flex-1">
+                                {t('https-dns-proxy заворачивает DNS сети сам (force_dns = 1), и это спорит с резолвером движка: чей из двух перехватов порта 53 победит, решает порядок запуска служб, а проигравший молчит — правила по доменам действуют через раз.')}
+                            </span>
+                            <Button size="sm" disabled={busy !== ''} onClick={() => void fixForce()}>
+                                {busy === 'force' ? t('минуту…') : t('Оставить движку')}
+                            </Button>
                         </div>
                     )}
                     {/* Режим — переключателем из двух положений, а не кнопкой «Выключить DoH»
@@ -219,9 +381,63 @@ export default function Doh({ live }: { live: Live }) {
                         <span className="self-center text-xs text-muted-foreground">
                             {dohOn
                                 ? t('запросы сети шифруются к выбранному резолверу')
-                                : t('dnsmasq ходит к резолверам провайдера или роутера, как настроено в системе')}
+                                : sys.length
+                                  ? t('dnsmasq ходит к адресам, вписанным ниже')
+                                  : t('dnsmasq ходит к резолверам провайдера, как отдал их роутер')}
                         </span>
                     </div>
+                    {/* СИСТЕМНЫЙ DNS — АДРЕСАМИ. Резолвер бывает двух родов, и живут они в
+                        разных местах роутера: DoH — это ссылка, её обслуживает прокси; обычный
+                        резолвер — это АДРЕС, и ходит к нему сам dnsmasq. Пока второго рода тут
+                        не было, «Системный DNS» означал «ничего не настраиваем», и человек,
+                        который хочет вписать DNS своего провайдера, уходил в настройки
+                        интерфейсов LuCI.
+
+                        Показывается только в своём режиме: в режиме DoH эти адреса всё равно
+                        ничего не решают — запросы идут к прокси. */}
+                    {!dohOn && (
+                        <div className="mb-2 space-y-1.5 rounded-xl border border-dashed border-border p-3">
+                            <div className="text-xs text-muted-foreground">
+                                {t('Свои адреса резолверов (например, DNS провайдера). Пусто — как отдал провайдер.')}
+                            </div>
+                            {sys.map((ip) => (
+                                <div key={ip} className="flex items-center gap-2 text-sm">
+                                    <span className="min-w-0 flex-1 truncate font-mono">{ip}</span>
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-8 w-8 shrink-0 p-0 text-muted-foreground hover:text-destructive"
+                                        disabled={busy !== ''}
+                                        aria-label={`${t('удалить')} ${ip}`}
+                                        onClick={() => void sysSet(sys.filter((v) => v !== ip))}
+                                    >
+                                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                                    </Button>
+                                </div>
+                            ))}
+                            <div className="flex flex-wrap items-center gap-2">
+                                <input
+                                    value={newIp}
+                                    onChange={(e) => setNewIp(e.currentTarget.value)}
+                                    onKeyDown={(e) => { if (e.key === 'Enter') void addIp() }}
+                                    placeholder="192.168.1.1"
+                                    aria-label={t('адрес резолвера')}
+                                    className="h-9 min-w-[10rem] flex-1 rounded-lg border border-border bg-background px-3 font-mono text-sm"
+                                />
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={busy !== '' || newIp.trim() === ''}
+                                    onClick={() => void addIp()}
+                                >
+                                    {busy === 'sys' ? t('минуту…') : t('Добавить адрес')}
+                                </Button>
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                                {t('Порт — через решётку: 192.168.1.1#5353. Пока адреса вписаны, резолверы провайдера не подмешиваются (noresolv).')}
+                            </div>
+                        </div>
+                    )}
                     {st.providers.map((p) => {
                         const on = dohOn && st.active === p.id
                         return (
@@ -281,7 +497,7 @@ export default function Doh({ live }: { live: Live }) {
                                 <input
                                     value={newUrl}
                                     onChange={(e) => setNewUrl(e.currentTarget.value)}
-                                    placeholder="https://dns.example.com/dns-query"
+                                    placeholder="https://dns.example.com/dns-query или 1.1.1.1"
                                     aria-label={t('ссылка резолвера')}
                                     className="h-9 min-w-[14rem] flex-1 rounded-lg border border-border bg-background px-3 font-mono text-sm"
                                 />
@@ -297,7 +513,7 @@ export default function Doh({ live }: { live: Live }) {
                                 </Button>
                             </div>
                             <div className="text-xs text-muted-foreground">
-                                {t('Ссылка — как её даёт провайдер DoH, обычно вида https://…/dns-query. Добавленный резолвер сразу включается.')}
+                                {t('Ссылка — как её даёт провайдер DoH, обычно вида https://…/dns-query; добавленный резолвер сразу включается. Простой адрес (1.1.1.1, можно с портом через решётку) — это резолвер другого рода: его обслуживает не прокси, а dnsmasq, и он уедет в системный DNS.')}
                             </div>
                         </div>
                     )}
@@ -331,6 +547,43 @@ export default function Doh({ live }: { live: Live }) {
                                         : t('поднятого выхода нет — пока идут напрямую')
                                     : t('cloudflare-dns.com и dns.google закрывают так же, как сайты; тогда DoH не поднимается вовсе')}
                             </div>
+                            {/* ЧЕРЕЗ КАКОЙ ВЫХОД. Прежде выбора не было вовсе: брался первый
+                                поднятый, и на роутере с двумя туннелями это оказывался не тот
+                                — «есть пункт „DNS в туннель“, а в какой выход, выбрать не
+                                можем». «Первый поднятый» осталось отдельным пунктом списка:
+                                это законный выбор (выходы падают, и запросы не должны падать
+                                вместе с ними), а не отсутствие настройки. */}
+                            {st.via_tunnel && (
+                                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                    {[{ v: '', label: t('первый поднятый') }, ...outNames.map((n) => ({ v: n, label: n }))].map((o) => {
+                                        const on = outPick === o.v
+                                        return (
+                                            <button
+                                                key={o.v || '_auto'}
+                                                type="button"
+                                                role="radio"
+                                                aria-checked={on}
+                                                disabled={busy !== ''}
+                                                onClick={() => on ? undefined : void pickOut(o.v)}
+                                                className={[
+                                                    'rounded-lg border px-2.5 py-1 text-xs transition-colors duration-200 disabled:opacity-50',
+                                                    on ? 'border-primary bg-primary/10 font-medium text-primary' : 'border-border hover:bg-accent',
+                                                ].join(' ')}
+                                            >
+                                                {o.label}
+                                            </button>
+                                        )
+                                    })}
+                                </div>
+                            )}
+                            {/* Выбранный выход лежит — запросы идут через другой, и об этом
+                                надо сказать: молчание здесь означало бы, что человек считает
+                                выбор действующим, а он не действует. */}
+                            {st.via_tunnel && outPick && st.out && st.out !== outPick && (
+                                <div className="mt-1 text-xs text-warning-fg">
+                                    {t('Выбранный выход')} {outPick} {t('сейчас не поднят — запросы идут через')} {st.out}
+                                </div>
+                            )}
                             <div className="mt-1 text-xs text-muted-foreground">
                                 {t('Касается только самого роутера — устройств сети не затрагивает. Туннель упал — запросы сами пойдут напрямую: иначе роутер не смог бы разрешить имя узла своего же туннеля и не поднял бы его никогда.')}
                             </div>

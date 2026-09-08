@@ -71,8 +71,16 @@ if [ -d "$ROOT/ui/node_modules/vitest" ]; then
     node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
     if [ "$node_major" -ge 20 ] 2>/dev/null; then
         run ui-harness sh -c "cd '$ROOT/ui' && npm test --silent"
+    elif docker image inspect node:22-alpine >/dev/null 2>&1; then
+        # Node в системе старый, а образ есть — гоняем стенд в нём, а не пропускаем.
+        # Пропуск здесь дороже, чем кажется: половина проверок интерфейса — про поведение,
+        # которое нечем проверить больше нигде, и «ПРОПУЩЕН» на каждом прогоне читается как
+        # «этого стенда нет». Каталог монтируется КОРНЕМ дерева, а не ui/: стенд загрузчика
+        # читает luci/htdocs/... по относительному пути и в узком монтировании не находит его.
+        run ui-harness docker run --rm -v "$ROOT":/w -w /w/ui node:22-alpine npm test --silent
     else
-        printf '\n===== ui-harness =====\nПРОПУЩЕН: нужен node >= 20, найден %s\n' "$(node --version 2>/dev/null || echo 'нет node')"
+        printf '\n===== ui-harness =====\nПРОПУЩЕН: нужен node >= 20 (найден %s) либо образ node:22-alpine для docker\n' \
+            "$(node --version 2>/dev/null || echo 'нет node')"
         fails=$((fails + 1))
     fi
 else

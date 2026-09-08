@@ -350,6 +350,31 @@ purge_doh_conf() {
     return 0
 }
 
+# Системный резолвер адресом: наши строки в чужом /etc/config/dhcp.
+#
+# ОТДЕЛЬНЫМ ШАГОМ ОТ НАСТРОЙКИ ПРОКСИ, потому что это другой файл и другой пакет: адреса
+# резолвера пишет dnsmasq, а не https-dns-proxy, и роутер вполне может иметь одно без
+# другого. Признак «писали мы» тот же по смыслу — метка состояния рядом с копией.
+purge_sys_dns() {
+    [ -r "$DOH_LIB" ] || return 0
+    # shellcheck disable=SC1090
+    . "$DOH_LIB"
+    [ -n "$(uci -q get "$DOH_DHCP_SECT.splify2_dns_state" 2>/dev/null)" ] || return 0
+    if [ "$KEEP" = 1 ]; then
+        say "адреса системного резолвера оставлены — просили сохранить настройки"
+        return 0
+    fi
+    plan "адреса системного резолвера в $DOH_DHCP_SECT возвращаются к тому, что было до нас"
+    [ "$DO" = 1 ] || return 0
+    if doh_sys_restore; then
+        say "адреса системного резолвера возвращены"
+        [ -x /etc/init.d/dnsmasq ] && /etc/init.d/dnsmasq restart >/dev/null 2>&1
+    else
+        say "адреса системного резолвера вернуть не удалось — посмотрите uci show dhcp"
+    fi
+    return 0
+}
+
 # ---- телеметрия --------------------------------------------------------------------
 #
 # РАБОТАЕТ И ПРИ --keep-config, в отличие от всего остального в настройке. Без --keep-config
@@ -439,6 +464,7 @@ purge_cron
 purge_rpcd_timeout
 purge_zapret
 purge_doh_conf
+purge_sys_dns
 purge_telemetry
 purge_paths
 warn_xsteer

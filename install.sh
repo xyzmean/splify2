@@ -409,6 +409,18 @@ if [ "$_rt" -lt 120 ]; then
     uci -q set rpcd.@rpcd[0].timeout=120 && uci -q commit rpcd
 fi
 /etc/init.d/rpcd restart >/dev/null 2>&1 || true   # чтобы ubus увидел новый бэкенд
+# Пустая спека — по тому же доводу, что и срок rpcd выше: то же самое делает
+# files/etc/uci-defaults/99-splify2, а здесь повтор на случай, если uci-defaults отложен.
+#
+# Без файла движок не поднимается вовсе («no /etc/steer/spec.json — nothing to apply»), и
+# свежепоставленный роутер выглядит сломанным: пульт висит в «Загрузке», а исправный движок
+# объявляется не отвечающим. Выход `direct` в спеке есть сразу — «пустить напрямую» не
+# настройка, а то, что роутер делает без нас, и правилу-исключению нужен адрес назначения.
+if [ ! -s /etc/steer/spec.json ]; then
+    mkdir -p /etc/steer 2>/dev/null
+    printf '{"schema":1,"outputs":{"direct":{"kind":"direct"}},"channels":[]}\n' \
+        > /etc/steer/spec.json 2>/dev/null || true
+fi
 if [ -x /etc/init.d/steer ]; then
     /etc/init.d/steer enable >/dev/null 2>&1 || true
 fi

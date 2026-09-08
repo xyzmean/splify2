@@ -513,7 +513,12 @@ export default function RuleEditor({
                                             }`}
                                             aria-hidden="true"
                                         />
-                                        <span className="min-w-0 flex-1 truncate">{n}</span>
+                                        {/* Постоянный выход называется словом, а не ключом
+                                            спеки: «direct» в списке целей читалось как чьё-то
+                                            имя выхода, а не как «никуда не уводить». */}
+                                        <span className="min-w-0 flex-1 truncate">
+                                            {o.kind === 'direct' ? 'Напрямую' : n}
+                                        </span>
                                         <span className="shrink-0 text-xs text-muted-foreground">
                                             {/* «нет NAT» — только у своего устройства: у туннеля
                                                 подписки (и у пула, где активна часть подписки)

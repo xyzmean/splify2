@@ -75,11 +75,15 @@ export default function Console() {
     const counts = {
         rules: spec ? { text: String(spec.channels.length) } : undefined,
         /* Служебные части пулов — не выходы для человека (Output.part_of): пул из двух
-           подписок в рельсе считается одним выходом, а не тремя. */
+           подписок в рельсе считается одним выходом, а не тремя. Постоянный выход `direct`
+           не считается тоже: он есть у всех и всегда, и «VPN · 1» на роутере без единого
+           туннеля означало бы ровно обратное тому, что есть. */
         vpn: live.status
             ? {
                   text: String(
-                      Object.keys(live.status.outputs || {}).filter((n) => !isPart(spec?.outputs?.[n])).length,
+                      Object.keys(live.status.outputs || {}).filter(
+                          (n) => live.status?.outputs?.[n]?.kind !== 'direct' && !isPart(spec?.outputs?.[n]),
+                      ).length,
                   ),
               }
             : undefined,

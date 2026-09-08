@@ -821,11 +821,40 @@ export function toCatalog(m: RawManifest): Catalog {
     return { version: m.version, base_url: m.base_url, services }
 }
 
+/** Имя постоянного выхода «напрямую». Одно на весь интерфейс: три места писали его строкой,
+ *  и первое же переименование развело бы их молча. */
+export const DIRECT = 'direct'
+
+/** Выход `direct` есть ВСЕГДА — он не заводится и не удаляется.
+ *
+ *  «Пустить напрямую» — не настройка роутера, а то, что роутер делает без нас: выход этого
+ *  вида не берёт ни метки, ни таблицы маршрутизации, он лишь называет место назначения, в
+ *  которое можно привести правило (контракт steer, §выходы). Пока он заводился по требованию —
+ *  первым правилом-исключением, — на свежем роутере в редакторе правила не было цели «мимо
+ *  туннеля» вовсе, и вопрос «а опция direct пропала?» задавался ровно об этом.
+ *
+ *  Ставится на ВХОДЕ, в normalizeSpec, а значит и текущая спека, и снимок применённого
+ *  проходят через одно и то же: счётчик «Применить · N» от появления выхода не вздрагивает, а
+ *  в файл на роутере он уезжает с первой же настоящей правкой.
+ *
+ *  Чужой выход kind=direct с другим именем (так писали спеки до этого правила) НЕ трогается и
+ *  вторым не заменяется: правила уже ведут в него, и переименование увело бы их в никуда. */
+export function withDirect(outputs: Record<string, Output>): Record<string, Output> {
+    for (const o of Object.values(outputs)) if (o.kind === 'direct') return outputs
+    return { ...outputs, [DIRECT]: { name: DIRECT, kind: 'direct' } }
+}
+
+/** Правило ведут в туннель, а не «напрямую»: списки выходов, счётчики и подсказки считают
+ *  выходами именно эти. Служебные части пулов — тоже не выходы для человека. */
+export function routedOutputs(outputs: Record<string, Output> | undefined | null): [string, Output][] {
+    return Object.entries(outputs || {}).filter(([, o]) => o.kind !== 'direct' && !isPart(o))
+}
+
 /** What a fresh install starts from: nothing routed anywhere. An empty channel list
  *  is a valid spec, and it beats guessing which lists someone wants. */
 export const EMPTY_SPEC: Spec = {
     schema: 1,
-    outputs: {},
+    outputs: { [DIRECT]: { name: DIRECT, kind: 'direct' } },
     channels: [],
 }
 
@@ -859,7 +888,11 @@ const FILE_FORMS = [
  *  этот вопрос вообще возникает. */
 export function normalizeSpec(spec: Spec): Spec {
     if (!spec || !Array.isArray(spec.channels)) return spec
-    return foldLanForms({ ...spec, channels: foldCompanions(spec.channels.map(foldFileForms)) })
+    return foldLanForms({
+        ...spec,
+        outputs: withDirect(spec.outputs || {}),
+        channels: foldCompanions(spec.channels.map(foldFileForms)),
+    })
 }
 
 /** Ключ сужения для группировки файлов в один спутник. */

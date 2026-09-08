@@ -683,7 +683,11 @@ list)
     json_add_object doh_off; json_close_object
     json_add_object doh_custom_add; json_add_string url; json_add_string title; json_add_string bootstrap; json_close_object
     json_add_object doh_custom_del; json_add_string id; json_close_object
-    json_add_object doh_tunnel_set; json_add_boolean on; json_close_object
+    json_add_object doh_tunnel_set; json_add_boolean on; json_add_string out; json_close_object
+    json_add_object doh_start; json_close_object
+    json_add_object doh_stop; json_close_object
+    json_add_object doh_force_fix; json_close_object
+    json_add_object doh_sys_set; json_add_string servers; json_close_object
     # ---- обход DPI ----
     json_add_object zapret_state; json_close_object
     json_add_object zapret_install; json_close_object
@@ -761,7 +765,8 @@ call)
         sub_set|sub_info|sub_quota|sub_list|sub_del) _grp=sub ;;
         backup_get|backup_put) _grp=backup ;;
         xsteer_link|xsteer_link_put) _grp=xsteer ;;
-        doh_state|doh_set|doh_off|doh_tunnel_set|doh_custom_add|doh_custom_del) _grp=doh ;;
+        doh_state|doh_set|doh_off|doh_tunnel_set|doh_custom_add|doh_custom_del|\
+        doh_start|doh_stop|doh_force_fix|doh_sys_set) _grp=doh ;;
         zapret_state|zapret_install|zapret_remove|zapret_sync|zapret_strategies|zapret_strategy|zapret_apply|zapret_enable|zapret_game_set|zapret_test_start|zapret_test_stop|zapret_test|zapret_results|zapret_autoselect|zapret_autoselect_set|zapret_autoselect_start|zapret_autoselect_undo) _grp=zapret ;;
         telemetry_state|telemetry_set|telemetry_preview) _grp=telemetry ;;
         *) fail "неизвестный метод" ;;

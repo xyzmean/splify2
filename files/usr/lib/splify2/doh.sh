@@ -168,6 +168,43 @@ doh_urls() {
 DOH_BAK_SECT=${DOH_BAK_SECT:-splify2_backup}
 DOH_BAK_NAME=${DOH_BAK_NAME:-splify2}
 
+# ---- чьё это хозяйство --------------------------------------------------------------
+# УПРАВЛЯЕМ МЫ ИЛИ ЧЕЛОВЕК. Признак завёлся после обратки, и вот почему он нужен.
+#
+# Пакет https-dns-proxy приезжает нашей зависимостью, но он НЕ наш: его настройку правят и
+# руками, и Zapret Manager, и страница luci-app-https-dns-proxy, а человек вправе держать свой
+# DoH и без нас — «пользователь и сам должен иметь возможность управлять своим DoH без нашего
+# пакета» (решение владельца). Пока признака не было, мы вели себя как единственный хозяин:
+# выбрал человек «Системный DNS» — мы выключали службу вместе с автозапуском, а `doh_force_sync`
+# из apply и из установки продолжал переписывать ему force_dns и перезапускать прокси. Со
+# стороны это и выглядело как перехват: «выбрал системный днс, поставил https-dns-proxy рядом —
+# splify2 всё равно им распоряжается».
+#
+# ГДЕ ХРАНИТСЯ. В нашей настройке (`splify2.main.doh_managed`), а не в чужом файле: чужой файл
+# мы как раз и обязаны перестать трогать, когда признак снят.
+#
+# ЗАПИСИ НЕТ — роутер жил до этого различения. Тогда управляемым считается ровно то, во что мы
+# уже писали, а признак этого — наша секция копии внутри самого файла. Так обновление пакета не
+# меняет поведение ни на одном роутере: где мы вели DoH, там и продолжаем.
+DOH_UCI=${DOH_UCI:-uci}
+
+doh_managed() {
+    _dm="$("$DOH_UCI" -q get splify2.main.doh_managed 2>/dev/null)"
+    case "${_dm:-}" in
+        1) return 0 ;;
+        0) return 1 ;;
+    esac
+    [ -n "$(doh_backup_state)" ]
+}
+
+doh_manage_set() {  # 1|0
+    "$DOH_UCI" -q get splify2.main >/dev/null 2>&1 || {
+        "$DOH_UCI" -q set splify2.main=splify2 || return 1
+    }
+    "$DOH_UCI" -q set "splify2.main.doh_managed=$1" || return 1
+    "$DOH_UCI" -q commit splify2
+}
+
 # Состояние копии: saved, none или пусто (копии нет).
 doh_backup_state() {
     [ -s "$DOH_CONF" ] || return 0
@@ -281,6 +318,41 @@ doh_needs_dnsd() {
 # 1 всегда, и без сверки его правка тихо забирала бы у нас порт 53.
 doh_force_dns() { printf '0'; }
 
+# Что стоит в ЧУЖОМ файле сейчас. Пусто — ключа нет вовсе, а у прокси умолчание единица (см.
+# его init: `config_get_bool force_dns 'config' 'force_dns' '1'`), поэтому пустое здесь читается
+# так же, как «1».
+#
+# Нужно с тех пор, как мы перестали править этот ключ у чужого хозяйства (doh_managed): молчать
+# про расхождение нельзя — доменные правила от него перестают действовать, — а исправлять его
+# молча и есть тот перехват, от которого ушли. Значит: показать и предложить.
+doh_force_now() {
+    [ -s "$DOH_CONF" ] || return 1
+    sed -n "s/^[[:space:]]*option force_dns '\([^']*\)'.*/\1/p" "$DOH_CONF" | head -1
+}
+
+# Спорит ли чужая настройка с нашим резолвером. Спорит, когда прокси заворачивает DNS сети сам
+# (force_dns не ноль) — тогда на порт 53 в одной точке nat prerouting претендуют двое, и
+# проигравший молчит.
+doh_force_conflict() {
+    doh_installed || return 1
+    doh_running || return 1
+    case "$(doh_force_now 2>/dev/null)" in 0) return 1 ;; esac
+    return 0
+}
+
+# Исправить ключ ПО ПРОСЬБЕ человека — то же, что делал doh_force_sync, но однократно и по
+# нажатию. Копия чужой настройки снимается, как и везде: правка в чужом файле без возврата
+# недопустима.
+doh_force_fix() {
+    doh_installed || return 1
+    [ -s "$DOH_CONF" ] || return 1
+    doh_backup_save || return 1
+    "$DOH_UCI" -q set "https-dns-proxy.@main[0].force_dns=$(doh_force_dns)" || return 1
+    "$DOH_UCI" -q commit https-dns-proxy || return 1
+    "$DOH_INIT" restart >/dev/null 2>&1
+    return 0
+}
+
 # Записать конфигурацию под выбранный пункт каталога.
 #
 # ФАЙЛ ПЕРЕПИСЫВАЕТСЯ ЦЕЛИКОМ, как это делает менеджер (`rm -f "$fileDoH"; printf ... >`), и
@@ -333,7 +405,12 @@ doh_write() {  # ID
     # чужой резолвер), и без привязки к началу строки она подтвердила бы запись, которой нет.
     grep -q "^[[:space:]]*option resolver_url '" "$_dw_tmp" ||
         { rm -f "$_dw_tmp"; return 1; }
-    mv "$_dw_tmp" "$DOH_CONF"
+    mv "$_dw_tmp" "$DOH_CONF" || return 1
+    # С этой минуты настройку ведём мы — и только с этой. Признак ставится ПОСЛЕ удачной
+    # записи: объявить себя хозяином файла, которого не написал, значило бы запретить
+    # force_dns-сверку там, где она как раз нужна.
+    doh_manage_set 1
+    return 0
 }
 
 # Привести force_dns в согласие с тем, нужен ли движку свой резолвер.
@@ -355,15 +432,22 @@ doh_write() {  # ID
 doh_force_sync() {
     doh_installed || return 0
     [ -s "$DOH_CONF" ] || return 0
+    # ТОЛЬКО ПОКА DoH ВЕДЁМ МЫ. Ключ живёт в чужом файле, и править его у человека, который
+    # выбрал «Системный DNS» или настроил прокси сам, — это и есть перехват управления, на
+    # который пришла обратка. Расхождение при этом не замалчивается: `doh_state` отдаёт и
+    # `needs_dnsd`, и настоящий force_dns, а вкладка предлагает исправить его одной кнопкой.
+    # Разница между «сделали молча» и «предложили» здесь вся: чужой настройкой распоряжается
+    # её хозяин.
+    doh_managed || return 0
     # Копия — ДО правки ключа, а не после: этот вызов и есть наша первая запись в чужой файл
     # на роутере, где вкладку DoH ещё не открывали. Отказ снять копию останавливает всё: без
     # копии правка ключа необратима, а ради одного force_dns это слишком.
     doh_backup_save || return 1
     _dfs_want="$(doh_force_dns)"
-    _dfs_now="$(uci -q get https-dns-proxy.@main[0].force_dns 2>/dev/null)"
+    _dfs_now="$("$DOH_UCI" -q get https-dns-proxy.@main[0].force_dns 2>/dev/null)"
     [ "$_dfs_now" = "$_dfs_want" ] && return 0
-    uci -q set "https-dns-proxy.@main[0].force_dns=$_dfs_want" || return 1
-    uci -q commit https-dns-proxy || return 1
+    "$DOH_UCI" -q set "https-dns-proxy.@main[0].force_dns=$_dfs_want" || return 1
+    "$DOH_UCI" -q commit https-dns-proxy || return 1
     "$DOH_INIT" restart >/dev/null 2>&1
     return 0
 }
@@ -375,18 +459,189 @@ doh_force_sync() {
 # Без этой строки настройка выглядит применённой, а запросы идут прежним путём.
 doh_apply() {
     doh_installed || return 1
+    # ЗАПОМИНАЕМ ЧУЖОЕ СОСТОЯНИЕ АВТОЗАПУСКА — до того, как включим своё, и только один раз.
+    # Тот же приём и тот же довод, что у копии чужой настройки: вернуть человеку надо ровно
+    # то, что у него было, а не то, что мы считаем правильным. Вторая запись затёрла бы
+    # оригинал нашим же значением, и «как было» стало бы недостижимо.
+    if [ -z "$("$DOH_UCI" -q get splify2.main.doh_prev_enabled 2>/dev/null)" ]; then
+        "$DOH_UCI" -q get splify2.main >/dev/null 2>&1 || "$DOH_UCI" -q set splify2.main=splify2
+        "$DOH_UCI" -q set "splify2.main.doh_prev_enabled=$(doh_enabled && echo 1 || echo 0)"
+        "$DOH_UCI" -q commit splify2
+    fi
     "$DOH_INIT" enable >/dev/null 2>&1
     "$DOH_INIT" restart >/dev/null 2>&1
     /etc/init.d/dnsmasq restart >/dev/null 2>&1
     return 0
 }
 
-# Выключить, не удаляя. Служба остаётся установленной (пакет — зависимость splify2), но не
-# запускается и не трогает dnsmasq: это и есть «DoH выключен» на нашей вкладке.
+# Выключить DoH — и ВЕРНУТЬ ЧЕЛОВЕКУ УПРАВЛЕНИЕ. Это и есть «Системный DNS» на вкладке.
+#
+# ЧТО ЗДЕСЬ ИЗМЕНИЛОСЬ И ПОЧЕМУ. Прежде выключение делало три вещи: `disable`, `stop` и всё.
+# Настройка при этом оставалась НАШЕЙ — переписанной целиком, с нашей копией внутри, — а
+# `doh_force_sync` из apply продолжал править в ней force_dns. То есть человек, выбравший
+# системный DNS, получал выключенную службу, чужую настройку в своём файле и наши правки в
+# ней же. Поставив https-dns-proxy рядом и нажав «Start» на его странице, он видел, что
+# распоряжаемся им по-прежнему мы. Обратка называла это прямо: «сплифу перехватывает
+# управление им будто энивей».
+#
+# Теперь выключение — это отказ от управления:
+#
+#   1. настройка возвращается человеку (doh_restore): его файл, каким он был до нас, а если
+#      файла до нас не было вовсе — его и не остаётся;
+#   2. служба останавливается — иначе «системный DNS» не наступит: dnsmasq продолжал бы
+#      ходить в прокси;
+#   3. АВТОЗАПУСК ВОЗВРАЩАЕТСЯ К ТОМУ, КАКИМ БЫЛ ДО НАС, а не снимается. Прежний безусловный
+#      `disable` и был той дверью, которую мы закрывали за собой: снятая ссылка в /etc/rc.d —
+#      это состояние, которого человек на странице https-dns-proxy не видит и с нами не
+#      связывает, а «Start» там после перезагрузки ничего не значит. Решать, поднимется ли
+#      чужая служба на следующей загрузке, мы не вправе; вернуть ей то, что было, — обязаны.
+#      Записи нет (мы её не включали) — не трогаем вовсе;
+#   4. признак управления снимается, и вместе с ним — сверка force_dns.
+#
+# dnsmasq перезапускается последним: список серверов ему переписывал прокси, и без
+# перезапуска он продолжает ходить на порт, где никого нет.
 doh_off() {
+    doh_manage_set 0
     doh_installed || return 0
-    "$DOH_INIT" disable >/dev/null 2>&1
+    doh_restore
+    _dof_prev="$("$DOH_UCI" -q get splify2.main.doh_prev_enabled 2>/dev/null)"
+    case "${_dof_prev:-}" in
+        0) "$DOH_INIT" disable >/dev/null 2>&1 ;;
+        1) "$DOH_INIT" enable  >/dev/null 2>&1 ;;
+    esac
+    [ -n "${_dof_prev:-}" ] && {
+        "$DOH_UCI" -q delete splify2.main.doh_prev_enabled 2>/dev/null
+        "$DOH_UCI" -q commit splify2
+    }
     "$DOH_INIT" stop >/dev/null 2>&1
+    /etc/init.d/dnsmasq restart >/dev/null 2>&1
+    return 0
+}
+
+# Запустить чужую службу по просьбе человека: то же, что «Start» на странице
+# https-dns-proxy, но из нашей вкладки.
+#
+# ЗАЧЕМ ЭТО НАМ. Затем, что кнопка на той странице у людей не срабатывает, а вкладка DoH —
+# то место, где про DoH и спрашивают. Хозяином настройки мы при этом не становимся: файл не
+# трогаем вовсе, признак управления не ставим.
+doh_start() {
+    doh_installed || return 1
+    "$DOH_INIT" start >/dev/null 2>&1
+    /etc/init.d/dnsmasq restart >/dev/null 2>&1
+    doh_running
+}
+
+# Остановить — то же самое с другой стороны. Автозапуск не трогается по тому же доводу.
+doh_stop() {
+    doh_installed || return 1
+    "$DOH_INIT" stop >/dev/null 2>&1
+    /etc/init.d/dnsmasq restart >/dev/null 2>&1
+    doh_running && return 1
+    return 0
+}
+
+# ---- системный DNS: свои резолверы АДРЕСОМ ---------------------------------------------
+#
+# ЗАЧЕМ. «В этом разделе не хватает опции вносить не формат https://…/dns-query, а просто ip
+# (если я хочу внести днс провайдера своего интернета)» — обратка, и она про целый режим, а не
+# про поле ввода. Резолвер бывает двух родов, и они живут в разных местах роутера:
+#
+#   DoH — ссылка, её обслуживает https-dns-proxy, а dnsmasq ходит к нему на 127.0.0.1:5053;
+#   обычный — АДРЕС, и ходит к нему сам dnsmasq. Никакого прокси здесь нет вовсе.
+#
+# Поэтому «Системный DNS» перестал быть «ничего не настраиваем»: это второй режим со своей
+# настройкой — списком адресов. Пусто — как отдаёт провайдер (то есть правда «ничего»).
+#
+# ЧТО ИМЕННО ПИШЕТСЯ. `list server` первого экземпляра dnsmasq плюс `noresolv`. Второй ключ
+# обязателен: без него dnsmasq продолжает читать /tmp/resolv.conf.d/resolv.conf.auto, то есть
+# резолверы провайдера, — и вписанный адрес становится не заменой, а дополнением к тому, от
+# чего человек как раз уходит.
+#
+# ЧУЖИЕ ЗАПИСИ НЕ ТРОГАЮТСЯ, и это главная тонкость. В том же списке живут:
+#   * `127.0.0.1#5053` — их пишет туда сам https-dns-proxy (dnsmasq_config_update);
+#   * `/mask.icloud.com/`, `/use-application-dns.net/` — доменные заглушки canary, тоже его;
+#   * всё, что человек вписал руками для отдельных доменов.
+# Наши — только простые адреса. Поэтому чтение и запись фильтруют список по форме записи, а
+# не переписывают его целиком: переписав целиком, мы унесли бы работу прокси и человека.
+#
+# КОПИЯ — тем же приёмом, что у чужой настройки прокси (см. раздел выше и podkop): исходные
+# адреса и исходный noresolv ложатся в ТОТ ЖЕ раздел под своим префиксом, и по признаку
+# состояния их возвращает doh_sys_restore. Отдельный файл разошёлся бы с настройкой.
+DOH_DHCP_SECT=${DOH_DHCP_SECT:-dhcp.@dnsmasq[0]}
+
+# Простой адрес резолвера: 1.2.3.4 или 1.2.3.4#5353. Всё остальное (доменные заглушки,
+# петля прокси, IPv6 в скобках) — не наше.
+doh_sys_is_addr() {  # ЗАПИСЬ
+    case "${1:-}" in
+        127.0.0.1|127.0.0.1#*) return 1 ;;   # это прокси DoH, а не резолвер человека
+        /*) return 1 ;;
+        '') return 1 ;;
+    esac
+    printf '%s' "$1" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}(#[0-9]{1,5})?$'
+}
+
+# Адреса, которыми сейчас пользуется dnsmasq, по одному на строку.
+doh_sys_get() {
+    "$DOH_UCI" -q get "$DOH_DHCP_SECT.server" 2>/dev/null | tr ' ' '\n' |
+    while IFS= read -r _dsg_v; do
+        doh_sys_is_addr "$_dsg_v" && printf '%s\n' "$_dsg_v"
+    done
+    return 0
+}
+
+# Копия исходного списка — снимается один раз, как и у прокси.
+doh_sys_backup_save() {
+    [ -n "$("$DOH_UCI" -q get "$DOH_DHCP_SECT.splify2_dns_state" 2>/dev/null)" ] && return 0
+    for _dsb_v in $("$DOH_UCI" -q get "$DOH_DHCP_SECT.server" 2>/dev/null); do
+        doh_sys_is_addr "$_dsb_v" &&
+            "$DOH_UCI" -q add_list "$DOH_DHCP_SECT.splify2_orig_server=$_dsb_v"
+    done
+    "$DOH_UCI" -q set \
+        "$DOH_DHCP_SECT.splify2_orig_noresolv=$("$DOH_UCI" -q get "$DOH_DHCP_SECT.noresolv" 2>/dev/null || echo -)"
+    "$DOH_UCI" -q set "$DOH_DHCP_SECT.splify2_dns_state=saved"
+}
+
+# Вернуть как было и убрать за собой. Зовётся и из пустого списка («как отдаёт провайдер»),
+# и из splify2-purge.
+doh_sys_restore() {
+    [ -n "$("$DOH_UCI" -q get "$DOH_DHCP_SECT.splify2_dns_state" 2>/dev/null)" ] || return 0
+    for _dsr_v in $("$DOH_UCI" -q get "$DOH_DHCP_SECT.server" 2>/dev/null); do
+        doh_sys_is_addr "$_dsr_v" && "$DOH_UCI" -q del_list "$DOH_DHCP_SECT.server=$_dsr_v"
+    done
+    for _dsr_v in $("$DOH_UCI" -q get "$DOH_DHCP_SECT.splify2_orig_server" 2>/dev/null); do
+        "$DOH_UCI" -q add_list "$DOH_DHCP_SECT.server=$_dsr_v"
+    done
+    _dsr_nr="$("$DOH_UCI" -q get "$DOH_DHCP_SECT.splify2_orig_noresolv" 2>/dev/null)"
+    case "${_dsr_nr:--}" in
+        -) "$DOH_UCI" -q delete "$DOH_DHCP_SECT.noresolv" ;;
+        *) "$DOH_UCI" -q set "$DOH_DHCP_SECT.noresolv=$_dsr_nr" ;;
+    esac
+    "$DOH_UCI" -q delete "$DOH_DHCP_SECT.splify2_orig_server"
+    "$DOH_UCI" -q delete "$DOH_DHCP_SECT.splify2_orig_noresolv"
+    "$DOH_UCI" -q delete "$DOH_DHCP_SECT.splify2_dns_state"
+    "$DOH_UCI" -q commit dhcp
+}
+
+# Поставить свои адреса. Пусто — вернуть как было.
+doh_sys_set() {  # «АДРЕС АДРЕС …»
+    for _dss_v in ${1:-}; do
+        doh_sys_is_addr "$_dss_v" || return 1
+    done
+    if [ -z "${1:-}" ]; then
+        doh_sys_restore
+        /etc/init.d/dnsmasq restart >/dev/null 2>&1
+        return 0
+    fi
+    doh_sys_backup_save || return 1
+    for _dss_v in $("$DOH_UCI" -q get "$DOH_DHCP_SECT.server" 2>/dev/null); do
+        doh_sys_is_addr "$_dss_v" && "$DOH_UCI" -q del_list "$DOH_DHCP_SECT.server=$_dss_v"
+    done
+    for _dss_v in $1; do
+        "$DOH_UCI" -q add_list "$DOH_DHCP_SECT.server=$_dss_v" || return 1
+    done
+    # Резолверы провайдера больше не подмешиваются: вписанный адрес — замена, а не добавка.
+    "$DOH_UCI" -q set "$DOH_DHCP_SECT.noresolv=1"
+    "$DOH_UCI" -q commit dhcp || return 1
     /etc/init.d/dnsmasq restart >/dev/null 2>&1
     return 0
 }

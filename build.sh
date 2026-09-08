@@ -133,7 +133,27 @@ bad="$(grep -rEn --include='*.tsx' '<h[1-6][^>]*className="[^"]*(text-\[[0-9]|te
 
 # Приписка к имени выпуска в интерфейсе — «26.9 Andromeda beta 1» — берётся из окружения
 # (SPLIFY_RELEASE_SUFFIX, см. ui/vite.config.ts) и версию пакета не трогает: та из VERSION.
-( cd ui && npm run build ) > "$BUILD_LOG" 2>&1 || {
+#
+# NODE СТАРШЕ 20 — ИЛИ ОБРАЗ. vite 8 и vitest 4 на node 18 не запускаются вовсе, и сборка
+# падает строкой про `styleText` из node:util — по ней не догадаться, что дело в версии
+# node. Docker для этого скрипта и так обязателен (проверка выше), поэтому машина со старым
+# node не остаётся без сборки: интерфейс собирается тем же образом, что и стенды
+# (tests/run.sh). Каталог монтируется КОРНЕМ дерева, а не ui/: сборка штампует номер в
+# бандлы и читает build-id рядом.
+ui_build() {
+    _ub_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+    if [ "${_ub_major:-0}" -ge 20 ] 2>/dev/null; then
+        ( cd ui && npm run build )
+        return $?
+    fi
+    docker image inspect node:22-alpine >/dev/null 2>&1 || {
+        echo "нужен node >= 20 (найден $(node --version 2>/dev/null || echo 'нет node'))" >&2
+        echo "либо образ node:22-alpine: docker pull node:22-alpine" >&2
+        return 1
+    }
+    docker run --rm -v "$PWD":/w -w /w/ui node:22-alpine npm run build
+}
+ui_build > "$BUILD_LOG" 2>&1 || {
     echo "сборка интерфейса провалилась:"
     cat "$BUILD_LOG"
     exit 1
@@ -325,6 +345,12 @@ fi
 #
 # Здесь это делается ОДИН раз, при установке. Дальше тот же вызов стоит в `apply` — потому что
 # доменные правила заводят и убирают позже, а не в момент установки пакета.
+#
+# И ТОЛЬКО ЕСЛИ НАСТРОЙКУ ПРОКСИ ВЕДЁМ МЫ — решает это сам doh_force_sync (см. doh_managed).
+# На свежем роутере, где резолвер ещё никто не выбирал, установка чужого ключа не трогает: это
+# и есть разница между «пакет приехал нашей зависимостью» и «пакет стал нашим». Расхождение при
+# этом не замалчивается — вкладка DoH показывает спор за порт 53 и предлагает исправить его
+# нажатием.
 if [ -r /usr/lib/splify2/doh.sh ]; then
     ( . /usr/lib/splify2/doh.sh && doh_force_sync ) >/dev/null 2>&1
 fi

@@ -71,6 +71,12 @@ case "$2" in
         else
             json_add_string out ""
         fi
+        # ЧТО ВЫБРАЛ ЧЕЛОВЕК — отдельным полем от того, что получилось. Пусто значит «сами
+        # решите» (первый поднятый выход), и это законный выбор, а не отсутствие настройки.
+        # Два поля, а не одно, потому что они отвечают на разные вопросы: выбранный выход
+        # может лежать, и тогда запросы идут через другой — сказать об этом можно, только
+        # зная оба.
+        json_add_string out_pick "$(doh_out_pick 2>/dev/null)"
         # force_dns — ключ, который заворачивает весь DNS сети на роутер. Мы его выключаем,
         # когда движку нужен свой резолвер доменных каналов: два перенаправления на порт 53
         # в одной точке дают гонку, и проиграв, наш резолвер молча перестаёт видеть запросы
@@ -85,6 +91,72 @@ case "$2" in
         # лишний его запуск на каждое открытие вкладки платил бы за ответ, известный заранее.
         json_add_boolean needs_dnsd 1
         json_add_string force_dns "$(doh_force_dns)"
+        # Ведём ли настройку прокси МЫ. От этого зависит не показ, а права: у чужого
+        # хозяйства мы ключей не правим и службу не выключаем — только показываем и
+        # предлагаем. Вкладка по этому же признаку рисует «настроено вами» и кнопки
+        # запуска.
+        doh_managed && json_add_boolean managed 1 || json_add_boolean managed 0
+        # Что реально стоит в чужом файле и спорит ли это с нашим резолвером. Пусто —
+        # ключа нет вовсе, а у прокси умолчание единица.
+        json_add_string force_dns_now "$(doh_force_now 2>/dev/null)"
+        doh_force_conflict && json_add_boolean force_conflict 1 ||
+            json_add_boolean force_conflict 0
+        # Системный DNS адресом: второй род резолвера, живёт в dnsmasq. Пустой список —
+        # «как отдаёт провайдер», и это законное состояние, а не «не настроено».
+        _dl_ifs2="$IFS"
+        json_add_array sys
+        IFS='
+'
+        for a in $(doh_sys_get 2>/dev/null); do
+            IFS="$_dl_ifs2"
+            [ -n "$a" ] && json_add_string "" "$a"
+            IFS='
+'
+        done
+        IFS="$_dl_ifs2"
+        json_close_array
+        json_dump
+        ;;
+
+    # Запуск и остановка ЧУЖОЙ службы по просьбе человека. Хозяином настройки нас не
+    # делают: файл не трогается вовсе. Нужны потому, что кнопка «Start» на странице
+    # https-dns-proxy у людей не срабатывает, а спрашивают про DoH здесь.
+    doh_start)
+        need_doh
+        doh_installed || fail "https-dns-proxy не установлен"
+        doh_start || fail "служба не запустилась — смотрите logread -e https-dns-proxy"
+        json_init; json_add_boolean ok 1; json_dump
+        ;;
+
+    doh_stop)
+        need_doh
+        doh_installed || fail "https-dns-proxy не установлен"
+        doh_stop || fail "служба не остановилась"
+        json_init; json_add_boolean ok 1; json_dump
+        ;;
+
+    # Исправить force_dns у ЧУЖОЙ настройки — однократно и по нажатию. Молча этого больше
+    # не делает никто: чужой настройкой распоряжается её хозяин.
+    doh_force_fix)
+        need_doh
+        doh_installed || fail "https-dns-proxy не установлен"
+        doh_force_fix || fail "не удалось исправить force_dns"
+        json_init
+        json_add_boolean ok 1
+        json_add_string force_dns_now "$(doh_force_now 2>/dev/null)"
+        json_dump
+        ;;
+
+    # Системный DNS адресом: список простых адресов для dnsmasq. Пустой — вернуть как было.
+    doh_sys_set)
+        need_doh
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var servers servers
+        doh_sys_set "${servers:-}" ||
+            fail "адрес резолвера пишется как 1.2.3.4 или 1.2.3.4#порт"
+        json_init
+        json_add_boolean ok 1
         json_dump
         ;;
 
@@ -159,6 +231,15 @@ case "$2" in
         read -r input
         json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
         json_get_var on on
+        # Через КАКОЙ выход. Поле необязательное: вызов без него менять выбор не должен —
+        # переключатель и выбор выхода нажимают по отдельности. Пустая строка — «решайте
+        # сами», то есть снять выбор.
+        out=""
+        have_out=0
+        if json_get_type _ot out 2>/dev/null && [ -n "${_ot:-}" ]; then
+            have_out=1
+            json_get_var out out
+        fi
         uci_file || fail "не удалось создать $UCI_SPLIFY2 — кончилось место?"
         uci -q get splify2.main >/dev/null 2>&1 || uci -q set splify2.main=splify2
         case "$on" in
@@ -166,12 +247,28 @@ case "$2" in
             0|false) uci -q set splify2.main.doh_via_tunnel=0 ;;
             *) fail "нужно true или false" ;;
         esac
+        if [ "$have_out" = 1 ]; then
+            case "${out:-}" in
+                '') uci -q delete splify2.main.doh_out 2>/dev/null ;;
+                *[!a-zA-Z0-9_-]*) fail "имя выхода состоит из латиницы, цифр, дефиса и подчёркивания" ;;
+                direct) fail "выход direct не уводит трафик никуда — DoH через него это DoH напрямую" ;;
+                *)
+                    # Существование выхода спрашивается у ДВИЖКА, а не у спеки: спека могла
+                    # быть сохранена, но не применена, и обещать маршрут через выход, которого
+                    # в ядре нет, значило бы соврать в тот же миг.
+                    "$STEER" outputs --spec "$SPEC" 2>/dev/null | grep -qxF "$out" ||
+                        fail "выхода $out нет"
+                    uci -q set "splify2.main.doh_out=$out"
+                    ;;
+            esac
+        fi
         uci -q commit splify2
         doh_rules_sync
         json_init
         json_add_boolean ok 1
         doh_tunnel_on && json_add_boolean on 1 || json_add_boolean on 0
         json_add_string out "$(doh_out 2>/dev/null | cut -d' ' -f1)"
+        json_add_string out_pick "$(doh_out_pick 2>/dev/null)"
         json_dump
         ;;
 

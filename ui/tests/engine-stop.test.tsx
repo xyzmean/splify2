@@ -40,6 +40,23 @@ describe('остановить всё', () => {
         expect(screen.getByText(/автозапуск снят|перезагрузк/i)).toBeInTheDocument()
     })
 
+    // ВЫКЛЮЧЕН — это снятый автозапуск И неработающая служба. Пара расходится: движок
+    // поднимался сам после ночного обновления списков, а ссылка автозапуска оставалась
+    // снятой, — и кнопка предлагала «Запустить» уже работающий движок. Обратка владельца:
+    // «запускается сам steer, splify2 всё ещё считает, что всё выключено».
+    const RUNNING_NO_AUTOSTART = { ...STOPPED, running: true }
+
+    it('работает при снятом автозапуске — предлагает остановить, а не запустить', () => {
+        render(rail(live({ build: RUNNING_NO_AUTOSTART })))
+        expect(screen.getByRole('button', { name: /Остановить всё/ })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Запустить/ })).toBeNull()
+    })
+
+    it('и говорит про расхождение вслух', () => {
+        render(rail(live({ build: RUNNING_NO_AUTOSTART })))
+        expect(screen.getByText(/работает, хотя автозапуск снят/)).toBeInTheDocument()
+    })
+
     it('без движка тумблера нет вовсе', () => {
         render(rail(live({ build: { present: false, vless: false } })))
         expect(screen.queryByRole('button', { name: /Остановить всё|Запустить/ })).toBeNull()

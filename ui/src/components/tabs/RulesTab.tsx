@@ -8,8 +8,10 @@ import { pending } from '@/lib/pending'
 import {
     toAllowDomainsServices,
     customServices,
+    DIRECT,
     EMPTY_SPEC,
     isPart,
+    routedOutputs,
     type Channel,
     type OutputStatus,
     type ServiceEntry,
@@ -230,15 +232,18 @@ export default function RulesTab({
      *  порядка строк. */
     function addException() {
         if (!spec) return
-        /* Выход в direct нужен как адрес назначения. Если его ещё нет — заводим здесь же: у
-         * этого выхода нет ни одной настройки, и отправлять за ним на другую вкладку значит
-         * превратить шаблон в инструкцию из двух шагов, то есть в то же скрытое знание. */
+        /* Выход в direct нужен как АДРЕС НАЗНАЧЕНИЯ: канал, ведущий в выход, которого нет в
+         * спеке, движок отвергает целиком. Обычно он уже здесь — постоянный (model.ts,
+         * withDirect), — но спека могла прийти и мимо нормализации, поэтому недостающий
+         * заводится тут же: у этого выхода нет ни одной настройки, и отправлять за ним на
+         * другую вкладку значит превратить шаблон в инструкцию из двух шагов.
+         *
+         * Ищется он по ВИДУ, а не по имени: в спеках, написанных до постоянного выхода, он мог
+         * называться как угодно, и второй такой же означал бы два «напрямую» в списке целей. */
         let outputs = spec.outputs
         let out = Object.keys(outputs).find((n) => outputs[n].kind === 'direct')
         if (!out) {
-            out = 'direct'
-            let d = 2
-            while (outputs[out]) out = `direct${d++}`
+            out = DIRECT
             outputs = { ...outputs, [out]: { name: out, kind: 'direct' } }
         }
         const used = new Set(spec.channels.map((c) => c.name))
@@ -434,7 +439,7 @@ export default function RulesTab({
             {spec.channels.length === 0 ? (
                 <div className="rounded-xl border border-border bg-card p-6 text-center text-sm text-muted-foreground shadow-card lg:rounded-2xl">
                     Правил нет — весь трафик идёт напрямую.
-                    {Object.keys(outputs).length === 0 && (
+                    {routedOutputs(outputs).length === 0 && (
                         <div className="mt-2 text-xs">
                             <button
                                 type="button"
