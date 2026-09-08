@@ -7,6 +7,7 @@ import CustomLists from '@/components/CustomLists'
 import { Hint } from '@/components/ui/hint'
 import {
     toAllowDomainsServices,
+    toCatalog,
     type AllowDomains,
     type ListOrigin,
     type ServiceEntry,
@@ -75,10 +76,17 @@ function SourceNote({ origin, ours, mixed }: { origin: ListOrigin; ours: boolean
 }
 
 export default function CatalogTab({ onUseInRule }: Props) {
+    const [services, setServices] = useState<ServiceEntry[]>([])
+    /** Ответ ЗАПАСНОГО пути: таблица издателя из пакета. Не null — значит каталог провайдера
+     *  скачать не вышло, и внизу надо назвать то, что показано на самом деле, вместе с его
+     *  тегом. Пока источник тот, который выбрал человек, это поле пусто. */
     const [ad, setAd] = useState<AllowDomains | null>(null)
+    /** Версия каталога — как её назвал источник. Показывается внизу: вопрос «какие у тебя
+     *  списки» без неё ответа не имеет. */
+    const [version, setVersion] = useState('')
     /** Каталог не загрузился — отдельным признаком от «загрузился пустым»: первое означает
      *  поломку и требует объяснения, второе законно (издатель не публикует ничего). */
-    const [adFailed, setAdFailed] = useState(false)
+    const [adFailed, setFailed] = useState(false)
     const [spec, setSpec] = useState<Spec | null>(null)
     const [local, setLocal] = useState<Record<string, { count: number; mtime: number }>>({})
     const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set())
@@ -99,9 +107,29 @@ export default function CatalogTab({ onUseInRule }: Props) {
     const [updating, setUpdating] = useState(false)
 
     useEffect(() => {
-        rpc.allowDomains()
-            .then((a) => { setAd(a); setAdFailed(false) })
-            .catch(() => { setAd(null); setAdFailed(true) })
+        /* КАТАЛОГ — ЭТО ПРОВАЙДЕР, а не таблица в пакете. Человек выбирает источник в
+           настройках, и вкладка обязана показывать ВЫБРАННЫЙ: пока она рисовала зашитую
+           таблицу, смена источника не меняла на экране ничего.
+
+           Зашитый издатель остался ЗАПАСНЫМ путём и только им: каталог живёт в сети, и
+           роутер, которому его нечем скачать (первый запуск, закрытый GitHub), не должен
+           оставаться с пустым экраном — таблица в пакете отвечает без сети. */
+        rpc.manifest()
+            .then((m) => {
+                const c = toCatalog(m)
+                if (c.services.length) {
+                    setServices(c.services)
+                    setVersion(c.version || '')
+                    setFailed(false)
+                    return
+                }
+                throw new Error('пустой каталог')
+            })
+            .catch(() =>
+                rpc.allowDomains()
+                    .then((a) => { setAd(a); setServices(toAllowDomainsServices(a)); setFailed(false) })
+                    .catch(() => { setServices([]); setFailed(true) }),
+            )
         rpc.specGet().then(setSpec).catch(() => setSpec(null))
         rpc.localLists().then((d) => setLocal(d.files || {})).catch(() => setLocal({}))
     }, [])
@@ -187,16 +215,12 @@ export default function CatalogTab({ onUseInRule }: Props) {
         }
     }
 
-    /** Записи каталога. Таблица издателя лежит В ПАКЕТЕ, поэтому сети для неё не нужно —
-     *  и «каталог пуст» здесь означает поломку метода, а не отсутствие интернета. */
-    const services = useMemo(() => toAllowDomainsServices(ad), [ad])
-
     if (adFailed)
         return (
             <div className="rounded-md border border-border bg-card p-5 text-sm text-muted-foreground">
-                Каталог недоступен: метод <code>allow_domains</code> не ответил. Сети для него не
-                нужно — таблица списков лежит в пакете, — поэтому дело не в интернете: проверьте,
-                установлена ли свежая версия splify2.
+                Каталог не загрузился. Он живёт в сети — адрес задан в «Настройки → Источник
+                списков», — а запасной таблицей в пакете ответить тоже не вышло. Проверьте
+                ссылку источника и доступ роутера в интернет.
             </div>
         )
 
@@ -435,8 +459,8 @@ export default function CatalogTab({ onUseInRule }: Props) {
                         Используются правилами, но каталог их больше не предлагает
                     </div>
                     <p className="mb-2">
-                        Источник каталога — {ad?.repo || 'itdoginfo/allow-domains'}. Эти файлы
-                        остались от прежнего набора: они продолжают скачиваться и обновляться, но
+                        Эти файлы остались от прежнего каталога — источник с тех пор сменился или
+                        издатель убрал запись. Они продолжают скачиваться и обновляться, но
                         выбрать такой список заново отсюда нельзя. Снять — на вкладке правил.
                     </p>
                     <ul className="space-y-0.5">
@@ -449,13 +473,23 @@ export default function CatalogTab({ onUseInRule }: Props) {
                 </div>
             )}
 
-            <p className="text-xs text-muted-foreground">
-                Каталог — справка: запись начинает работать, когда на неё укажет правило. Нужные
-                списки скачиваются и обновляются сами. Источник —{' '}
-                {ad?.repo || 'itdoginfo/allow-domains'}, версия зафиксирована тегом{' '}
-                <code>{ad?.tag || '—'}</code>
-                {ad?.tag_default && ad.tag !== ad.tag_default && ' (переопределён настройкой)'}.
-            </p>
+            {/* ЧТО ПОКАЗАНО НА САМОМ ДЕЛЕ. Обычно это каталог выбранного источника, и тогда
+                внизу его версия. Но если скачать его не вышло, показана запасная таблица из
+                пакета — и молчать об этом нельзя: человек считал бы, что видит свой источник. */}
+            {ad ? (
+                <p className="text-xs text-warning-fg">
+                    Каталог источника скачать не вышло — показана таблица из пакета:{' '}
+                    {ad.repo || 'itdoginfo/allow-domains'}, версия зафиксирована тегом{' '}
+                    <code>{ad.tag || '—'}</code>
+                    {ad.tag_default && ad.tag !== ad.tag_default && ' (переопределён настройкой)'}.
+                </p>
+            ) : (
+                <p className="text-xs text-muted-foreground">
+                    Каталог — справка: запись начинает работать, когда на неё укажет правило.
+                    Нужные списки скачиваются и обновляются сами. Источник каталога — в
+                    «Настройки → Источник списков»{version ? `, версия ${version}` : ''}.
+                </p>
+            )}
             {ad?.tag_warn && (
                 /* Настройка, отбитая молча, — ровно та беда, ради которой предупреждение и
                    заведено на роутере: человек набрал тег, получил прежние списки и не узнал

@@ -107,7 +107,7 @@ while [ $# -gt 0 ]; do
 done
 echo "$url" >> "$SANDBOX/requested"
 case "$url" in
-    *categories.json) cp "$SANDBOX/manifest.src" "$out" ;;
+    *categories.json|*lists.json) cp "$SANDBOX/manifest.src" "$out" ;;
     */domains/*)      printf 'example.org\nnews.example\n' > "$out" ;;
     *)                printf '10.0.0.0/8\n192.0.2.0/24\n' > "$out" ;;
 esac
@@ -335,7 +335,7 @@ while [ $# -gt 0 ]; do
 done
 echo "$url" >> "$SANDBOX/requested"
 case "$url" in
-    *categories.json) cp "$SANDBOX/manifest.src" "$out" ;;
+    *categories.json|*lists.json) cp "$SANDBOX/manifest.src" "$out" ;;
     *) body="$SANDBOX/serve/$(basename "$url")"
        if [ -f "$body" ]; then cp "$body" "$out"; else printf '10.0.0.0/8\n' > "$out"; fi ;;
 esac
@@ -460,7 +460,7 @@ while [ $# -gt 0 ]; do
 done
 echo "$url" >> "$SANDBOX/requested"
 case "$url" in
-    *categories.json) cp "$SANDBOX/manifest.src" "$out" ;;
+    *categories.json|*lists.json) cp "$SANDBOX/manifest.src" "$out" ;;
     */releases/download/*/*.srs)
         tag="${url%/*}"; tag="${tag##*/}"
         svc="${url##*/}"; svc="${svc%.srs}"
@@ -588,8 +588,13 @@ check "набор качается по адресу с зафиксирован
       "https://github.com/itdoginfo/allow-domains/releases/download/$AD_TAG/telegram.srs" \
       "$(grep -x ".*/$AD_TAG/telegram.srs" "$T/requested" 2>/dev/null | head -1)"
 
-check "плавающего latest в запросах нет ни одного" "" \
-      "$(grep -c '/latest/' "$T/requested" 2>/dev/null | grep -v '^0$')"
+# ПЛАВАЮЩЕГО latest НЕТ У НАБОРОВ — и только у них. Сам каталог живёт по постоянному адресу
+# релиза (`/releases/latest/download/lists.json`), и это не противоречие: у каталога один файл,
+# который переиздаётся только при изменении содержимого, а фиксация версии живёт ВНУТРИ него —
+# у каждого набора свой тег в ссылке. Требовать отсутствия слова latest во всех запросах
+# значило бы запретить каталогу иметь постоянный адрес.
+check "плавающего latest у наборов нет ни одного" "" \
+      "$(grep '\.srs$' "$T/requested" 2>/dev/null | grep -c '/latest/' | grep -v '^0$')"
 
 check "домены набора легли в доменный список" "20" \
       "$(grep -c . "$T/lists/itdog/domains/telegram.lst" 2>/dev/null)"

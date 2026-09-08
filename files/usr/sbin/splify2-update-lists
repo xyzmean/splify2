@@ -58,10 +58,13 @@ fi
 echo $$ > "$LOCK/pid"
 trap 'rm -rf "$LOCK" 2>/dev/null' EXIT INT TERM
 
+# Каталог по умолчанию — тот же, что у объекта rpcd (MANIFEST_URL_DEFAULT). Два написания
+# одного адреса разошлись бы ровно в тот день, когда его поменяли: интерфейс показывал бы один
+# каталог, а ночь обновляла бы списки по другому.
 manifest_url() {
     u="$(uci -q get splify2.main.manifest_url)"
     [ -n "$u" ] && printf '%s' "$u" ||
-        printf '%s' "https://raw.githubusercontent.com/xyzmean/ru-bypass-ipsets/refs/heads/main/lists/categories.json"
+        printf '%s' "https://github.com/xyzmean/splify2-lists/releases/latest/download/lists.json"
 }
 
 # Скачивание — общий файл с rpcd-объектом: обход закрытого издателя (splify2#15) обязан

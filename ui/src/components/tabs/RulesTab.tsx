@@ -10,6 +10,7 @@ import {
     customServices,
     DIRECT,
     EMPTY_SPEC,
+    toCatalog,
     isPart,
     routedOutputs,
     type Channel,
@@ -122,12 +123,21 @@ export default function RulesTab({
         pending.load().then(setSpec).catch(() => setSpec(EMPTY_SPEC))
         /* Каталог у выбора списков ТОТ ЖЕ, что на вкладке каталога, и это не экономия: два
          * источника означали бы, что человек видит в справке одно, а выбрать может другое.
-         * Источник один — itdoginfo/allow-domains (решение владельца). Файлы прежнего
-         * издателя, уже стоящие в правилах, отсюда не пропадают: `pick` трогает только
-         * файлы своей записи, а незнакомые оставляет в спеке нетронутыми. */
-        rpc.allowDomains()
-            .then((a) => setServices(toAllowDomainsServices(a)))
-            .catch(() => setServices([]))
+         * Поэтому и способ добыть его тот же: сначала каталог выбранного источника, и только
+         * если его нечем скачать — зашитая в пакет таблица издателя. Файлы прежнего каталога,
+         * уже стоящие в правилах, отсюда не пропадают: `pick` трогает только файлы своей
+         * записи, а незнакомые оставляет в спеке нетронутыми. */
+        rpc.manifest()
+            .then((m) => {
+                const c = toCatalog(m)
+                if (!c.services.length) throw new Error('пустой каталог')
+                setServices(c.services)
+            })
+            .catch(() =>
+                rpc.allowDomains()
+                    .then((a) => setServices(toAllowDomainsServices(a)))
+                    .catch(() => setServices([])),
+            )
         rpc.localLists().then((d) => setLocal(d.files || {})).catch(() => setLocal({}))
     }, [])
 
