@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340" role="img" aria-label="Сколько места на флеше требуется: splify2 — от 1 МБ, podkop — от 25 МБ по требованиям его README">
+  <defs>
+    <style>
+      text { font-family: -apple-system, "Segoe UI", Roboto, Inter, "Helvetica Neue", Arial, sans-serif; }
+      .h { font-size: 30px; font-weight: 800; fill: #ffffff; letter-spacing: -0.5px; }
+      .hs { font-size: 16px; fill: #9a97b4; }
+      .lab { font-size: 17px; font-weight: 700; fill: #f3f1ff; }
+      .val { font-size: 17px; font-weight: 700; fill: #f3f1ff; }
+      .sm { font-size: 13px; fill: #8f8cab; }
+      .tick { font-size: 12px; fill: #6b6890; }
+    </style>
+  </defs>
+  <rect width="1200" height="340" rx="28" fill="#0f1020"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="338.5" rx="27.25" fill="none" stroke="#8b7cf6" stroke-opacity="0.2" stroke-width="1.5"/>
+  <text x="40" y="58" class="h">Помещается там, где другим не хватает места</text>
+  <text x="40" y="86" class="hs">Сколько свободного места на флеше нужно для установки.</text>
+
+  <!-- scale: 0..27 MB over 972px => 36 px / MB, x0 = 188 -->
+  <g class="tick">
+    <line x1="188" y1="118" x2="188" y2="262" stroke="#2f2b52"/>
+    <line x1="548" y1="118" x2="548" y2="262" stroke="#2f2b52" stroke-dasharray="3 5"/>
+    <line x1="908" y1="118" x2="908" y2="262" stroke="#2f2b52" stroke-dasharray="3 5"/>
+    <text x="188" y="288" text-anchor="middle">0</text>
+    <text x="548" y="288" text-anchor="middle">10 МБ</text>
+    <text x="908" y="288" text-anchor="middle">20 МБ</text>
+  </g>
+
+  <!-- splify2 bar: 1 MB = 36px -->
+  <text x="164" y="152" text-anchor="end" class="lab">splify2</text>
+  <rect x="188" y="134" width="36" height="26" rx="4" fill="#8b7cf6"/>
+  <text x="236" y="153" class="val">от 1 МБ</text>
+  <text x="188" y="180" class="sm">интерфейс ~150 КБ + движок 112–299 КБ + скачанные списки</text>
+
+  <!-- podkop bar: 25 MB = 900px -->
+  <text x="164" y="232" text-anchor="end" class="lab">podkop</text>
+  <rect x="188" y="214" width="900" height="26" rx="4" fill="#3b3560"/>
+  <text x="1096" y="233" class="val">≥ 25 МБ</text>
+  <text x="188" y="260" class="sm">по системным требованиям его README: OpenWrt 24.10+, «устройства с флеш-памятью 16 МБ не поддерживаются»</text>
+
+  <text x="40" y="322" class="sm">У роутера с 16 МБ флеша свободно обычно 6–7 МБ. Размеры пакетов — из релизов splify2 1.2.5 и steer 1.3.0.</text>
+</svg>

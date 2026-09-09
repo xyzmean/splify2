@@ -1,87 +1,97 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="380" viewBox="0 0 1200 380" role="img" aria-label="splify2 26.9 Andromeda — умная маршрутизация для OpenWrt">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-label="splify2 — VPN только там, где нужен. Для всей сети. Одной настройкой на роутере.">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#14111f"/>
-      <stop offset="0.55" stop-color="#100e18"/>
-      <stop offset="1" stop-color="#1a1430"/>
+      <stop offset="0" stop-color="#151229"/>
+      <stop offset="0.55" stop-color="#0f1020"/>
+      <stop offset="1" stop-color="#0b1a1d"/>
     </linearGradient>
-    <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
+    <linearGradient id="ls" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#a897ff"/>
-      <stop offset="1" stop-color="#6d5ce7"/>
+      <stop offset="1" stop-color="#5e72e4"/>
     </linearGradient>
     <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#8b7cf6" stop-opacity="0.4"/>
-      <stop offset="1" stop-color="#8b7cf6" stop-opacity="0"/>
+      <stop offset="0" stop-color="#5e72e4" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#5e72e4" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="tun" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#8b7cf6"/>
-      <stop offset="1" stop-color="#5ee0a8"/>
-    </linearGradient>
+    <radialGradient id="glow2" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#2ecc8a" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#2ecc8a" stop-opacity="0"/>
+    </radialGradient>
+    <style>
+      text { font-family: -apple-system, "Segoe UI", Roboto, Inter, "Helvetica Neue", Arial, sans-serif; }
+      .h1 { font-size: 64px; font-weight: 800; fill: #ffffff; letter-spacing: -1.5px; }
+      .tag { font-size: 25px; font-weight: 600; fill: #f3f1ff; }
+      .sub { font-size: 16px; fill: #a9a6c2; }
+      .pill { font-size: 13px; font-weight: 600; fill: #e4e1ff; }
+      .lab { font-size: 12px; fill: #8f8cab; }
+      .node { font-size: 12px; font-weight: 600; fill: #d9d6ee; }
+      .green { fill: #6ee7b7; }
+      .grey { fill: #b8b5cc; }
+    </style>
   </defs>
 
-  <rect width="1200" height="380" rx="24" fill="url(#bg)"/>
-  <ellipse cx="1060" cy="40" rx="300" ry="190" fill="url(#glow)"/>
-  <ellipse cx="90" cy="360" rx="240" ry="140" fill="url(#glow)" opacity="0.45"/>
+  <rect width="1200" height="420" rx="28" fill="url(#bg)"/>
+  <circle cx="220" cy="160" r="260" fill="url(#glow)"/>
+  <circle cx="1010" cy="120" r="220" fill="url(#glow2)"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="418.5" rx="27.25" fill="none" stroke="#8b7cf6" stroke-opacity="0.25" stroke-width="1.5"/>
 
-  <!-- знак -->
-  <g transform="translate(60,116)">
-    <rect width="124" height="124" rx="30" fill="#1c1730" stroke="#8b7cf6" stroke-opacity="0.35"/>
-    <path d="M90 26 H60 a18 18 0 0 0 0 36 h3 a18 18 0 0 1 0 36 H32"
-          stroke="url(#mark)" stroke-width="13" fill="none" stroke-linecap="round"/>
+  <g transform="translate(56,60)">
+    <rect width="120" height="120" rx="30" fill="#1b1730"/>
+    <rect x="0.75" y="0.75" width="118.5" height="118.5" rx="29.25" fill="none" stroke="#8b7cf6" stroke-opacity="0.35" stroke-width="1.5"/>
+    <path d="M84 26 H58 a16.5 16.5 0 0 0 0 33 h3 a16.5 16.5 0 0 1 0 33 H33" stroke="url(#ls)" stroke-width="12" fill="none" stroke-linecap="round"/>
   </g>
 
-  <!-- имя, версия, обещание -->
-  <g font-family="system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
-    <text x="216" y="164" font-size="70" font-weight="700" fill="#ffffff" letter-spacing="-1.5">splify2</text>
-    <g transform="translate(216,196)">
-      <rect width="232" height="38" rx="19" fill="#8b7cf6" fill-opacity="0.16" stroke="#8b7cf6" stroke-opacity="0.5"/>
-      <text x="116" y="25" text-anchor="middle" font-size="18" font-weight="600" fill="#c3b6ff">26.9 · Andromeda</text>
-    </g>
-    <text x="216" y="272" font-size="23" fill="#d3cee6">Роутер сам решает, что идёт через VPN,</text>
-    <text x="216" y="304" font-size="23" fill="#d3cee6">а что — напрямую.</text>
-    <text x="216" y="340" font-size="18" fill="#8b849f">Настройка живёт на роутере: устройствам ничего не нужно.</text>
+  <text x="200" y="118" class="h1">splify2</text>
+  <text x="200" y="162" class="tag">VPN — там, где нужен. Для всей сети.</text>
+  <text x="200" y="194" class="sub">Одна настройка на роутере с OpenWrt. Телефоны, телевизоры,</text>
+  <text x="200" y="218" class="sub">приставки и гости получают её, просто подключившись к Wi-Fi.</text>
+
+  <g transform="translate(56,258)">
+    <rect width="186" height="34" rx="17" fill="#1d1a36" stroke="#5e72e4" stroke-opacity="0.55"/>
+    <text x="93" y="22" text-anchor="middle" class="pill">OpenWrt 22.03 и новее</text>
+  </g>
+  <g transform="translate(252,258)">
+    <rect width="156" height="34" rx="17" fill="#1d1a36" stroke="#5e72e4" stroke-opacity="0.55"/>
+    <text x="78" y="22" text-anchor="middle" class="pill">от 1 МБ на флеше</text>
+  </g>
+  <g transform="translate(418,258)">
+    <rect width="236" height="34" rx="17" fill="#1d1a36" stroke="#5e72e4" stroke-opacity="0.55"/>
+    <text x="118" y="22" text-anchor="middle" class="pill">0 приложений на устройствах</text>
+  </g>
+  <g transform="translate(664,258)">
+    <rect width="176" height="34" rx="17" fill="#1d1a36" stroke="#5e72e4" stroke-opacity="0.55"/>
+    <text x="88" y="22" text-anchor="middle" class="pill">до 16 выходов сразу</text>
   </g>
 
-  <!-- схема: устройства → роутер → два пути -->
-  <g transform="translate(696,64)" font-family="system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
-    <rect width="452" height="252" rx="20" fill="#ffffff" fill-opacity="0.03" stroke="#8b7cf6" stroke-opacity="0.18"/>
+  <text x="56" y="338" class="sub">Движок — свой, на C: nftables + fake-IP DNS. Без sing-box, без Go, без Docker.</text>
+  <text x="56" y="364" class="sub">Живёт на роутерах с 8/16 МБ флеша, где другим не хватает места.</text>
 
-    <!-- устройства -->
-    <g fill="#2a2440" stroke="#514a78">
-      <rect x="30" y="46" width="30" height="46" rx="6"/>
-      <rect x="26" y="104" width="42" height="30" rx="5"/>
-      <rect x="30" y="146" width="34" height="24" rx="4"/>
+  <g transform="translate(872,44)">
+    <rect width="300" height="332" rx="22" fill="#141227" fill-opacity="0.92" stroke="#3b3560" stroke-opacity="0.8"/>
+    <g>
+      <rect x="18" y="40" width="70" height="30" rx="8" fill="#1f1c38" stroke="#3b3560"/>
+      <text x="53" y="60" text-anchor="middle" class="node">телевизор</text>
+      <rect x="18" y="86" width="70" height="30" rx="8" fill="#1f1c38" stroke="#3b3560"/>
+      <text x="53" y="106" text-anchor="middle" class="node">телефон</text>
+      <rect x="18" y="132" width="70" height="30" rx="8" fill="#1f1c38" stroke="#3b3560"/>
+      <text x="53" y="152" text-anchor="middle" class="node">ноутбук</text>
+      <rect x="18" y="178" width="70" height="30" rx="8" fill="#1f1c38" stroke="#3b3560"/>
+      <text x="53" y="198" text-anchor="middle" class="node">приставка</text>
     </g>
-
-    <!-- линии к роутеру -->
-    <g stroke="#514a78" stroke-width="2" fill="none">
-      <path d="M64 69 H148"/>
-      <path d="M72 119 H148"/>
-      <path d="M68 158 H148"/>
-    </g>
-
-    <!-- роутер -->
-    <g transform="translate(148,70)">
-      <rect width="118" height="100" rx="18" fill="#1e1935" stroke="#8b7cf6" stroke-opacity="0.6"/>
-      <text x="59" y="42" text-anchor="middle" font-size="16" font-weight="700" fill="#c3b6ff">splify2</text>
-      <text x="59" y="64" text-anchor="middle" font-size="11.5" fill="#8f88a8">решает по имени</text>
-      <text x="59" y="80" text-anchor="middle" font-size="11.5" fill="#8f88a8">сайта, а не по IP</text>
-    </g>
-
-    <!-- два пути -->
-    <g stroke-width="3.5" fill="none" stroke-linecap="round">
-      <path d="M266 100 C 300 100, 300 68, 334 68" stroke="url(#tun)"/>
-      <path d="M266 140 C 300 140, 300 176, 334 176" stroke="#5a5478"/>
-    </g>
-    <g transform="translate(334,48)">
-      <rect width="104" height="40" rx="12" fill="#123528" stroke="#5ee0a8" stroke-opacity="0.55"/>
-      <text x="52" y="25" text-anchor="middle" font-size="14" font-weight="700" fill="#7ff0c0">в туннель</text>
-    </g>
-    <g transform="translate(334,156)">
-      <rect width="104" height="40" rx="12" fill="#26243c" stroke="#6b6785" stroke-opacity="0.6"/>
-      <text x="52" y="25" text-anchor="middle" font-size="14" font-weight="700" fill="#b6b1cc">напрямую</text>
-    </g>
-    <text x="334" y="34" font-size="11.5" fill="#7ff0c0" opacity="0.9">youtube · telegram</text>
-    <text x="334" y="216" font-size="11.5" fill="#8f88a8">банк · игры · остальное</text>
+    <path d="M88 55 H100 Q114 55 114 69 V118 M88 101 H114 M88 147 H114 M88 193 H100 Q114 193 114 179 V130" stroke="#4a4670" stroke-width="2" fill="none"/>
+    <rect x="114" y="96" width="82" height="56" rx="14" fill="#1f1c3c" stroke="#5e72e4" stroke-width="1.5"/>
+    <text x="155" y="120" text-anchor="middle" class="node" style="fill:#c9c2ff">роутер</text>
+    <text x="155" y="139" text-anchor="middle" class="node" style="fill:#8b7cf6">splify2</text>
+    <path d="M196 112 C222 112 222 66 244 66" stroke="#2ecc8a" stroke-width="3" fill="none"/>
+    <rect x="214" y="46" width="70" height="40" rx="10" fill="#0f2a22" stroke="#2ecc8a" stroke-opacity="0.8"/>
+    <text x="249" y="70" text-anchor="middle" class="node green">в туннель</text>
+    <text x="249" y="30" text-anchor="middle" class="lab green">YouTube · Telegram</text>
+    <path d="M196 136 C222 136 222 190 244 190" stroke="#8f8cab" stroke-width="3" fill="none"/>
+    <rect x="214" y="170" width="70" height="40" rx="10" fill="#1f1c38" stroke="#6b6890"/>
+    <text x="249" y="194" text-anchor="middle" class="node grey">напрямую</text>
+    <text x="249" y="230" text-anchor="middle" class="lab">банк · игры · остальное</text>
+    <line x1="18" y1="258" x2="282" y2="258" stroke="#3b3560"/>
+    <text x="150" y="284" text-anchor="middle" class="lab">решение — по имени сайта,</text>
+    <text x="150" y="304" text-anchor="middle" class="lab">перенос — ядром, без разбора трафика</text>
   </g>
 </svg>

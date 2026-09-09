@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="640" viewBox="0 0 1200 640" role="img" aria-label="Что умеет splify2: каталог сервисов, правила на устройство, до 16 выходов, запас серверов, обход DPI без VPN, DoH в один клик, остаток подписки, честная диагностика">
+  <defs>
+    <style>
+      text { font-family: -apple-system, "Segoe UI", Roboto, Inter, "Helvetica Neue", Arial, sans-serif; }
+      .h { font-size: 30px; font-weight: 800; fill: #ffffff; letter-spacing: -0.5px; }
+      .hs { font-size: 16px; fill: #9a97b4; }
+      .ct { font-size: 17px; font-weight: 700; fill: #f3f1ff; }
+      .cb { font-size: 13px; fill: #b3b0c9; }
+      .k { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; fill: #8b7cf6; }
+      .ico { stroke: #c9c2ff; stroke-width: 2.2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+  </defs>
+  <rect width="1200" height="640" rx="28" fill="#0f1020"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="638.5" rx="27.25" fill="none" stroke="#8b7cf6" stroke-opacity="0.2" stroke-width="1.5"/>
+  <text x="40" y="58" class="h">Что вы получаете</text>
+  <text x="40" y="86" class="hs">Всё — из одного интерфейса в LuCI. После установки ssh не нужен.</text>
+
+  <!-- row 1 -->
+  <g transform="translate(40,116)">
+    <rect width="268" height="228" rx="18" fill="#171430" stroke="#2f2b52"/>
+    <rect x="22" y="22" width="40" height="40" rx="11" fill="#242045"/>
+    <g class="ico" transform="translate(30,30)"><path d="M3 6h18M3 12h18M3 18h12"/></g>
+    <text x="22" y="92" class="ct">Каталог сервисов</text>
+    <text x="22" y="118" class="cb">YouTube, Telegram, Discord, Meta,</text>
+    <text x="22" y="138" class="cb">игры, ИИ — галочкой, а не списком</text>
+    <text x="22" y="158" class="cb">доменов. Свой список — текстом,</text>
+    <text x="22" y="178" class="cb">ссылкой или файлом.</text>
+    <text x="22" y="208" class="k">домены + адреса — вместе</text>
+  </g>
+  <g transform="translate(324,116)">
+    <rect width="268" height="228" rx="18" fill="#171430" stroke="#2f2b52"/>
+    <rect x="22" y="22" width="40" height="40" rx="11" fill="#242045"/>
+    <g class="ico" transform="translate(30,30)"><rect x="2" y="3" width="20" height="13" rx="2"/><path d="M8 21h8M12 16v5"/></g>
+    <text x="22" y="92" class="ct">Правило на устройство</text>
+    <text x="22" y="118" class="cb">Телевизор в спальне — YouTube</text>
+    <text x="22" y="138" class="cb">через VPN. Ноутбук ребёнка —</text>
+    <text x="22" y="158" class="cb">напрямую. Гости — как все.</text>
+    <text x="22" y="178" class="cb">Выбор из клиентов роутера.</text>
+    <text x="22" y="208" class="k">что + кого касается + куда</text>
+  </g>
+  <g transform="translate(608,116)">
+    <rect width="268" height="228" rx="18" fill="#171430" stroke="#2f2b52"/>
+    <rect x="22" y="22" width="40" height="40" rx="11" fill="#242045"/>
+    <g class="ico" transform="translate(30,30)"><path d="M3 12h6M9 12c4 0 4-6 8-6h4M9 12c4 0 4 6 8 6h4M18 3l3 3-3 3M18 15l3 3-3 3"/></g>
+    <text x="22" y="92" class="ct">До 16 выходов сразу</text>
+    <text x="22" y="118" class="cb">Подписка VLESS, свой WireGuard</text>
+    <text x="22" y="138" class="cb">или AmneziaWG, «напрямую», обход</text>
+    <text x="22" y="158" class="cb">DPI — каждому правилу свой выход.</text>
+    <text x="22" y="178" class="cb">Несколько подписок — тоже можно.</text>
+    <text x="22" y="208" class="k">vless · WireGuard · zapret</text>
+  </g>
+  <g transform="translate(892,116)">
+    <rect width="268" height="228" rx="18" fill="#171430" stroke="#2f2b52"/>
+    <rect x="22" y="22" width="40" height="40" rx="11" fill="#242045"/>
+    <g class="ico" transform="translate(30,30)"><path d="M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5l8-3z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></g>
+    <text x="22" y="92" class="ct">Запас серверов</text>
+    <text x="22" y="118" class="cb">У выхода — пул узлов. Упал</text>
+    <text x="22" y="138" class="cb">основной — трафик уходит на</text>
+    <text x="22" y="158" class="cb">следующий. Упали все — трафик</text>
+    <text x="22" y="178" class="cb">останавливается, а не утекает.</text>
+    <text x="22" y="208" class="k">по умолчанию: стоп, не утечка</text>
+  </g>
+
+  <!-- row 2 -->
+  <g transform="translate(40,364)">
+    <rect width="268" height="228" rx="18" fill="#171430" stroke="#2f2b52"/>
+    <rect x="22" y="22" width="40" height="40" rx="11" fill="#242045"/>
+    <g class="ico" transform="translate(30,30)"><path d="M2 7c3-3 6 3 9 0s6 3 9 0M2 13c3-3 6 3 9 0s6 3 9 0M2 19c3-3 6 3 9 0s6 3 9 0"/></g>
+    <text x="22" y="92" class="ct">Обход DPI без VPN</text>
+    <text x="22" y="118" class="cb">Zapret встроен как ещё один выход.</text>
+    <text x="22" y="138" class="cb">Каталог стратегий, автоподбор</text>
+    <text x="22" y="158" class="cb">со счётом «открылось N из M»,</text>
+    <text x="22" y="178" class="cb">игровой фильтр, расписание.</text>
+    <text x="22" y="208" class="k">меняет стратегию, если лучше</text>
+  </g>
+  <g transform="translate(324,364)">
+    <rect width="268" height="228" rx="18" fill="#171430" stroke="#2f2b52"/>
+    <rect x="22" y="22" width="40" height="40" rx="11" fill="#242045"/>
+    <g class="ico" transform="translate(30,30)"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></g>
+    <text x="22" y="92" class="ct">DoH в один клик</text>
+    <text x="22" y="118" class="cb">Cloudflare, Google, Quad9, Comss</text>
+    <text x="22" y="138" class="cb">или свой резолвер. Запросы к нему</text>
+    <text x="22" y="158" class="cb">можно пустить через туннель.</text>
+    <text x="22" y="178" class="cb">Копия вашей настройки хранится.</text>
+    <text x="22" y="208" class="k">системный DNS ⇄ DoH</text>
+  </g>
+  <g transform="translate(608,364)">
+    <rect width="268" height="228" rx="18" fill="#171430" stroke="#2f2b52"/>
+    <rect x="22" y="22" width="40" height="40" rx="11" fill="#242045"/>
+    <g class="ico" transform="translate(30,30)"><path d="M4 20h16M6 17V10M12 17V5M18 17v-8"/></g>
+    <text x="22" y="92" class="ct">Остаток подписки</text>
+    <text x="22" y="118" class="cb">Сколько гигабайт осталось, когда</text>
+    <text x="22" y="138" class="cb">сброс, расход в сутки и на сколько</text>
+    <text x="22" y="158" class="cb">хватит при таком темпе — прямо</text>
+    <text x="22" y="178" class="cb">на главной, по каждой подписке.</text>
+    <text x="22" y="208" class="k">у каждой подписки свой блок</text>
+  </g>
+  <g transform="translate(892,364)">
+    <rect width="268" height="228" rx="18" fill="#171430" stroke="#2f2b52"/>
+    <rect x="22" y="22" width="40" height="40" rx="11" fill="#242045"/>
+    <g class="ico" transform="translate(30,30)"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></g>
+    <text x="22" y="92" class="ct">Честная диагностика</text>
+    <text x="22" y="118" class="cb">Не «кажется, что-то не так», а</text>
+    <text x="22" y="138" class="cb">приговоры движка: набор в ядре,</text>
+    <text x="22" y="158" class="cb">DNS завёрнут, выход в зоне. Плюс</text>
+    <text x="22" y="178" class="cb">«куда пойдёт запрос» по имени.</text>
+    <text x="22" y="208" class="k">отчёт для поддержки — кнопкой</text>
+  </g>
+</svg>

@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-label="Отказоустойчивость: упал основной узел — трафик на следующий; упали все — трафик останавливается, а не утекает мимо туннеля">
+  <defs>
+    <style>
+      text { font-family: -apple-system, "Segoe UI", Roboto, Inter, "Helvetica Neue", Arial, sans-serif; }
+      .h { font-size: 30px; font-weight: 800; fill: #ffffff; letter-spacing: -0.5px; }
+      .hs { font-size: 16px; fill: #9a97b4; }
+      .n { font-size: 15px; font-weight: 700; fill: #f3f1ff; }
+      .s { font-size: 13px; fill: #9a97b4; }
+      .big { font-size: 15px; font-weight: 700; }
+    </style>
+  </defs>
+  <rect width="1200" height="300" rx="28" fill="#0f1020"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="298.5" rx="27.25" fill="none" stroke="#8b7cf6" stroke-opacity="0.2" stroke-width="1.5"/>
+  <text x="40" y="58" class="h">Упал сервер — вы не заметите. Упали все — не утечёт</text>
+  <text x="40" y="86" class="hs">У выхода может быть пул серверов в порядке предпочтения. Сторож проверяет их и держит трафик на первом живом.</text>
+
+  <!-- rule -->
+  <g transform="translate(40,128)">
+    <rect width="190" height="96" rx="16" fill="#171430" stroke="#2f2b52"/>
+    <text x="20" y="34" class="n">правило</text>
+    <text x="20" y="58" class="s">«Видео и стриминг»</text>
+    <text x="20" y="78" class="s">→ выход «vpn»</text>
+  </g>
+  <path d="M230 176 H286" stroke="#5e72e4" stroke-width="3"/>
+
+  <!-- pool -->
+  <g transform="translate(286,112)">
+    <rect width="560" height="128" rx="16" fill="#141227" stroke="#3b3560"/>
+    <text x="20" y="28" class="s" style="fill:#8b7cf6;font-weight:700">пул выхода «vpn»</text>
+    <!-- node 1 dead -->
+    <g transform="translate(20,44)">
+      <rect width="160" height="64" rx="12" fill="#2a1a26" stroke="#5a2a3a"/>
+      <text x="16" y="26" class="n" style="fill:#ff8aa0">✕ Нидерланды</text>
+      <text x="16" y="48" class="s">не отвечает</text>
+    </g>
+    <path d="M180 76 H200" stroke="#4a4670" stroke-width="2"/>
+    <!-- node 2 alive -->
+    <g transform="translate(200,44)">
+      <rect width="160" height="64" rx="12" fill="#0f2a22" stroke="#2ecc8a" stroke-width="1.5"/>
+      <text x="16" y="26" class="n" style="fill:#6ee7b7">● Финляндия</text>
+      <text x="16" y="48" class="s">387 мс · трафик здесь</text>
+    </g>
+    <path d="M360 76 H380" stroke="#4a4670" stroke-width="2"/>
+    <!-- node 3 standby -->
+    <g transform="translate(380,44)">
+      <rect width="160" height="64" rx="12" fill="#1f1c38" stroke="#3b3560"/>
+      <text x="16" y="26" class="n" style="fill:#b8b5cc">○ Эстония</text>
+      <text x="16" y="48" class="s">в запасе</text>
+    </g>
+  </g>
+
+  <!-- all down -->
+  <path d="M846 176 H900" stroke="#5e72e4" stroke-width="3"/>
+  <g transform="translate(900,112)">
+    <rect width="260" height="128" rx="16" fill="#1a1220" stroke="#5a2a3a"/>
+    <text x="20" y="30" class="s" style="fill:#ff8aa0;font-weight:700">а если не работает ни один?</text>
+    <text x="20" y="62" class="big" style="fill:#ffffff">трафик правила</text>
+    <text x="20" y="84" class="big" style="fill:#ffffff">останавливается</text>
+    <text x="20" y="110" class="s">а не уходит в открытый интернет</text>
+  </g>
+
+  <text x="40" y="272" class="s">Так по умолчанию; у выхода это можно сменить на «пустить напрямую». Лучше «не работает», чем «работает мимо туннеля» без вашего ведома.</text>
+</svg>

@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="330" viewBox="0 0 1200 330" role="img" aria-label="Правило = что перенаправляем + кого касается + куда. Правила читаются сверху вниз, побеждает первое совпадение. Исключение — правило «напрямую» выше туннельных.">
+  <defs>
+    <style>
+      text { font-family: -apple-system, "Segoe UI", Roboto, Inter, "Helvetica Neue", Arial, sans-serif; }
+      .h { font-size: 30px; font-weight: 800; fill: #ffffff; letter-spacing: -0.5px; }
+      .hs { font-size: 16px; fill: #9a97b4; }
+      .col { font-size: 12px; font-weight: 700; fill: #6b6890; letter-spacing: 1px; }
+      .n { font-size: 16px; font-weight: 700; fill: #f3f1ff; }
+      .s { font-size: 13px; fill: #9a97b4; }
+      .num { font-size: 13px; fill: #6b6890; }
+      .out { font-size: 14px; font-weight: 700; }
+    </style>
+  </defs>
+  <rect width="1200" height="330" rx="28" fill="#0f1020"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="328.5" rx="27.25" fill="none" stroke="#8b7cf6" stroke-opacity="0.2" stroke-width="1.5"/>
+  <text x="40" y="58" class="h">Правило — это три ответа</text>
+  <text x="40" y="86" class="hs">Что перенаправляем · кого это касается · куда. Список читается сверху вниз, побеждает первое совпадение.</text>
+
+  <g transform="translate(40,108)">
+    <rect width="1120" height="176" rx="18" fill="#141227" stroke="#3b3560"/>
+    <text x="70" y="30" class="col">ЧТО ПЕРЕНАПРАВЛЯЕМ</text>
+    <text x="520" y="30" class="col">КОГО КАСАЕТСЯ</text>
+    <text x="800" y="30" class="col">КУДА</text>
+    <line x1="20" y1="42" x2="1100" y2="42" stroke="#2f2b52"/>
+
+    <!-- row 1: exclusion -->
+    <g transform="translate(0,52)">
+      <rect x="12" y="-6" width="1096" height="40" rx="10" fill="#1f1c38" fill-opacity="0.6"/>
+      <text x="36" y="20" class="num">1</text>
+      <text x="70" y="14" class="n">Банк и Госуслуги</text>
+      <text x="70" y="30" class="s">свой список: 12 доменов</text>
+      <text x="520" y="22" class="s" style="fill:#d9d6ee">все устройства</text>
+      <rect x="800" y="2" width="118" height="26" rx="13" fill="#2a2740" stroke="#6b6890"/>
+      <text x="859" y="20" text-anchor="middle" class="out" style="fill:#d9d6ee">напрямую</text>
+      <text x="940" y="20" class="s" style="fill:#c9c2ff">← стоит выше: мимо VPN</text>
+    </g>
+    <!-- row 2 -->
+    <g transform="translate(0,96)">
+      <text x="36" y="20" class="num">2</text>
+      <text x="70" y="14" class="n">Телевизор в спальне</text>
+      <text x="70" y="30" class="s">YouTube</text>
+      <text x="520" y="22" class="s" style="fill:#d9d6ee">только выбранные · 1 устройство</text>
+      <rect x="800" y="2" width="118" height="26" rx="13" fill="#0f2a22" stroke="#2ecc8a"/>
+      <text x="859" y="20" text-anchor="middle" class="out" style="fill:#6ee7b7">vpn · NL</text>
+    </g>
+    <!-- row 3 -->
+    <g transform="translate(0,140)">
+      <text x="36" y="20" class="num">3</text>
+      <text x="70" y="14" class="n">Соцсети и мессенджеры</text>
+      <text x="70" y="30" class="s">Discord, Telegram, Meta и ещё 14</text>
+      <text x="520" y="22" class="s" style="fill:#d9d6ee">все устройства</text>
+      <rect x="800" y="2" width="118" height="26" rx="13" fill="#0f2a22" stroke="#2ecc8a"/>
+      <text x="859" y="20" text-anchor="middle" class="out" style="fill:#6ee7b7">wg0 · FI</text>
+      <text x="940" y="20" class="s">свой WireGuard — тоже выход</text>
+    </g>
+  </g>
+  <text x="40" y="312" class="hs" style="font-size:14px">Что не попало ни в одно правило, идёт напрямую — на полной скорости провайдера. На роутер изменения едут по кнопке «Применить».</text>
+</svg>
