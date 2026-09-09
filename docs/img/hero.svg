@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="380" viewBox="0 0 1200 380" role="img" aria-label="splify2 26.9 Andromeda — умная маршрутизация для OpenWrt">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14111f"/>
+      <stop offset="0.55" stop-color="#100e18"/>
+      <stop offset="1" stop-color="#1a1430"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a897ff"/>
+      <stop offset="1" stop-color="#6d5ce7"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#8b7cf6" stop-opacity="0.4"/>
+      <stop offset="1" stop-color="#8b7cf6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tun" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8b7cf6"/>
+      <stop offset="1" stop-color="#5ee0a8"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="380" rx="24" fill="url(#bg)"/>
+  <ellipse cx="1060" cy="40" rx="300" ry="190" fill="url(#glow)"/>
+  <ellipse cx="90" cy="360" rx="240" ry="140" fill="url(#glow)" opacity="0.45"/>
+
+  <!-- знак -->
+  <g transform="translate(60,116)">
+    <rect width="124" height="124" rx="30" fill="#1c1730" stroke="#8b7cf6" stroke-opacity="0.35"/>
+    <path d="M90 26 H60 a18 18 0 0 0 0 36 h3 a18 18 0 0 1 0 36 H32"
+          stroke="url(#mark)" stroke-width="13" fill="none" stroke-linecap="round"/>
+  </g>
+
+  <!-- имя, версия, обещание -->
+  <g font-family="system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+    <text x="216" y="164" font-size="70" font-weight="700" fill="#ffffff" letter-spacing="-1.5">splify2</text>
+    <g transform="translate(216,196)">
+      <rect width="232" height="38" rx="19" fill="#8b7cf6" fill-opacity="0.16" stroke="#8b7cf6" stroke-opacity="0.5"/>
+      <text x="116" y="25" text-anchor="middle" font-size="18" font-weight="600" fill="#c3b6ff">26.9 · Andromeda</text>
+    </g>
+    <text x="216" y="272" font-size="23" fill="#d3cee6">Роутер сам решает, что идёт через VPN,</text>
+    <text x="216" y="304" font-size="23" fill="#d3cee6">а что — напрямую.</text>
+    <text x="216" y="340" font-size="18" fill="#8b849f">Настройка живёт на роутере: устройствам ничего не нужно.</text>
+  </g>
+
+  <!-- схема: устройства → роутер → два пути -->
+  <g transform="translate(696,64)" font-family="system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+    <rect width="452" height="252" rx="20" fill="#ffffff" fill-opacity="0.03" stroke="#8b7cf6" stroke-opacity="0.18"/>
+
+    <!-- устройства -->
+    <g fill="#2a2440" stroke="#514a78">
+      <rect x="30" y="46" width="30" height="46" rx="6"/>
+      <rect x="26" y="104" width="42" height="30" rx="5"/>
+      <rect x="30" y="146" width="34" height="24" rx="4"/>
+    </g>
+
+    <!-- линии к роутеру -->
+    <g stroke="#514a78" stroke-width="2" fill="none">
+      <path d="M64 69 H148"/>
+      <path d="M72 119 H148"/>
+      <path d="M68 158 H148"/>
+    </g>
+
+    <!-- роутер -->
+    <g transform="translate(148,70)">
+      <rect width="118" height="100" rx="18" fill="#1e1935" stroke="#8b7cf6" stroke-opacity="0.6"/>
+      <text x="59" y="42" text-anchor="middle" font-size="16" font-weight="700" fill="#c3b6ff">splify2</text>
+      <text x="59" y="64" text-anchor="middle" font-size="11.5" fill="#8f88a8">решает по имени</text>
+      <text x="59" y="80" text-anchor="middle" font-size="11.5" fill="#8f88a8">сайта, а не по IP</text>
+    </g>
+
+    <!-- два пути -->
+    <g stroke-width="3.5" fill="none" stroke-linecap="round">
+      <path d="M266 100 C 300 100, 300 68, 334 68" stroke="url(#tun)"/>
+      <path d="M266 140 C 300 140, 300 176, 334 176" stroke="#5a5478"/>
+    </g>
+    <g transform="translate(334,48)">
+      <rect width="104" height="40" rx="12" fill="#123528" stroke="#5ee0a8" stroke-opacity="0.55"/>
+      <text x="52" y="25" text-anchor="middle" font-size="14" font-weight="700" fill="#7ff0c0">в туннель</text>
+    </g>
+    <g transform="translate(334,156)">
+      <rect width="104" height="40" rx="12" fill="#26243c" stroke="#6b6785" stroke-opacity="0.6"/>
+      <text x="52" y="25" text-anchor="middle" font-size="14" font-weight="700" fill="#b6b1cc">напрямую</text>
+    </g>
+    <text x="334" y="34" font-size="11.5" fill="#7ff0c0" opacity="0.9">youtube · telegram</text>
+    <text x="334" y="216" font-size="11.5" fill="#8f88a8">банк · игры · остальное</text>
+  </g>
+</svg>

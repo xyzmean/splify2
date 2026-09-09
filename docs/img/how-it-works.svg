@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="470" viewBox="0 0 1200 470" role="img" aria-label="Как splify2 решает, куда отправить запрос">
+  <defs>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a1628"/>
+      <stop offset="1" stop-color="#15121f"/>
+    </linearGradient>
+    <linearGradient id="flow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8b7cf6"/>
+      <stop offset="1" stop-color="#5ee0a8"/>
+    </linearGradient>
+    <style>
+      .h  { font: 700 26px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+      .sub{ font: 14px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+      .n  { font: 700 14px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+      .st { font: 700 15px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+      .tx { font: 12.5px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+      .fo { font: 11.5px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+      .mo { font: 12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="470" rx="22" fill="#0e0c14"/>
+  <text x="36" y="52" class="h" fill="#ffffff">Как решается, куда отправить запрос</text>
+  <text x="36" y="80" class="sub" fill="#8b849f">Решение принимается по ИМЕНИ сайта, а не по адресу: один адрес CDN обслуживает сотни сайтов, и по адресу их не различить.</text>
+
+  <path d="M60 236 H1140" stroke="url(#flow)" stroke-width="2.5" stroke-opacity="0.45" stroke-dasharray="6 7"/>
+
+  <!-- 1 -->
+  <g transform="translate(36,124)">
+    <rect width="212" height="212" rx="16" fill="url(#card)" stroke="#8b7cf6" stroke-opacity="0.3"/>
+    <circle cx="28" cy="32" r="14" fill="#8b7cf6" fill-opacity="0.18" stroke="#8b7cf6" stroke-opacity="0.6"/>
+    <text x="28" y="37" text-anchor="middle" class="n" fill="#c3b6ff">1</text>
+    <text x="52" y="37" class="st" fill="#ffffff">Спросили имя</text>
+    <text x="18" y="74" class="tx" fill="#a49ebc">Телефон открывает сайт</text>
+    <text x="18" y="93" class="tx" fill="#a49ebc">и спрашивает адрес</text>
+    <text x="18" y="112" class="tx" fill="#a49ebc">у роутера — своего DNS.</text>
+    <g transform="translate(18,128)">
+      <rect width="176" height="30" rx="8" fill="#0f0d17" stroke="#3b3559"/>
+      <text x="12" y="20" class="mo" fill="#7ff0c0">youtube.com ?</text>
+    </g>
+    <text x="18" y="184" class="fo" fill="#6f6a86">на устройстве — ничего</text>
+  </g>
+
+  <!-- 2 -->
+  <g transform="translate(265,124)">
+    <rect width="212" height="212" rx="16" fill="url(#card)" stroke="#8b7cf6" stroke-opacity="0.3"/>
+    <circle cx="28" cy="32" r="14" fill="#8b7cf6" fill-opacity="0.18" stroke="#8b7cf6" stroke-opacity="0.6"/>
+    <text x="28" y="37" text-anchor="middle" class="n" fill="#c3b6ff">2</text>
+    <text x="52" y="37" class="st" fill="#ffffff">Имя есть в списке</text>
+    <text x="18" y="74" class="tx" fill="#a49ebc">Роутер отвечает своим</text>
+    <text x="18" y="93" class="tx" fill="#a49ebc">адресом-заменителем.</text>
+    <text x="18" y="112" class="tx" fill="#a49ebc">Это и есть пометка.</text>
+    <g transform="translate(18,128)">
+      <rect width="176" height="30" rx="8" fill="#0f0d17" stroke="#3b3559"/>
+      <text x="12" y="20" class="mo" fill="#c3b6ff">→ 198.18.x.x</text>
+    </g>
+    <text x="18" y="184" class="fo" fill="#6f6a86">нет в списке — обычный ответ</text>
+  </g>
+
+  <!-- 3 -->
+  <g transform="translate(494,124)">
+    <rect width="212" height="212" rx="16" fill="url(#card)" stroke="#8b7cf6" stroke-opacity="0.3"/>
+    <circle cx="28" cy="32" r="14" fill="#8b7cf6" fill-opacity="0.18" stroke="#8b7cf6" stroke-opacity="0.6"/>
+    <text x="28" y="37" text-anchor="middle" class="n" fill="#c3b6ff">3</text>
+    <text x="52" y="37" class="st" fill="#ffffff">Метка в ядре</text>
+    <text x="18" y="74" class="tx" fill="#a49ebc">Ядро видит адрес из</text>
+    <text x="18" y="93" class="tx" fill="#a49ebc">набора nftables и ставит</text>
+    <text x="18" y="112" class="tx" fill="#a49ebc">метку на пакет.</text>
+    <g transform="translate(18,128)">
+      <rect width="176" height="30" rx="8" fill="#0f0d17" stroke="#3b3559"/>
+      <text x="12" y="20" class="mo" fill="#c3b6ff">mark 0x0080…</text>
+    </g>
+    <text x="18" y="184" class="fo" fill="#6f6a86">без разбора содержимого</text>
+  </g>
+
+  <!-- 4 -->
+  <g transform="translate(723,124)">
+    <rect width="212" height="212" rx="16" fill="url(#card)" stroke="#5ee0a8" stroke-opacity="0.35"/>
+    <circle cx="28" cy="32" r="14" fill="#5ee0a8" fill-opacity="0.16" stroke="#5ee0a8" stroke-opacity="0.6"/>
+    <text x="28" y="37" text-anchor="middle" class="n" fill="#7ff0c0">4</text>
+    <text x="52" y="37" class="st" fill="#ffffff">Выбран выход</text>
+    <text x="18" y="74" class="tx" fill="#a49ebc">По метке — своя таблица</text>
+    <text x="18" y="93" class="tx" fill="#a49ebc">маршрутизации и свой</text>
+    <text x="18" y="112" class="tx" fill="#a49ebc">туннель у каждого правила.</text>
+    <g transform="translate(18,128)">
+      <rect width="176" height="30" rx="8" fill="#0f0d17" stroke="#2f5c50"/>
+      <text x="12" y="20" class="mo" fill="#7ff0c0">table 303 → vless</text>
+    </g>
+    <text x="18" y="184" class="fo" fill="#6f6a86">до 16 выходов сразу</text>
+  </g>
+
+  <!-- 5 -->
+  <g transform="translate(952,124)">
+    <rect width="212" height="212" rx="16" fill="url(#card)" stroke="#6b6785" stroke-opacity="0.4"/>
+    <circle cx="28" cy="32" r="14" fill="#ffffff" fill-opacity="0.07" stroke="#6b6785"/>
+    <text x="28" y="37" text-anchor="middle" class="n" fill="#c9c4dc">5</text>
+    <text x="52" y="37" class="st" fill="#ffffff">Остальное мимо</text>
+    <text x="18" y="74" class="tx" fill="#a49ebc">Метки нет — пакет идёт</text>
+    <text x="18" y="93" class="tx" fill="#a49ebc">обычным путём, на полной</text>
+    <text x="18" y="112" class="tx" fill="#a49ebc">скорости провайдера.</text>
+    <g transform="translate(18,128)">
+      <rect width="176" height="30" rx="8" fill="#0f0d17" stroke="#3b3559"/>
+      <text x="12" y="20" class="mo" fill="#b6b1cc">напрямую</text>
+    </g>
+    <text x="18" y="184" class="fo" fill="#6f6a86">банк, игры, торренты</text>
+  </g>
+
+  <!-- сноска -->
+  <g transform="translate(36,362)">
+    <rect width="1128" height="82" rx="14" fill="#ffffff" fill-opacity="0.03" stroke="#8b7cf6" stroke-opacity="0.16"/>
+    <text x="20" y="30" class="st" fill="#c3b6ff">А если устройство не спрашивает DNS роутера?</text>
+    <text x="20" y="54" class="tx" fill="#a49ebc">Тогда работает вторая половина правила — списки адресов и подсетей: они ловят трафик и без DNS.</text>
+    <text x="20" y="72" class="tx" fill="#a49ebc">Поэтому у сервиса в каталоге обычно две половины, доменная и адресная, и включаются они вместе.</text>
+  </g>
+</svg>

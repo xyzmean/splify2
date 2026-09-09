@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img" aria-label="Было: VPN на каждом устройстве. Стало: одна настройка на роутере">
+  <defs>
+    <linearGradient id="bad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#241820"/>
+      <stop offset="1" stop-color="#1b1419"/>
+    </linearGradient>
+    <linearGradient id="good" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#14211d"/>
+      <stop offset="1" stop-color="#111a1a"/>
+    </linearGradient>
+    <style>
+      .h { font: 700 25px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+      .t { font: 16.5px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+      .s { font: 13px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+      .b { font: 700 16.5px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="440" rx="22" fill="#0e0c14"/>
+
+  <!-- было -->
+  <g transform="translate(28,28)">
+    <rect width="546" height="384" rx="18" fill="url(#bad)" stroke="#ff6b81" stroke-opacity="0.28"/>
+    <text x="28" y="52" class="h" fill="#ff9aab">Было</text>
+    <text x="28" y="80" class="s" fill="#8a7f86">VPN живёт на устройствах — по одному на каждом</text>
+
+    <!-- устройства с приложениями -->
+    <g transform="translate(28,104)">
+      <g fill="#2b1f27" stroke="#5c4048">
+        <rect x="0" y="0" width="72" height="52" rx="8"/>
+        <rect x="88" y="0" width="72" height="52" rx="8"/>
+        <rect x="176" y="0" width="72" height="52" rx="8"/>
+        <rect x="264" y="0" width="72" height="52" rx="8"/>
+      </g>
+      <g class="s" fill="#b9a7ae" text-anchor="middle">
+        <text x="36" y="31">телефон</text>
+        <text x="124" y="31">ноутбук</text>
+        <text x="212" y="31">ТВ</text>
+        <text x="300" y="31">приставка</text>
+      </g>
+      <g class="s" fill="#ff8fa3" text-anchor="middle">
+        <text x="36" y="72">VPN</text>
+        <text x="124" y="72">VPN</text>
+        <text x="212" y="72">нет</text>
+        <text x="300" y="72">нет</text>
+      </g>
+    </g>
+
+    <g class="t" fill="#c9bcc2">
+      <text x="28" y="252">✕  на каждом устройстве — своё приложение и свой вход</text>
+      <text x="28" y="286">✕  на телевизоре и приставке приложения просто нет</text>
+      <text x="28" y="320">✕  включил VPN — весь трафик пошёл в туннель</text>
+      <text x="28" y="354">✕  банк видит чужую страну и просит подтверждение</text>
+    </g>
+  </g>
+
+  <!-- стрелка -->
+  <g transform="translate(584,208)">
+    <path d="M0 12 H30" stroke="#5ee0a8" stroke-width="3" stroke-linecap="round"/>
+    <path d="M22 4 L32 12 L22 20" fill="none" stroke="#5ee0a8" stroke-width="3"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- стало -->
+  <g transform="translate(626,28)">
+    <rect width="546" height="384" rx="18" fill="url(#good)" stroke="#5ee0a8" stroke-opacity="0.3"/>
+    <text x="28" y="52" class="h" fill="#7ff0c0">Стало</text>
+    <text x="28" y="80" class="s" fill="#7e8f88">Одна настройка на роутере — правила для всей сети</text>
+
+    <!-- роутер и устройства -->
+    <g transform="translate(28,100)">
+      <g fill="#182b26" stroke="#2f5c50">
+        <rect x="0" y="4" width="72" height="46" rx="8"/>
+        <rect x="88" y="4" width="72" height="46" rx="8"/>
+        <rect x="176" y="4" width="72" height="46" rx="8"/>
+        <rect x="264" y="4" width="72" height="46" rx="8"/>
+      </g>
+      <g class="s" fill="#a9c4bb" text-anchor="middle">
+        <text x="36" y="32">телефон</text>
+        <text x="124" y="32">ноутбук</text>
+        <text x="212" y="32">ТВ</text>
+        <text x="300" y="32">приставка</text>
+      </g>
+      <g stroke="#2f5c50" stroke-width="2" fill="none">
+        <path d="M36 50 V68 H300 V50"/>
+        <path d="M124 50 V68"/>
+        <path d="M212 50 V68"/>
+        <path d="M168 68 V82"/>
+      </g>
+      <g transform="translate(96,82)">
+        <rect width="144" height="42" rx="12" fill="#123528" stroke="#5ee0a8" stroke-opacity="0.6"/>
+        <text x="72" y="27" text-anchor="middle" class="b" fill="#7ff0c0">роутер · splify2</text>
+      </g>
+    </g>
+
+    <g class="t" fill="#c2d3cc">
+      <text x="28" y="252">✓  на устройствах — ничего: ни приложений, ни входов</text>
+      <text x="28" y="286">✓  телевизор и приставка получают ровно то же</text>
+      <text x="28" y="320">✓  в туннель — только отмеченное; остальное быстро</text>
+      <text x="28" y="354">✓  банк видит домашний адрес — как и должен</text>
+    </g>
+  </g>
+</svg>
