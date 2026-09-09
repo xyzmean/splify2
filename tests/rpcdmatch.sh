@@ -554,6 +554,12 @@ esac
 # Нужна для круга опроса: он спрашивает их по просьбе, и «пришло/не пришло» без ответа
 # заглушки не отличить от «движок старый».
 if [ "$1" = diag ]; then
+    # ЧЕМ ИМЕННО ЗВАЛИ — записывается: проверки описывают РАБОТАЮЩЕЕ состояние, и по какой
+    # спеке их считают, важнее их ответа. По задуманной спеке они врут на любых
+    # неприменённых правках («apply не довёл набор до ядра», хотя apply никто не нажимал).
+    _ds=""
+    while [ $# -gt 0 ]; do case "$1" in --spec) _ds="$2"; shift 2 ;; *) shift ;; esac; done
+    printf '%s\n' "$_ds" >> "$SANDBOX/diag-spec.log"
     printf '{"schema":1,"checks":[{"id":"table","verdict":"ok","what":"таблица на месте","why":""}],"warn":0,"fail":0}\n'
     exit 0
 fi
@@ -3289,6 +3295,34 @@ d=json.load(sys.stdin)["net"]; print("yes" if "uptime" in d and "active_clients"
 check "круг: без просьбы проверок нет" "no" \
       "$(printf '%s' "$out" | python3 -c 'import json,sys
 print("yes" if "diag" in json.load(sys.stdin) else "no")' 2>/dev/null)"
+# ---- по КАКОЙ спеке считаются проверки ----------------------------------------
+#
+# Проверки движка отвечают на вопрос «что не работает СЕЙЧАС», и половина их приговоров
+# сверяет спеку с ядром: набор канала, цепочка, таблица маршрутизации. Значит сверять надо
+# ПРИМЕНЁННУЮ спеку. По задуманной они врут ровно на неприменённых правках: канала в ядре
+# ещё нет, и приговор говорит «apply не довёл набор до ядра — примените заново», хотя apply
+# никто не нажимал. Снято с живого роутера: три неприменённых правила дали `fail 1` по
+# spec.json и `fail 0` по spec.applied.json на том же ядре.
+printf '{"schema":2,"outputs":{},"channels":[]}\n' > "$T/etc/spec.json"
+printf '{"schema":2,"outputs":{},"channels":[]}\n' > "$T/etc/spec.applied.json"
+: > "$T/diag-spec.log"
+rpcd diag >/dev/null 2>&1
+check "проверки движка считаются по ПРИМЕНЁННОЙ спеке" "$T/etc/spec.applied.json" \
+      "$(tail -n1 "$T/diag-spec.log" 2>/dev/null)"
+: > "$T/diag-spec.log"
+rpcd live '{"diag":true}' >/dev/null 2>&1
+check "круг опроса спрашивает проверки о том же" "$T/etc/spec.applied.json" \
+      "$(tail -n1 "$T/diag-spec.log" 2>/dev/null)"
+# Применённой спеки нет вовсе — до первого apply считаем применённым сохранённое: иначе
+# свежепоставленный пакет показывал бы поломку, которой никто не делал (тот же довод, что у
+# fast_applied_get).
+rm -f "$T/etc/spec.applied.json"
+: > "$T/diag-spec.log"
+rpcd diag >/dev/null 2>&1
+check "применённой спеки нет — проверки берут сохранённую" "$T/etc/spec.json" \
+      "$(tail -n1 "$T/diag-spec.log" 2>/dev/null)"
+printf '{"schema":2,"outputs":{},"channels":[]}\n' > "$T/etc/spec.applied.json"
+
 out2="$(rpcd live '{"diag":true}')"
 check "круг: по просьбе проверки приходят дословно" "таблица на месте" \
       "$(printf '%s' "$out2" | python3 -c 'import json,sys
