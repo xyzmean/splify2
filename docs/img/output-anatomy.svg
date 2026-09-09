@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="470" viewBox="0 0 1200 470" role="img" aria-label="Выход — это набор туннелей в порядке предпочтения: свой WireGuard, локации подписок, интерфейсы xsteer. Правило указывает на выход по имени; трафик идёт через первый живой туннель; если упали все — стоп, напрямую или через zapret.">
+  <defs>
+    <style>
+      text { font-family: -apple-system, "Segoe UI", Roboto, Inter, "Helvetica Neue", Arial, sans-serif; }
+      .h { font-size: 30px; font-weight: 800; fill: #ffffff; letter-spacing: -0.5px; }
+      .hs { font-size: 16px; fill: #9a97b4; }
+      .n { font-size: 15px; font-weight: 700; fill: #f3f1ff; }
+      .s { font-size: 13px; fill: #9a97b4; }
+      .k { font-size: 12px; font-weight: 700; fill: #8b7cf6; letter-spacing: 1px; }
+      .num { font-size: 13px; font-weight: 700; fill: #6b6890; }
+      .chip { font-size: 12px; font-weight: 700; }
+    </style>
+  </defs>
+  <rect width="1200" height="470" rx="28" fill="#0f1020"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="468.5" rx="27.25" fill="none" stroke="#8b7cf6" stroke-opacity="0.2" stroke-width="1.5"/>
+  <text x="40" y="58" class="h">Выход — это набор туннелей, а не один сервер</text>
+  <text x="40" y="86" class="hs">Вы собираете выход из того, что у вас есть, и расставляете по предпочтению. Правило указывает на выход по имени, а не на сервер.</text>
+
+  <!-- rules -->
+  <g transform="translate(40,120)">
+    <text x="0" y="0" class="k">ПРАВИЛА</text>
+    <g transform="translate(0,16)">
+      <rect width="210" height="52" rx="12" fill="#171430" stroke="#2f2b52"/>
+      <text x="16" y="22" class="n">Видео и стриминг</text>
+      <text x="16" y="41" class="s">→ выход «vpn»</text>
+    </g>
+    <g transform="translate(0,80)">
+      <rect width="210" height="52" rx="12" fill="#171430" stroke="#2f2b52"/>
+      <text x="16" y="22" class="n">Телевизор в спальне</text>
+      <text x="16" y="41" class="s">→ выход «vpn»</text>
+    </g>
+    <g transform="translate(0,144)">
+      <rect width="210" height="52" rx="12" fill="#171430" stroke="#2f2b52"/>
+      <text x="16" y="22" class="n">Игры</text>
+      <text x="16" y="41" class="s">→ выход «игры-fi»</text>
+    </g>
+    <path d="M210 42 H236 Q250 42 250 56 V96 M210 106 H250 M250 106 H272" stroke="#5e72e4" stroke-width="2.5" fill="none"/>
+    <path d="M210 170 H272" stroke="#4a4670" stroke-width="2" fill="none" stroke-dasharray="4 4"/>
+  </g>
+
+  <!-- the output -->
+  <g transform="translate(312,120)">
+    <text x="0" y="0" class="k">ВЫХОД «VPN» — ПОРЯДОК ПРЕДПОЧТЕНИЯ</text>
+    <rect y="16" width="520" height="252" rx="18" fill="#141227" stroke="#5e72e4" stroke-width="1.5"/>
+    <!-- part 1 -->
+    <g transform="translate(18,34)">
+      <rect width="484" height="50" rx="12" fill="#0f2a22" stroke="#2ecc8a" stroke-width="1.5"/>
+      <text x="16" y="31" class="num" style="fill:#6ee7b7">1</text>
+      <text x="40" y="22" class="n" style="fill:#6ee7b7">wg0 — свой WireGuard</text>
+      <text x="40" y="40" class="s">Финляндия · 387 мс · трафик идёт здесь</text>
+      <rect x="376" y="14" width="92" height="22" rx="11" fill="#2ecc8a" fill-opacity="0.15"/>
+      <text x="422" y="29" text-anchor="middle" class="chip" style="fill:#6ee7b7">свой туннель</text>
+    </g>
+    <!-- part 2 -->
+    <g transform="translate(18,94)">
+      <rect width="484" height="50" rx="12" fill="#1f1c38" stroke="#3b3560"/>
+      <text x="16" y="31" class="num">2</text>
+      <text x="40" y="22" class="n">Основная подписка · 2 локации</text>
+      <text x="40" y="40" class="s">Нидерланды, Германия — одна часть, в запасе</text>
+      <rect x="376" y="14" width="92" height="22" rx="11" fill="#5e72e4" fill-opacity="0.2"/>
+      <text x="422" y="29" text-anchor="middle" class="chip" style="fill:#c9c2ff">подписка</text>
+    </g>
+    <!-- part 3 -->
+    <g transform="translate(18,154)">
+      <rect width="484" height="50" rx="12" fill="#1f1c38" stroke="#3b3560"/>
+      <text x="16" y="31" class="num">3</text>
+      <text x="40" y="22" class="n">Резервная подписка · Эстония</text>
+      <text x="40" y="40" class="s">другого продавца — тоже можно, в запасе</text>
+      <rect x="376" y="14" width="92" height="22" rx="11" fill="#5e72e4" fill-opacity="0.2"/>
+      <text x="422" y="29" text-anchor="middle" class="chip" style="fill:#c9c2ff">подписка</text>
+    </g>
+    <!-- on fail -->
+    <g transform="translate(18,214)">
+      <rect width="484" height="42" rx="12" fill="#1a1220" stroke="#5a2a3a"/>
+      <text x="16" y="26" class="s" style="fill:#ff8aa0;font-weight:700">если всё упало:</text>
+      <text x="140" y="26" class="s" style="fill:#f3f1ff;font-weight:700">остановить трафик</text>
+      <text x="300" y="26" class="s">· напрямую · через zapret</text>
+    </g>
+  </g>
+
+  <!-- what can be taken -->
+  <g transform="translate(872,120)">
+    <text x="0" y="0" class="k">ЧТО МОЖНО ВЗЯТЬ В ВЫХОД</text>
+    <g transform="translate(0,16)">
+      <rect width="288" height="252" rx="18" fill="#171430" stroke="#2f2b52"/>
+      <g transform="translate(18,20)">
+        <rect width="10" height="10" rx="3" y="4" fill="#6ee7b7"/>
+        <text x="22" y="13" class="n">Свои туннели</text>
+        <text x="22" y="32" class="s">WireGuard, AmneziaWG — любой</text>
+        <text x="22" y="49" class="s">поднятый интерфейс роутера</text>
+      </g>
+      <g transform="translate(18,84)">
+        <rect width="10" height="10" rx="3" y="4" fill="#8b7cf6"/>
+        <text x="22" y="13" class="n">Локации подписок VLESS</text>
+        <text x="22" y="32" class="s">сколько угодно подписок; локации</text>
+        <text x="22" y="49" class="s">ищутся по стране или названию</text>
+      </g>
+      <g transform="translate(18,148)">
+        <rect width="10" height="10" rx="3" y="4" fill="#5e72e4"/>
+        <text x="22" y="13" class="n">Интерфейсы xsteer</text>
+        <text x="22" y="32" class="s">свой протокол проекта, если</text>
+        <text x="22" y="49" class="s">поднят хаб</text>
+      </g>
+      <line x1="18" y1="212" x2="270" y2="212" stroke="#2f2b52"/>
+      <text x="18" y="234" class="s">Отдельно живут ещё два вида выходов:</text>
+      <text x="18" y="252" class="s">встроенный <tspan style="fill:#8b7cf6">«Напрямую»</tspan> и обход DPI <tspan style="fill:#8b7cf6">Zapret</tspan></text>
+    </g>
+  </g>
+
+  <text x="40" y="418" class="s">Сторож движка проверяет части раз в минуту, не трогая живой путь, и держит трафик на первой живой. Ожила первая — трафик сам вернётся на неё.</text>
+  <text x="40" y="440" class="s">Переименовали выход — правила поедут за ним. В одном выходе до восьми частей; предел движка — 16 выходов вместе с частями составных.</text>
+</svg>
