@@ -1,0 +1,53 @@
+name: Стенды
+
+# Те же проверки, что гоняет релиз, — на каждый push в main и по кнопке. Зачем отдельно от
+# релиза: пока стенды запускались только кнопкой «Релиз», красный стенд узнавался в день
+# выпуска — так упали предвыпусковые прогоны 26.9 (стенд установщика с константами прежнего
+# выпуска, стенд телеметрии без движка). Здесь ничего не публикуется и не пишется в
+# репозиторий: только проверки. Шаги повторяют release.yml дословно — расхождение между ними
+# означало бы «зелено здесь, красно там».
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Установить зависимости интерфейса
+        working-directory: ui
+        run: npm ci
+
+      - name: Проверки интерфейса
+        working-directory: ui
+        run: |
+          set -eu
+          npm run lint
+          npx tsc -b
+          npm run check:cn
+
+      - name: Собрать движок для стендов
+        run: |
+          set -eu
+          # См. одноимённый шаг в release.yml: telemetrymatch собирает пакет настоящим движком.
+          git clone -q --depth 1 https://github.com/xyzmean/steer "$GITHUB_WORKSPACE/../steer"
+          make -C "$GITHUB_WORKSPACE/../steer" all
+          "$GITHUB_WORKSPACE/../steer/build/steer" --version
+
+      - name: Стенды
+        run: |
+          set -eu
+          sh tests/run.sh

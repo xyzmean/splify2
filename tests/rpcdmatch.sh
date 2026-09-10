@@ -919,6 +919,12 @@ check "объект отвечает списком методов (стенд �
       "yes" "$(printf '%s' "$out" | python3 -c 'import json,sys
 try: print("yes" if "steer_install" in json.load(sys.stdin) else "no")
 except Exception: print("не JSON")')"
+# Не поднялся — сказать, ПОЧЕМУ, тут же: stderr объекта иначе лежит в $T/stderr и уходит вместе
+# с песочницей, и на чужой машине (runner релиза) остаётся только «не JSON» без причины.
+if ! printf '%s' "$out" | python3 -c 'import json,sys; json.load(sys.stdin)' >/dev/null 2>&1; then
+    echo "--- stdout объекта (первые строки):"; printf '%s\n' "$out" | head -5
+    echo "--- stderr объекта:"; head -20 "$T/stderr" 2>/dev/null
+fi
 
 # ---- I-049: установка не должна снимать работающий пакет ----------------------
 # Сценарий: стоит рабочий 0.9.5-extended, ставим 0.9.6-extended, apk отказывает.

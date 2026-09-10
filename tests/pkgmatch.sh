@@ -406,7 +406,11 @@ check "карточка обновления его показывает" "1" \
 # команды. В соседнем движке ровно так и случилось.
 if command -v python3 >/dev/null 2>&1; then
     check "release.yml пригоден к запуску" "" "$(python3 tests/wfcheck.py "$WF" 2>&1)"
+    check "tests.yml пригоден к запуску" "" "$(python3 tests/wfcheck.py .github/workflows/tests.yml 2>&1)"
 fi
+# Стенды на push и в релизе — одни и те же шаги; расхождение означало бы «зелено здесь, красно там».
+check "движок для стендов собирается и в релизе, и на push" "2" \
+    "$(grep -c 'make -C "\$GITHUB_WORKSPACE/../steer" all' "$WF" .github/workflows/tests.yml | awk -F: '{s+=$2} END {print s}')"
 
 # ---- настройка uci кладётся пакетом, а не создаётся на первом обращении --------
 # `uci set splify2.main.x` в несуществующий файл молча ничего не делает — на этом уже

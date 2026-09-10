@@ -94,6 +94,19 @@ jobs:
           npx tsc -b
           npm run check:cn
 
+      - name: Собрать движок для стендов
+        run: |
+          set -eu
+          # tests/telemetrymatch.sh собирает пакет телеметрии НАСТОЯЩИМ движком из соседнего
+          # каталога (../steer/build/steer): идентификатор роутера, status и diag печатает он,
+          # и стенд проверяет, что сборщик берёт из них только названные поля. Без движка стенд
+          # честно отвечает «нет движка — соберите» кодом 2, а tests/run.sh считает это провалом —
+          # так упал предвыпусковой прогон 26.9. Базовая сборка движка — один gcc без mbedtls
+          # (цель all), репозиторий публичный: клон без ключей, глубиной в один коммит.
+          git clone -q --depth 1 https://github.com/xyzmean/steer "$GITHUB_WORKSPACE/../steer"
+          make -C "$GITHUB_WORKSPACE/../steer" all
+          "$GITHUB_WORKSPACE/../steer/build/steer" --version
+
       - name: Стенды
         run: |
           set -eu

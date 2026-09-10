@@ -760,6 +760,11 @@ srs_lists_reset
 rm -f "$T/requested"
 out="$(srs_rpcd list_fetch '{"id":"itdog:telegram","kind":"domains"}')"
 
+# Объект не ответил JSON — сказать почему здесь же: его stderr иначе уходит с песочницей.
+case "$out" in '{'*) ;; *)
+    echo "--- объект rpcd не ответил JSON; stdout:"; printf '%s\n' "$out" | head -5
+    echo "--- stderr объекта:"; head -20 "$T/rpcd-err" 2>/dev/null ;;
+esac
 check "list_fetch у второго издателя отвечает успехом" "yes" \
       "$(printf '%s' "$out" | grep -q '"ok": *true' && echo yes || echo no)"
 check "list_fetch положил доменный список" "20" \
