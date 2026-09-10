@@ -13,6 +13,11 @@ on:
         required: false
         default: false
         type: boolean
+      codename:
+        description: 'Кодовое имя выпуска (например Andromeda). Попадёт в заголовок релиза: «26.9 Andromeda»'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: write
@@ -51,6 +56,28 @@ jobs:
             echo "::error::версия '$V' — не числа через точку (например 26.9 или 1.2.5)"; exit 1; }
           echo "$V" > VERSION
           echo "VERSION=$V" >> "$GITHUB_ENV"
+
+      - name: Собрать заголовок релиза
+        env:
+          INPUT_CODENAME: ${{ inputs.codename }}
+        run: |
+          set -eu
+          # Заголовок релиза — это то, что бэкенд (gh_load_api в m-engine.sh) отдаёт
+          # интерфейсу как НАЗВАНИЕ выпуска рядом с версией: человек выбирает в списке
+          # «26.9 Andromeda», а ставится пакет по версии. Без кодового имени заголовок
+          # прежний — «splify2 26.9», как у всех выпусков до этого.
+          #
+          # Вертикальная черта в имени запрещена: ей размечен список названий в бэкенде
+          # (GH_NAMES «версия=название|»), и такое название он молча заменит числом.
+          C="$(printf '%s' "$INPUT_CODENAME" | sed 's/^[[:blank:]]*//; s/[[:blank:]]*$//')"
+          case "$C" in *"|"*)
+            echo "::error::кодовое имя '$C' содержит вертикальную черту — бэкенд её не примет"; exit 1 ;;
+          esac
+          if [ -n "$C" ]; then
+            echo "RELEASE_NAME=$VERSION $C" >> "$GITHUB_ENV"
+          else
+            echo "RELEASE_NAME=splify2 $VERSION" >> "$GITHUB_ENV"
+          fi
 
       - name: Установить зависимости интерфейса
         working-directory: ui
@@ -148,7 +175,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.VERSION }}
-          name: splify2 ${{ env.VERSION }}
+          name: ${{ env.RELEASE_NAME }}
           prerelease: ${{ inputs.prerelease }}
           files: |
             out/luci-app-splify2-${{ env.VERSION }}-1_noarch.apk
