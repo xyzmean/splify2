@@ -156,6 +156,42 @@ fw_zone_devices() {  # ИНДЕКС
     uci -q get "firewall.@zone[$1].device" 2>/dev/null | tr ' ' '\n' | grep . | sort -u
 }
 
+# ЗОНЫ, В КОТОРЫХ ЛЕЖАТ УСТРОЙСТВА КЛИЕНТОВ из спеки (lan_devices; одиночная lan_device и
+# отсутствие поля значат br-lan). Устройство входит в зону либо напрямую (`list device`), либо
+# через сетевой интерфейс (`list network`, а у интерфейса `option device`) — у Tailscale и
+# ZeroTier по руководствам встречаются оба способа, поэтому спрашиваются оба. Имена зон — по
+# одному в строке, без повторов.
+fw_client_zones() {
+    _fcz_devs="$(jsonfilter -i "$SPEC" -e '@.lan_devices[*]' 2>/dev/null)"
+    [ -n "$_fcz_devs" ] || _fcz_devs="$(jsonfilter -i "$SPEC" -e '@.lan_device' 2>/dev/null)"
+    [ -n "$_fcz_devs" ] || _fcz_devs="br-lan"
+    for _fcz_d in $_fcz_devs; do
+        _fcz_i="$(fw_zone_of_device "$_fcz_d")"
+        if [ -z "$_fcz_i" ]; then
+            _fcz_n="$(uci show network 2>/dev/null |
+                      sed -n "s/^network\.\([^.@][^.]*\)\.device='\{0,1\}$_fcz_d'\{0,1\}$/\1/p" | head -1)"
+            [ -n "$_fcz_n" ] && _fcz_i="$(fw_zone_of_network "$_fcz_n")"
+        fi
+        [ -n "$_fcz_i" ] && uci -q get "firewall.@zone[$_fcz_i].name" 2>/dev/null
+    done | grep . | sort -u
+}
+
+fw_zone_of_network() {  # ИМЯ_ИНТЕРФЕЙСА -> индекс зоны, в чей список network он входит
+    uci show firewall 2>/dev/null | sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.network=\(.*\)$/\1 \2/p" |
+        while IFS=' ' read -r _fzn_i _fzn_v; do
+            for _fzn_w in $(printf '%s' "$_fzn_v" | tr -d "'"); do
+                [ "$_fzn_w" = "$1" ] && { printf '%s' "$_fzn_i"; return 0; }
+            done
+        done
+}
+
+fw_forwarding_id() {  # SRC DEST -> @forwarding[N] или пусто
+    uci show firewall 2>/dev/null | sed -n "s/^firewall\.\(@forwarding\[[0-9]*\]\)\.dest='$2'$/\1/p" |
+        while IFS= read -r _ffi_f; do
+            [ "$(uci -q get "firewall.$_ffi_f.src" 2>/dev/null)" = "$1" ] && { printf '%s' "$_ffi_f"; return 0; }
+        done
+}
+
 # Принять существующую зону за свою, если отличить её от нашей нельзя.
 #
 # Зона steer_vless заводилась и прежними версиями, когда расписок ещё не было. Без принятия она
@@ -280,6 +316,33 @@ fw_zone_sync() {  # ЗОНА ВИДЫ MASQ
         changed=1
         msg="${msg:+$msg, }проброс lan -> $_z добавлен"
     }
+
+    # ПРОБРОС ИЗ ЗОН УСТРОЙСТВ КЛИЕНТОВ. Спека может назвать интерфейс из другой зоны — tailscale0
+    # в своей зоне ts по руководствам: движок помечает пакет (iifname), маршрут ведёт в туннель,
+    # а forward-цепочка fw4 его отбрасывает, потому что пары «ts -> зона туннелей» никто не
+    # заводил. Так и пришло первое обращение по Андромеде: «выбираю tailscale0, проксирование не
+    # взлетает». Устройства в спеке выбираем мы — значит и проброс из их зон наша забота. С
+    # расписки: убирается, когда устройств из этой зоны в спеке больше нет; чужие пробросы (без
+    # расписки) не трогаются. lan пробрасывается выше и всегда; зона туннеля сама в себя — нет.
+    _cz_want="$(fw_client_zones)"
+    for _cz in $_cz_want; do
+        [ "$_cz" = lan ] && continue
+        [ "$_cz" = "$_z" ] && continue
+        [ -n "$(fw_forwarding_id "$_cz" "$_z")" ] && continue
+        uci -q add firewall forwarding >/dev/null
+        uci -q set firewall.@forwarding[-1].src="$_cz"
+        uci -q set firewall.@forwarding[-1].dest="$_z"
+        fw_note "fwd $_z $_cz"
+        changed=1
+        msg="${msg:+$msg, }проброс $_cz -> $_z добавлен (в зоне $_cz устройства клиентов)"
+    done
+    for _cz in $(sed -n "s/^fwd $_z //p" "$FW_OWNED" 2>/dev/null); do
+        printf '%s\n' "$_cz_want" | grep -qx "$_cz" && continue
+        _f="$(fw_forwarding_id "$_cz" "$_z")"
+        [ -n "$_f" ] && uci -q delete "firewall.$_f" && changed=1
+        fw_unnote "fwd $_z $_cz"
+        msg="${msg:+$msg, }проброс $_cz -> $_z убран — устройств клиентов в зоне $_cz больше нет"
+    done
 
     if [ "$changed" = 1 ]; then
         uci -q commit firewall
