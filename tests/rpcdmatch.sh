@@ -3365,6 +3365,53 @@ out2="$(rpcd live '{"diag":true}')"
 check "круг: по просьбе проверки приходят дословно" "таблица на месте" \
       "$(printf '%s' "$out2" | python3 -c 'import json,sys
 print(json.load(sys.stdin)["diag"]["checks"][0]["what"])' 2>/dev/null)"
+
+# ---- спор за порт 53 — приговор в проверках, а не только на вкладке DoH (I-253) ----------
+# https-dns-proxy с force_dns=1 просит fw4 завернуть DNS сети на dnsmasq, движок заворачивает
+# его же на свой резолвер; кто перехватит первым, решает порядок запуска служб, и проигравший
+# молчит. До этого спор считался (doh_state.force_conflict) и показывался только на вкладке
+# DoH — а обновившийся с 1.2.5, к которому прокси приехал зависимостью, туда не заходит. Теперь
+# он же — приговор `doh_force` в diag, и попадает в счётчик fail, то есть в метку рельса.
+# Приговор ДОБАВЛЯЕТСЯ к ответу движка, а не подменяет его: остальные проверки дословно.
+mkdir -p "$T/etc"
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/initd-doh"; chmod +x "$T/bin/initd-doh"
+printf "config main 'config'\n\toption force_dns '1'\n\nconfig https-dns-proxy\n\toption resolver_url 'https://dns.comss.one/dns-query'\n" \
+    > "$T/etc/config-doh"
+dj() { python3 -c 'import json,sys
+d=json.load(sys.stdin)'"$1" 2>/dev/null; }
+out="$(rpcd live '{"diag":true}')"
+check "спор за порт 53 — приговор doh_force в проверках круга" "fail" \
+      "$(printf '%s' "$out" | dj '
+print([c["verdict"] for c in d["diag"]["checks"] if c["id"]=="doh_force"][0])')"
+check "и он учтён в счётчике fail — метка в рельсе загорится" "1" \
+      "$(printf '%s' "$out" | dj '
+print(d["diag"]["fail"])')"
+check "приговор движка при этом на месте и дословен" "таблица на месте" \
+      "$(printf '%s' "$out" | dj '
+print(d["diag"]["checks"][0]["what"])')"
+check "ответ остаётся разбираемым JSON с двумя проверками" "2" \
+      "$(printf '%s' "$out" | dj '
+print(len(d["diag"]["checks"]))')"
+out="$(rpcd diag)"
+check "метод diag говорит то же самое" "fail" \
+      "$(printf '%s' "$out" | dj '
+print([c["verdict"] for c in d["checks"] if c["id"]=="doh_force"][0])')"
+# force_dns выключен — спора нет, приговора нет, счётчик прежний.
+printf "config main 'config'\n\toption force_dns '0'\n\nconfig https-dns-proxy\n\toption resolver_url 'https://dns.comss.one/dns-query'\n" \
+    > "$T/etc/config-doh"
+out="$(rpcd live '{"diag":true}')"
+check "force_dns=0 — приговора нет" "0" \
+      "$(printf '%s' "$out" | dj '
+print(len([c for c in d["diag"]["checks"] if c["id"]=="doh_force"]))')"
+check "и счётчик fail не тронут" "0" "$(printf '%s' "$out" | dj '
+print(d["diag"]["fail"])')"
+# Прокси не установлен вовсе — тем более нет.
+rm -f "$T/bin/initd-doh"
+out="$(rpcd live '{"diag":true}')"
+check "прокси не установлен — приговора нет" "0" \
+      "$(printf '%s' "$out" | dj '
+print(len([c for c in d["diag"]["checks"] if c["id"]=="doh_force"]))')"
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/initd-doh"; chmod +x "$T/bin/initd-doh"
 # Движок не ответил — честная ошибка, а не пустой объект: интерфейс покажет пустоту как
 # «всё в порядке», и это худшая из возможных неправд.
 # Спека, которую движок не разбирает: `steer status` не печатает ничего, и это ошибка, а не

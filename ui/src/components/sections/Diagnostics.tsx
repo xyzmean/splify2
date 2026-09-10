@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Check, Info, TriangleAlert, XCircle } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { type Live } from '@/lib/live'
 import { parseLog } from '@/lib/log'
+import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
 
 /** Диагностика: то, за чем приходят, когда «применилось, но не работает».
@@ -41,6 +43,26 @@ export default function Diagnostics({ live }: { live: Live }) {
     }, [])
 
     const bad = (live.diag?.checks || []).filter((c) => c.verdict === 'fail' || c.verdict === 'warn')
+
+    /* Один приговор — с кнопкой. `doh_force` (спор за порт 53 с https-dns-proxy) добавляет к
+     * проверкам движка сам бэкенд, и чинится он одним нажатием — тем же методом, что кнопка на
+     * вкладке DoH. Показать проблему здесь и отправить за решением на другую вкладку значило бы
+     * показать её наполовину. После правки — refresh(): проверки перечитываются первым же кругом. */
+    const [fixing, setFixing] = useState(false)
+    async function fixForce() {
+        if (fixing) return
+        setFixing(true)
+        try {
+            const r = await rpc.dohForceFix()
+            if (!r.ok) throw new Error(r.error || 'не получилось')
+            notify('Перенаправление DNS оставлено движку')
+            live.refresh()
+        } catch (e) {
+            notify(String(e instanceof Error ? e.message : e), 'error')
+        } finally {
+            setFixing(false)
+        }
+    }
     /* Советы отдельно и НЕ в счётчиках: они верны всегда, а не описывают эту установку. Смешав
      * их с находками, мы держали бы «есть о чём знать» постоянно — и человек перестал бы читать
      * находки вовсе. */
@@ -86,10 +108,15 @@ export default function Diagnostics({ live }: { live: Live }) {
                                 ) : (
                                     <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning-fg" aria-hidden="true" />
                                 )}
-                                <div className="min-w-0">
+                                <div className="min-w-0 flex-1">
                                     <div>{c.what}</div>
                                     {c.why && <div className="text-xs text-muted-foreground">{c.why}</div>}
                                 </div>
+                                {c.id === 'doh_force' && (
+                                    <Button size="sm" className="shrink-0 self-center" disabled={fixing} onClick={() => void fixForce()}>
+                                        {fixing ? 'минуту…' : 'Оставить движку'}
+                                    </Button>
+                                )}
                             </div>
                         ))}
                         {notes.length > 0 && (

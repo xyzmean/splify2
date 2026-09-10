@@ -140,12 +140,11 @@ case "$2" in
         # ядром, и на неприменённых правках они врут — «apply не довёл набор до ядра»,
         # хотя apply никто не нажимал. Выбор пути живёт в fast.sh одной функцией: тот же
         # вопрос решает круг опроса, и два ответа на него разошлись бы молча.
+        # Через fast_diag — те же приговоры, что у круга опроса, плюс наш про спор за порт 53.
         . "${FAST_SH:-/usr/lib/splify2/fast.sh}"
-        out="$("$STEER" diag --spec "$(fast_diag_spec)" 2>/dev/null)"
-        case "$out" in
-            '{'*) printf '%s\n' "$out" ;;
-            *) fail "движок не умеет diag — обновите steer" ;;
-        esac
+        if out="$(fast_diag)"; then printf '%s\n' "$out"
+        else fail "движок не умеет diag — обновите steer"
+        fi
         ;;
 
     dev_stats)
