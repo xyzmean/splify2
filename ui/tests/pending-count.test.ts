@@ -77,6 +77,26 @@ describe('счётчик непримененных правок', () => {
         expect(await count(applied, saved)).toBe(0)
     })
 
+    it('смена перечня устройств клиентов — правка, и пилюля обязана появиться (splify2#16, Андромеда)', async () => {
+        // Поймано обращением пользователя: он добавил tailscale0 в «Кого маршрутизируем»,
+        // а «Применить» не появилось — счётчик сравнивал только выходы и правила. Правка при
+        // этом сохранилась на роутер сама, снимок применённого не обновился, и диагностика
+        // (она считает по снимку) продолжала говорить «трафик забирается с br-lan».
+        expect(await count(SPEC({ lan_devices: ['br-lan'] }), SPEC({ lan_devices: ['br-lan', 'tailscale0'] }))).toBe(1)
+    })
+
+    it('одиночная форма lan_device равна списку из одного элемента', async () => {
+        expect(await count(SPEC({ lan_device: 'br-lan' } as Partial<Spec>), SPEC({ lan_devices: ['br-lan'] }))).toBe(0)
+    })
+
+    it('отсутствие перечня равно умолчанию br-lan: без правки пилюли нет', async () => {
+        expect(await count(SPEC(), SPEC({ lan_devices: ['br-lan'] }))).toBe(0)
+    })
+
+    it('снятие подсетей from_default — тоже правка', async () => {
+        expect(await count(SPEC({ from_default: ['192.168.1.0/24'] }), SPEC({ lan_devices: ['br-lan', 'tailscale0'] }))).toBe(1)
+    })
+
     it('настоящая правка по-прежнему видна', async () => {
         const applied = SPEC({ outputs: { vl: { name: 'vl', kind: 'vless', node: 3 } } } as Partial<Spec>)
         const saved = SPEC({ outputs: { vl: { name: 'vl', kind: 'vless', node: 7 } } } as Partial<Spec>)
