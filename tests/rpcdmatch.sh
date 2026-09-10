@@ -919,6 +919,31 @@ check "объект отвечает списком методов (стенд �
       "yes" "$(printf '%s' "$out" | python3 -c 'import json,sys
 try: print("yes" if "steer_install" in json.load(sys.stdin) else "no")
 except Exception: print("не JSON")')"
+# ---- унаследованный дескриптор с двузначным номером не убивает объект -------------------
+# Объект первой же командой закрывает все дескрипторы старше 2 (дальше по файлу — зачем). На
+# runner'е GitHub у процесса оказался унаследованный дескриптор 142, и `eval "exec 142>&-"`
+# под dash — это не отказ перенаправления, а СИНТАКСИЧЕСКАЯ ошибка, а она в eval у
+# неинтерактивной оболочки фатальна: объект умирал молча до первой печати, и все 483 проверки
+# краснели одним махом. На машине стенда таких дескрипторов не бывает, на роутере (busybox ash)
+# двузначные номера законны — поэтому увидеть это можно было только на runner'е. Здесь
+# дескриптор 142 подсовывается объекту нарочно, через python: оболочка стенда сама его открыть
+# не может по той же причине.
+out="$(python3 - "$SCRIPT" "$ROOT/tests/stub/jshn.sh" "$T" <<'PY'
+import os, subprocess, sys
+script, jshn, t = sys.argv[1:4]
+fd = os.open("/dev/null", os.O_RDONLY)
+os.dup2(fd, 142)
+os.set_inheritable(142, True)
+env = dict(os.environ, SANDBOX=t, PATH=t + "/bin:" + os.environ["PATH"], JSHN_SH=jshn)
+r = subprocess.run(["sh", script, "list"], env=env, pass_fds=[142], capture_output=True, text=True)
+sys.stdout.write(r.stdout)
+PY
+)"
+check "объект переживает унаследованный дескриптор 142 (runner GitHub)" "yes" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys
+try: print("yes" if "steer_install" in json.load(sys.stdin) else "no")
+except Exception: print("не JSON")')"
+
 # Не поднялся — сказать, ПОЧЕМУ, тут же: stderr объекта иначе лежит в $T/stderr и уходит вместе
 # с песочницей, и на чужой машине (runner релиза) остаётся только «не JSON» без причины.
 if ! printf '%s' "$out" | python3 -c 'import json,sys; json.load(sys.stdin)' >/dev/null 2>&1; then
