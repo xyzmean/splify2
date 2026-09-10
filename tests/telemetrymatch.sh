@@ -423,6 +423,13 @@ uset splify2.main.telemetry_url "https://panel.example/ingest"
 # «заголовок приехал одним аргументом» была бы зелена при любой форме подстановки.
 uset splify2.main.telemetry_key "K3Y SECRET"
 : > "$T/curl.code"
+# Время с загрузки — подставное и «старое» (сутки), а не настоящее /proc/uptime: внеплановая
+# отправка законно отказывается младше двух минут после загрузки (TM_NOW_MIN_UP), а runner
+# GitHub — свежая виртуальная машина ровно такого возраста. С настоящим uptime двенадцать
+# проверок падения краснели там и были зелёными везде, где машина живёт дольше. Молодость
+# подставляется отдельно там, где проверяется именно она (TM_UPTIME_FIXTURE).
+mkdir -p "$T/var"
+printf '86400.00 0.00\n' > "$T/var/uptime-old"
 send() {  # АРГУМЕНТЫ команды отправки
     rm -f "$T/curl.argv" "$T/curl.body"
     PATH="$T/bin:$PATH" \
@@ -432,7 +439,7 @@ send() {  # АРГУМЕНТЫ команды отправки
     BUILD_ID_FILE="$T/etc/build-id" TM_BOOT_FILE="$T/var/boot" TM_EVENTS="$T/var/events" \
     RPCD_OBJ="$T/rpcd-obj" TM_NET_FILE="$T/var/net" UCI_SPLIFY2="$T/etc/config-splify2" \
     TM_CRASH_FILE="$T/var/crash" TM_NOW_STAMP="$T/var/now-stamp" \
-    TM_UPTIME="${TM_UPTIME_FIXTURE:-/proc/uptime}" \
+    TM_UPTIME="${TM_UPTIME_FIXTURE:-$T/var/uptime-old}" \
     TM_CURL="$T/bin/curl" \
     ZAPRET_SH="$ROOT/files/usr/lib/splify2/zapret.sh" \
     DOH_SH="$ROOT/files/usr/lib/splify2/doh.sh" \
