@@ -12,7 +12,7 @@
 
 ![OpenWrt 22.03+](https://img.shields.io/badge/OpenWrt-22.03%2B-00B5E2?style=flat-square&logo=openwrt&logoColor=white)
 ![apk и opkg](https://img.shields.io/badge/пакеты-apk_и_opkg-3f3a56?style=flat-square)
-![Место на флеше](https://img.shields.io/badge/на_флеше-от_1_МБ-8b7cf6?style=flat-square)
+![Место на флеше](https://img.shields.io/badge/на_флеше-от_2_МБ-8b7cf6?style=flat-square)
 ![Движок](https://img.shields.io/badge/движок-C_%2B_nftables-3f3a56?style=flat-square)
 ![Интерфейс](https://img.shields.io/badge/интерфейс-LuCI_·_светлая_и_тёмная-5e72e4?style=flat-square)
 
@@ -195,7 +195,7 @@ DNS роутера своим DoH в браузере.
   sing-box, без Docker.
 
 <div align="center">
-<img src="docs/img/footprint.svg" alt="Сколько места нужно на флеше: splify2 — от 1 МБ, podkop — от 25 МБ по требованиям его README" width="100%">
+<img src="docs/img/footprint.svg" alt="Сколько места нужно на флеше: splify2 — от 2 МБ, podkop — от 25 МБ по требованиям его README" width="100%">
 </div>
 
 ---
@@ -215,8 +215,10 @@ sh -c "$(wget -qO- https://gitlab.com/xyzmean/splify2/-/raw/main/install.sh)"
 **Что нужно:**
 
 - роутер с OpenWrt **22.03 или новее** — `apk` и `opkg` поддерживаются оба;
-- **от 1 МБ** свободного флеша: интерфейс около 150 КБ, движок 112–299 КБ (базовый или
-  расширенный), распакованное — примерно вдвое больше, остальное занимают скачанные списки;
+- **от 2 МБ** свободного флеша: пакет интерфейса около 470 КБ (в 26.9; распакованный —
+  1,4 МБ), движок 112–299 КБ (базовый или расширенный, распакованный — примерно вдвое
+  больше), остальное занимают скачанные списки. На jffs2 распакованное сжимается снова, и
+  хватает меньшего;
 - и одно из: ссылка подписки VLESS/Reality · отдельные ссылки `vless://` · уже настроенный
   WireGuard или AmneziaWG.
 
@@ -379,7 +381,7 @@ Greeg0ry/b4geoip). Каталог объявляет только те поло�
 |---|---|---|
 | Движок | свой, `steer` — C + nftables + fake-IP | sing-box |
 | OpenWrt | **22.03 и новее** | 24.10 и новее |
-| Место на флеше | **от 1 МБ** | от 25 МБ (16 МБ флеш не поддерживается) |
+| Место на флеше | **от 2 МБ** | от 25 МБ (16 МБ флеш не поддерживается) |
 | Протоколы туннеля | VLESS/Reality, `vless://`, любой готовый интерфейс (WireGuard, AmneziaWG) | **всё, что умеет sing-box** — Shadowsocks, Trojan и прочее: заметно шире |
 | Несколько выходов | **до 16, и каждому правилу свой** | несколько разделов (`config section`) |
 | Кому достаётся туннель | **любое правило можно ограничить устройствами** — разным устройствам разные сервисы | устройство целиком в туннель или целиком мимо (`fully_routed_ips`, `routing_excluded_ips`) |
