@@ -924,6 +924,12 @@ except Exception: print("не JSON")')"
 if ! printf '%s' "$out" | python3 -c 'import json,sys; json.load(sys.stdin)' >/dev/null 2>&1; then
     echo "--- stdout объекта (первые строки):"; printf '%s\n' "$out" | head -5
     echo "--- stderr объекта:"; head -20 "$T/stderr" 2>/dev/null
+    # Молчание с обеих сторон — значит оболочка умерла до первой печати. Тогда трасса: где именно.
+    echo "--- какой sh: $(command -v sh) → $(readlink -f "$(command -v sh)")"
+    echo "--- sh -x объекта (хвост):"
+    env SANDBOX="$T" PATH="$T/bin:$PATH" JSHN_SH="$ROOT/tests/stub/jshn.sh" FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
+        ZAPRET_SH="$ROOT/files/usr/lib/splify2/zapret.sh" DOH_SH="$ROOT/files/usr/lib/splify2/doh.sh" \
+        sh -x "$SCRIPT" list 2>&1 | tail -40
 fi
 
 # ---- I-049: установка не должна снимать работающий пакет ----------------------
