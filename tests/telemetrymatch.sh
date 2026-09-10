@@ -148,9 +148,13 @@ check "фикстура: внешний адрес лежит в кэше стр
       "$(grep -q '203.0.113.77' "$T/var/geo-vpn-$CANARY" && echo yes || echo no)"
 
 # ---- сборка пакета ----------------------------------------------------------------------
+# ENGINE — какой движок подставить сборщику; по умолчанию настоящий. Прежде путь стоял в
+# функции жёстко, и проверки «движка нет» его НЕ убирали: `STEER=… build` перекрывался тут же.
+# Проходили они случайно — на машине стенда движок не находил подходящего MAC и dev-id отвечал
+# пустотой; на runner'е GitHub MAC есть, и «без движка пакет не собирается» получал 0 вместо 1.
 build() {
     PATH="$T/bin:$PATH" \
-    STEER="$STEER_BIN" SPEC="$T/etc/spec.json" LISTS="$T/lists" GEO_DIR="$T/var" \
+    STEER="${ENGINE:-$STEER_BIN}" SPEC="$T/etc/spec.json" LISTS="$T/lists" GEO_DIR="$T/var" \
     SYSINFO_MODEL="$T/etc/model" OPENWRT_RELEASE="$T/etc/openwrt_release" \
     BUILD_ID_FILE="$T/etc/build-id" TM_BOOT_FILE="$T/var/boot" TM_EVENTS="$T/var/events" \
     RPCD_OBJ="$T/rpcd-obj" TM_NET_FILE="$T/var/net" UCI_SPLIFY2="$T/etc/config-splify2" \
@@ -259,12 +263,12 @@ check "и отправлять по нему нельзя" "no" "$(allow)"
 # считать заново на каждом пакете. Проверяется по следствию: движка нет вовсе, а пакет
 # собирается — значит значение взято из настройки.
 sed -i '/^splify2.main.telemetry=/d' "$T/uci.db"; uset splify2.main.telemetry 1
-out="$(STEER="$T/нет-такого" build 2>/dev/null)"
+out="$(ENGINE="$T/нет-такого" build 2>/dev/null)"
 check "с запомненным идентификатором движок не нужен" "sp-00112233445566778899aabbccddeeff" \
       "$(printf '%s' "$out" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
 # И обратное: запомненного нет, движка нет — пакет НЕ собирается, а не уезжает без опознания.
 sed -i '/^splify2.main.telemetry_id=/d' "$T/uci.db"
-STEER="$T/нет-такого" build >/dev/null 2>&1
+ENGINE="$T/нет-такого" build >/dev/null 2>&1
 check "без движка и без запомненного пакет не собирается" "1" "$?"
 # А с движком — считается и запоминается, чтобы второй раз не платить. Каталог устройств
 # подставной: на машине стенда физического порта с постоянным MAC может не быть вовсе, и
@@ -274,7 +278,7 @@ mkdir -p "$T/net/eth0"
 printf '10:bb:cc:dd:ee:ff\n' > "$T/net/eth0/address"
 : > "$T/net/eth0/device"
 export STEER_DEVID_ITERS=1000 STEER_SYSNET="$T/net"
-out="$(STEER="$STEER_BIN" build 2>/dev/null)"
+out="$(build 2>/dev/null)"
 check "движок посчитал идентификатор" "yes" \
       "$(case "$(printf '%s' "$out" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')" in sp-*) echo yes ;; *) echo no ;; esac)"
 check "и он запомнен в настройке" "yes" \
@@ -423,7 +427,7 @@ send() {  # АРГУМЕНТЫ команды отправки
     rm -f "$T/curl.argv" "$T/curl.body"
     PATH="$T/bin:$PATH" \
     TELEMETRY_SH="$ROOT/files/usr/lib/splify2/telemetry.sh" \
-    STEER="$STEER_BIN" SPEC="$T/etc/spec.json" LISTS="$T/lists" GEO_DIR="$T/var" \
+    STEER="${ENGINE:-$STEER_BIN}" SPEC="$T/etc/spec.json" LISTS="$T/lists" GEO_DIR="$T/var" \
     SYSINFO_MODEL="$T/etc/model" OPENWRT_RELEASE="$T/etc/openwrt_release" \
     BUILD_ID_FILE="$T/etc/build-id" TM_BOOT_FILE="$T/var/boot" TM_EVENTS="$T/var/events" \
     RPCD_OBJ="$T/rpcd-obj" TM_NET_FILE="$T/var/net" UCI_SPLIFY2="$T/etc/config-splify2" \
