@@ -105,6 +105,20 @@ export function engineAction(build: Build | null, releases: Releases | null): En
     }
 }
 
+/** Движок старее того, под который собран этот интерфейс: возвращает требуемую версию,
+ *  если установленная младше, иначе null.
+ *
+ *  По ВЕРСИИ, а не по перечню features — вопреки poolsSupported/xslinkSupported ниже, и
+ *  нарочно: умения, ради которых интерфейсу нужен движок не старше минимума (sub-fetch,
+ *  srs-read, выход kind=zapret, dev-id, схема спеки 2), в перечне имён не имеют, и спросить
+ *  о них у состояния нечем. Минимум называет бэкенд (m-engine.sh, STEER_MIN_VERSION):
+ *  интерфейс и бэкенд едут одним пакетом, поэтому число живёт в одном месте, а не в двух.
+ *  Бэкенд старее интерфейса минимума не пришлёт — тогда ответ null: утверждать нечего. */
+export function engineTooOld(build: Build | null): string | null {
+    if (!build?.present || !build.version || !build.min_version) return null
+    return cmpVersion(build.version, build.min_version) < 0 ? build.min_version : null
+}
+
 /** Умеет ли установленный движок список локаций и смешанный пул (контракт steer T-015).
  *
  *  Спрашивается у СОСТОЯНИЯ, а не у версии, и это не стилистика: номер версии движку

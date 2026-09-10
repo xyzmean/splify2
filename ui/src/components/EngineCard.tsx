@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
-import { engineAction, type Releases, releaseName } from '@/lib/engine'
+import { engineAction, engineTooOld, type Releases, releaseName } from '@/lib/engine'
 import { t } from '@/lib/i18n'
 
 // Установка движка из интерфейса.
@@ -20,7 +20,7 @@ import { t } from '@/lib/i18n'
 
 interface Props {
     /** Что сейчас установлено. null — ещё не спросили. */
-    engine: { present: boolean; vless: boolean; arch?: string; version?: string } | null
+    engine: { present: boolean; vless: boolean; arch?: string; version?: string; min_version?: string } | null
     /** Что можно поставить. Приходит сверху, а не запрашивается здесь: тот же ответ нужен
      *  левой колонке, чтобы её кнопка не обещала обновление, которого нет (I-038). */
     releases: Releases | null
@@ -33,6 +33,8 @@ export default function EngineCard({ engine, releases, onInstalled }: Props) {
     const [ext, setExt] = useState(true)
     const [busy, setBusy] = useState(false)
     const action = engineAction(engine, releases)
+    // Движок младше того, под который собран интерфейс, — см. engineTooOld.
+    const tooOld = engineTooOld(engine)
 
     // Первая в списке — самая свежая: релизы отдаются от новых к старым.
     useEffect(() => {
@@ -68,17 +70,21 @@ export default function EngineCard({ engine, releases, onInstalled }: Props) {
         }
     }
 
-    /** Заголовок говорит, что не так, ДО того как человек начнёт настраивать. Три разных
-     *  случая, и путать их нельзя: нет движка вовсе, стоит базовый (а нужен расширенный),
-     *  или всё на месте и это просто обновление. */
+    /** Заголовок говорит, что не так, ДО того как человек начнёт настраивать. Четыре разных
+     *  случая, и путать их нельзя: нет движка вовсе, движок старее нужного этому интерфейсу,
+     *  стоит базовый (а нужен расширенный), или всё на месте и это просто обновление.
+     *  Устаревший — раньше базового: базовый нужного возраста работает, устаревший
+     *  расширенный — нет. */
     const title = !engine?.present
         ? t('Движок не установлен')
-        : !engine.vless
-          ? t('Установлен базовый движок')
-          : t('Движок')
+        : tooOld
+          ? t('Движок устарел')
+          : !engine.vless
+            ? t('Установлен базовый движок')
+            : t('Движок')
 
     return (
-        <Card className={engine?.present && engine.vless ? '' : 'border-destructive'}>
+        <Card className={engine?.present && engine.vless && !tooOld ? '' : 'border-destructive'}>
             <CardHeader className="pb-2">
                 <CardTitle className="text-base">{title}</CardTitle>
             </CardHeader>
@@ -105,6 +111,14 @@ export default function EngineCard({ engine, releases, onInstalled }: Props) {
                             </p>
                         )}
                     </>
+                )}
+                {tooOld && (
+                    // Что именно не заработает — перечислением, а не «обновите»: человек, который
+                    // обновил интерфейс ради нового и не тронул движок, иначе узнаёт об этом по
+                    // одному отказу за раз («подписка не скачалась» без причины).
+                    <p className="text-sm">
+                        {`${t('Этот интерфейс собран под движок')} ${tooOld} ${t('и новее. С установленным не заработают подписка по ссылке, списки второго издателя, обход DPI как выход правила и отчёт о работе. Обновите движок — версии ниже.')}`}
+                    </p>
                 )}
                 {engine?.present && !engine.vless && (
                     <p className="text-sm">
