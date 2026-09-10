@@ -439,6 +439,12 @@ check "перезапуск rpcd в uci-defaults отложен и уведён 
     "$(grep -c '( sleep 2; /etc/init.d/rpcd restart ) >/dev/null 2>&1 &$' "$UD")"
 check "немедленного перезапуска rpcd в uci-defaults нет" "0" \
     "$(grep -c '^[[:space:]]*\[ -x /etc/init.d/rpcd \] && /etc/init.d/rpcd restart' "$UD")"
+# Кеш каталога умолчания сбрасывается при обновлении: адрес умолчания сменил издателя, а
+# файл перечитывается только когда его нет. Только для умолчания — свой адрес не трогаем.
+check "uci-defaults сбрасывает кеш каталога умолчания" "1" \
+    "$(grep -c 'rm -f /etc/splify2/manifest.json' "$UD")"
+check "сброс кеша обусловлен пустым manifest_url" "1" \
+    "$(grep -B1 'rm -f /etc/splify2/manifest.json' "$UD" | grep -c 'uci -q get splify2.main.manifest_url')"
 
 # ---- что именно переживает обновление прошивки --------------------------------
 # Настройку МАЛО ЗАВЕСТИ. sysupgrade и «Создать архив» собирают список из conffiles
