@@ -154,7 +154,9 @@ describe('панель xsteer', () => {
 
     it('движок без умения xslink: кнопок нет, а нужная версия названа', async () => {
         mount({ home: { device: 'xs-home', age: 1, state: STATE } }, ['lan_devices'])
-        expect(await screen.findByText(/steer 1.3.0 и новее/)).toBeInTheDocument()
+        // Умение xslink и состояние туннеля появились в движке после выпуска 1.3.0 (первая
+        // версия с ними — 1.5.0); прежний текст звал обновиться до версии, которая уже стояла.
+        expect(await screen.findByText(/steer 1.5.0 и новее/)).toBeInTheDocument()
         expect(screen.queryByText('Показать ссылку xs://')).toBeNull()
     })
 

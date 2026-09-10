@@ -41,7 +41,7 @@ function ago(sec: number): string {
  *  не дали») скрывать нельзя — он означает, что половина прибавки потеряна, и причина у него
  *  своя (ядро без TUNSETOFFLOAD). Поэтому слов три, а не два. */
 function offloadLabel(o?: { gso: boolean; gro: boolean; rx: boolean }) {
-    if (!o) return { text: 'неизвестно', variant: 'outline' as const, tip: 'Движок не сообщает — сборка старее 1.3.0.' }
+    if (!o) return { text: 'неизвестно', variant: 'outline' as const, tip: 'Движок не сообщает — сборка старее 1.5.0.' }
     if (!o.gso)
         return {
             text: 'выключена',
@@ -398,7 +398,7 @@ export default function XsteerPanel({ live }: { live: Live }) {
                             )}
                             {!links && (
                                 <p className="border-t pt-2 text-subtle">
-                                    Ссылки <code>xs://</code> понимает steer 1.3.0 и новее — на
+                                    Ссылки <code>xs://</code> понимает steer 1.5.0 и новее — на
                                     установленном движке этого умения нет.
                                 </p>
                             )}
