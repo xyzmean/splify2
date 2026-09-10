@@ -66,7 +66,7 @@ export SB
 # в install.sh переименуют, стенд упадёт здесь, а не молча начнёт проверять пустоту.
 # Вместе с latest() достаётся и обход по хостам самого GitHub: третий путь к версии
 # идёт через него, и без этих функций стенд проверял бы отказ вместо обхода.
-eval "$(sed -n '/^API=/p; /^RAW=/p; /^CODELOAD=/p; /^MIRROR=/p; /^DIST_BRANCH=/p; /^info()/p; /^gl_file() {/,/^}/p; /^gh_api_file() {/,/^}/p; /^gh_tarball() {/,/^}/p; /^gh_file() {/,/^}/p; /^latest() {/,/^}/p; /^fetch() {/,/^}/p; /^dl_url() {/,/^}/p' "$ROOT/install.sh")"
+eval "$(sed -n '/^API=/p; /^RAW=/p; /^CODELOAD=/p; /^MIRROR=/p; /^DIST_BRANCH=/p; /^info()/p; /^gl_file() {/,/^}/p; /^gh_api_file() {/,/^}/p; /^gh_tarball() {/,/^}/p; /^gh_file() {/,/^}/p; /^latest() {/,/^}/p; /^fetch() {/,/^}/p; /^dl_url() {/,/^}/p; /^pm_add() {/,/^}/p' "$ROOT/install.sh")"
 TMP="$SB/tmp"; mkdir -p "$TMP"
 die() { printf 'die: %s\n' "$*" >&2; return 1; }
 check "функция latest достана из install.sh" "latest" "$(command -v latest >/dev/null && echo latest)"
@@ -313,6 +313,40 @@ check "вилка «от … МБ» собрана из тех же чисел" 
     "$(has README.md "движок ${BASE_SZ%%–*}–${EXT_SZ#*–}")"
 check "README говорит, где переключить вариант потом" "да" \
     "$(has README.md 'Выбор не окончательный')"
+
+# ---- установка файла пакета: пустые списки/индексы не валят установку ------------------
+# У 26.9 две зависимости (https-dns-proxy, ip-full), у 1.2.5 не было ни одной, поэтому
+# ветка отказа по зависимости раньше не встречалась вовсе. opkg держит списки в /var, apk —
+# индексы в /var/cache/apk; обе — tmpfs, и после перезагрузки установка локального файла с
+# зависимостями падает у обоих (apk — «unable to select packages», проверено на роутере).
+# Заглушки отказывают, пока `update` не оставит след, и протоколируют каждый вызов.
+for pm in apk opkg; do
+cat > "$SB/bin/$pm" <<STUB
+#!/bin/sh
+echo "\$1" >> "$SB/$pm.log"
+case "\$1" in
+    update) : > "$SB/$pm.index"; exit 0 ;;
+    add|install)
+        [ -f "$SB/$pm.index" ] && exit 0
+        [ "$pm" = apk ] && echo "ERROR: unable to select packages:" >&2 \\
+                        || echo " * pkg_hash_check_unresolved: cannot find dependency ip-full for steer" >&2
+        exit 1 ;;
+esac
+exit 0
+STUB
+chmod +x "$SB/bin/$pm"
+done
+check "функция pm_add достана из install.sh" "pm_add" "$(command -v pm_add >/dev/null && echo pm_add)"
+for pm in apk opkg; do
+    rm -f "$SB/$pm.index" "$SB/$pm.log"
+    PM=$pm pm_add "$SB/pkg.file" >/dev/null 2>&1
+    check "$pm: отказ по зависимости → обновление списков → повтор, установка удалась" "0" "$?"
+    check "$pm: списки обновлены один раз" "1" "$(grep -c '^update$' "$SB/$pm.log")"
+    check "$pm: установка вызвана дважды" "2" "$(grep -cE '^(add|install)$' "$SB/$pm.log")"
+    # info() установщика печатает в stdout — это его голос для человека, а не диагностика.
+    check "$pm: переход объявлен вслух" "1" \
+        "$(rm -f "$SB/$pm.index"; PM=$pm pm_add "$SB/pkg.file" 2>/dev/null | grep -c 'обновляю')"
+done
 
 printf '\n%d проверок пройдено\n' "$pass"
 if [ "$fail" -gt 0 ]; then

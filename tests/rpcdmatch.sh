@@ -48,8 +48,18 @@ cat > "$T/bin/apk" <<'EOF'
 #!/bin/sh
 case "$1" in
     del) echo "del $2" >> "$SANDBOX/apk.log"; exit 0 ;;
+    # Индексы apk живут в /var/cache/apk, то есть в tmpfs, и перезагрузку не переживают; без
+    # них `apk add` файла с зависимостями отвечает «unable to select packages» (снято с
+    # роутера). APK_NEED_INDEX=1 воспроизводит это: `add` отказывает, пока `update` не оставит
+    # след.
+    update) echo "update" >> "$SANDBOX/apk.log"; : > "$SANDBOX/apk.index"; exit 0 ;;
     add)
         echo "add $*" >> "$SANDBOX/apk.log"
+        if [ "${APK_NEED_INDEX:-0}" = 1 ] && [ ! -f "$SANDBOX/apk.index" ]; then
+            echo "ERROR: unable to select packages:" >&2
+            echo "  https-dns-proxy (no such package):" >&2
+            exit 1
+        fi
         [ -n "${APK_ADD_OUT:-}" ] && echo "$APK_ADD_OUT" >&2
         exit "${APK_ADD_RC:-0}"
         ;;
@@ -3087,7 +3097,7 @@ check "и молчит о них" "no" \
 # ---- opkg: пустые списки пакетов не должны валить установку -------------------------
 # С живого роутера: «cannot find dependency ip-full for steer», хотя пакет скачан и лежит
 # рядом. У opkg зависимости локального файла ищутся в СПИСКАХ ПАКЕТОВ, а на свежей прошивке
-# их нет — списки не переживают перезагрузку. На apk этого нет вовсе.
+# их нет — списки не переживают перезагрузку.
 rm -f "$T/opkg.lists" "$T/opkg.log"
 out="$(PM_FIXTURE=opkg rpcd steer_install '{"version":"1.2.4","extended":false}')"
 check "после отказа по зависимости списки обновляются" "1" \
@@ -3095,6 +3105,22 @@ check "после отказа по зависимости списки обно
 check "и установка повторяется" "2" "$(grep -c '^install' "$T/opkg.log")"
 check "человеку сказано, что списки были пусты" "yes" \
       "$(printf '%s' "$out" | jget output | grep -q 'списки пакетов были пусты' && echo yes || echo no)"
+
+# ---- apk: то же самое, и прежний комментарий здесь утверждал обратное ----------------
+# «На apk этого нет вовсе» — было неправдой: индексы apk лежат в /var/cache/apk, это tmpfs,
+# и после перезагрузки `apk add` файла с зависимостями отвечает «unable to select packages»
+# (проверено на роутере с 25.12: индексы убраны — отказ, `apk update` — установка). У 26.9
+# зависимостей две (https-dns-proxy, ip-full), у 1.2.5 не было ни одной, так что до этого
+# выпуска ветка apk просто не встречала отказа.
+rm -f "$T/apk.index" "$T/apk.log"
+out="$(PM_FIXTURE=apk APK_NEED_INDEX=1 rpcd steer_install '{"version":"1.2.4","extended":false}')"
+check "apk: после отказа по зависимости индексы обновляются" "1" \
+      "$(grep -c '^update' "$T/apk.log")"
+check "apk: и установка повторяется" "2" "$(grep -c '^add' "$T/apk.log")"
+check "apk: человеку сказано, что списки были пусты" "yes" \
+      "$(printf '%s' "$out" | jget output | grep -q 'списки пакетов были пусты' && echo yes || echo no)"
+check "apk: повторная установка удалась" "true" "$(printf '%s' "$out" | jget ok)"
+rm -f "$T/apk.index"
 
 # ---- кнопка «Обновить списки» в каталоге ---------------------------------------------
 # Метод не делает работу сам, а зовёт splify2-update-lists — тот же, что ходит по
