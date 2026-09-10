@@ -101,7 +101,12 @@ gh_load_api() {  # ВЛАДЕЛЕЦ/РЕПОЗИТОРИЙ
 gh_load_version() {  # ВЛАДЕЛЕЦ/РЕПОЗИТОРИЙ
     _vf="${GH_CACHE:-/tmp/splify2-releases.json}.version"
     rm -f "$_vf"
-    download "https://raw.githubusercontent.com/$1/main/VERSION" "$_vf" || {
+    # Ветка dist, а не main: в dist VERSION пишет только релизный workflow, рядом с пакетами
+    # и тем же числом, что в теге, — то есть он равен последнему выпуску по построению.
+    # VERSION в main двигают руками между выпусками (у steer он ушёл на три версии вперёд
+    # релиза, у самого splify2 — на целый выпуск), и версия оттуда попадала в список
+    # «свежей», а «Установить» отвечало «не скачалось»: файла с таким именем в релизах нет.
+    download "https://raw.githubusercontent.com/$1/${FETCH_DIST_BRANCH:-dist}/VERSION" "$_vf" || {
         rm -f "$_vf"; return 1; }
     # Первая строка без хвостовых пробелов. Состав проверяется целиком: в VERSION бывают
     # только цифры и точки (на это стоит барьер в build.sh), и подставить в имя файла
@@ -111,7 +116,7 @@ gh_load_version() {  # ВЛАДЕЛЕЦ/РЕПОЗИТОРИЙ
     case "${_vv:-}" in ''|*[!0-9.]*) return 1 ;; esac
     GH_VERS="$_vv "
     GH_NAMES="|$_vv=$_vv|"
-    GH_NOTE="список релизов не отдали — версия взята из VERSION в main${FETCH_NOTE:+ ($FETCH_NOTE)}"
+    GH_NOTE="список релизов не отдали — версия взята из VERSION ветки ${FETCH_DIST_BRANCH:-dist}${FETCH_NOTE:+ ($FETCH_NOTE)}"
     return 0
 }
 

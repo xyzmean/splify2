@@ -79,13 +79,19 @@ check "версия берётся из релиза" "1.2.3" "$(latest xyzmean/
 # ---- api.github.com недоступен ------------------------------------------------
 # Ровно случай splify2#5: API молчит, github.com и raw доступны, релиз существует.
 rm -f "$SB/resp-api"
-check "API молчит — версия берётся из VERSION в main" "1.1.2" \
+# Ветка — dist, а не main: VERSION в main двигают руками между выпусками (у steer он ушёл на
+# три версии вперёд последнего релиза), а dist пишет только релизный workflow — рядом с
+# пакетами и тем же числом, что в теге. Версия из main вела к скачиванию файла из релиза,
+# которого нет.
+check "API молчит — версия берётся из VERSION ветки dist" "1.1.2" \
     "$(printf '1.1.2\n' > "$SB/resp-raw"; latest xyzmean/steer 2>/dev/null)"
 check "переход на второй путь объявлен вслух" "1" \
     "$(latest xyzmean/steer 2>&1 >/dev/null | grep -c 'api.github.com не ответил')"
 # Объяснение обязано идти в stderr: stdout функции — это сама версия, и строка в нём
 # уехала бы в имя файла пакета.
 check "объяснение не попало в stdout" "1.1.2" "$(latest xyzmean/steer 2>/dev/null)"
+check "VERSION спрашивается у ветки dist, а не main" "1" \
+    "$(: > "$SB/wget.log"; latest xyzmean/steer >/dev/null 2>&1; grep -c '/xyzmean/steer/dist/VERSION' "$SB/wget.log")"
 
 # ---- лимит API: 403 вместо релиза ---------------------------------------------
 # Тело ответа есть, tag_name в нём нет — это не «пусто», а именно ответ про лимит.
@@ -126,9 +132,9 @@ check "третий путь объявлен вслух" "1" \
 
 # contents API тоже молчит (лимит 60 в час за CGNAT) — остаётся архив ветки.
 rm -f "$SB/resp-contents" "$TMP"/*.tgz
-mkdir -p "$SB/tar/steer-main"
-printf '2.0.2\n' > "$SB/tar/steer-main/VERSION"
-( cd "$SB/tar" && tar -czf "$SB/resp-codeload" steer-main )
+mkdir -p "$SB/tar/steer-dist"
+printf '2.0.2\n' > "$SB/tar/steer-dist/VERSION"
+( cd "$SB/tar" && tar -czf "$SB/resp-codeload" steer-dist )
 check "версия вынута из архива ветки, когда молчит и contents API" "2.0.2" \
     "$(latest xyzmean/steer 2>/dev/null)"
 

@@ -1078,8 +1078,8 @@ reset_logs
 out="$(GH_FAIL=1 CURL_BODY='1.2.9' rpcd steer_versions)"
 check "api.github.com молчит — версия берётся из VERSION (splify2#15)" '["1.2.9"]' \
       "$(printf '%s' "$out" | jget versions)"
-check "запасной путь идёт общей download(), а не своим wget" \
-      "https://raw.githubusercontent.com/xyzmean/steer/main/VERSION" \
+check "запасной путь идёт общей download() и спрашивает ветку dist, а не main" \
+      "https://raw.githubusercontent.com/xyzmean/steer/dist/VERSION" \
       "$(grep 'VERSION' "$T/curl.log" | head -1)"
 check "почему список короткий — сказано словами, а не пустотой" "yes" \
       "$(printf '%s' "$out" | jget note | grep -q 'VERSION' && echo yes || echo no)"
