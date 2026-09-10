@@ -269,17 +269,35 @@ S="$SANDBOX/uci.store"
 while [ $# -gt 0 ]; do
     case "$1" in -*) shift ;; *) break ;; esac
 done
+# «@тип[-1]» у настоящего uci — последняя секция этого типа. Без этого код зоны фаервола
+# (`uci add firewall zone` и следом `set firewall.@zone[-1].name=…`) писал в заглушку ключи с
+# буквальным «[-1]», и ни одна проверка зон не проверяла ничего — они и не были написаны.
+resolve() {  # КЛЮЧ -> ключ с подставленным номером последней секции
+    case "$1" in
+        *"[-1]"*)
+            pfx="${1%%.@*}"; rest="${1#*.@}"; typ="${rest%%\[*}"; tl="${rest#*\]}"
+            max=-1
+            while IFS= read -r line; do
+                case "$line" in "$pfx.@$typ["*"]=$typ")
+                    n="${line#*\[}"; n="${n%%\]*}"; [ "$n" -gt "$max" ] && max="$n" ;;
+                esac
+            done < "$S"
+            printf '%s' "$pfx.@$typ[$max]$tl" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
 case "${1:-}" in
     get)
+        key="$(resolve "${2:-}")"
         v=""; found=0
         while IFS= read -r line; do
-            case "$line" in "${2:-}="*) v="${line#*=}"; found=1 ;; esac
+            case "$line" in "$key="*) v="${line#*=}"; found=1 ;; esac
         done < "$S"
         [ "$found" = 1 ] || exit 1
         printf '%s\n' "$v"
         ;;
     set)
-        k="${2%%=*}"; v="${2#*=}"
+        k="$(resolve "${2%%=*}")"; v="${2#*=}"
         : > "$S.t"
         while IFS= read -r line; do
             case "$line" in "$k="*) continue ;; esac
@@ -292,9 +310,10 @@ case "${1:-}" in
         # Удаление СЕКЦИИ уносит и её опции: «network.cfg1» это и строка типа, и все
         # «network.cfg1.*». Без этого удалённый пир оставлял бы за собой свои поля, и
         # следующий `show` находил бы половину секции.
+        key="$(resolve "${2:-}")"
         : > "$S.t"
         while IFS= read -r line; do
-            case "$line" in "${2:-}="*|"${2:-}".*) continue ;; esac
+            case "$line" in "$key="*|"$key".*) continue ;; esac
             printf '%s\n' "$line" >> "$S.t"
         done < "$S"
         mv "$S.t" "$S"
@@ -313,10 +332,12 @@ case "${1:-}" in
         done < "$S"
         ;;
     add)
-        # Имя безымянной секции — то, что печатает настоящий uci: @<тип>[<номер>].
+        # Имя безымянной секции — то, что печатает настоящий uci: @<тип>[<номер>]. Считаются
+        # СТРОКИ СЕКЦИЙ («…=тип»), а не все строки с этим префиксом: опции секций тоже
+        # начинаются с «@zone[», и счёт по ним давал @zone[9] после трёх зон.
         i=0
         while IFS= read -r line; do
-            case "$line" in "${2:-}.@${3:-}["*) i=$((i + 1)) ;; esac
+            case "$line" in "${2:-}.@${3:-}["*"]=${3:-}") i=$((i + 1)) ;; esac
         done < "$S"
         n="@${3:-}[$i]"
         printf '%s.%s=%s\n' "${2:-}" "$n" "${3:-}" >> "$S"
@@ -324,7 +345,7 @@ case "${1:-}" in
         ;;
     add_list)
         # Список хранится ОДНОЙ строкой через пробел — ровно так его отдаёт `uci get`.
-        k="${2%%=*}"; v="${2#*=}"
+        k="$(resolve "${2%%=*}")"; v="${2#*=}"
         old=""
         while IFS= read -r line; do
             case "$line" in "$k="*) old="${line#*=}" ;; esac
@@ -797,6 +818,7 @@ rpcd() {  # МЕТОД [JSON_ЗАПРОСА]  — вызов метода; дл�
         MANIFEST="$T/etc/manifest.json" \
         INITD="$T/bin/initd-steer" \
         RPCD_INITD="$T/bin/initd-rpcd" \
+        FW_OWNED="$T/etc/fw-owned" \
         OPENWRT_RELEASE="${OPENWRT_RELEASE_FIXTURE:-$T/etc/openwrt_release}" \
         VLESS_DIRTY="$T/var/vless-dirty" \
         OBFS_DIRTY="$T/var/obfs-dirty" \
@@ -3996,5 +4018,54 @@ check "устройство выхода негодно и без wg" "false" "$
 # вкладка обязана различать, иначе на старом объекте она покрасила бы серым весь список.
 check "приговор печатается и у годного устройства, а не только у негодного" "true" \
       "$(flagof "$out" br-lan usable)"
+
+# ---- проброс из зон, где лежат устройства клиентов (обращение по Андромеде) ----------------
+# Человек добавил tailscale0 в «Кого маршрутизируем»: движок метит пакеты с обоих устройств
+# (`iifname { "br-lan", "tailscale0" }`), маршрут ведёт в туннель — а forward-цепочка fw4 пакет
+# отбрасывает, потому что политика forward у fw4 применяется к ПАРЕ зон, и разрешался только
+# lan -> зона туннелей. tailscale0 в своей зоне (ts) — обычная раскладка по руководствам, и
+# для неё «выбрал устройство, применил, не заработало». Устройства в спеке выбираем мы, значит
+# и проброс из их зон — наша забота: заводится с расписки (fw-owned), убирается, когда устройств
+# из этой зоны в спеке больше нет; lan и так пробрасывается, зона туннеля сама к себе — нет.
+fwd_srcs() {  # ЗОНА-ПОЛУЧАТЕЛЬ -> зоны-источники пробросов в неё, через пробел, по алфавиту
+    sed -n "s/^firewall\.\(@forwarding\[[0-9]*\]\)\.dest=$1$/\1/p" "$T/uci.store" | while IFS= read -r _f; do
+        uci_get "firewall.$_f.src"; echo
+    done | grep . | sort | tr '\n' ' ' | sed 's/ $//'
+}
+rm -f "$T/uci.store" "$T/etc/fw-owned"; : > "$T/uci.store"
+uci_set 'firewall.@zone[0]' zone;  uci_set 'firewall.@zone[0].name' lan; uci_set 'firewall.@zone[0].device' 'br-lan'
+uci_set 'firewall.@zone[1]' zone;  uci_set 'firewall.@zone[1].name' wan; uci_set 'firewall.@zone[1].device' 'eth1'
+uci_set 'firewall.@zone[2]' zone;  uci_set 'firewall.@zone[2].name' ts;  uci_set 'firewall.@zone[2].device' 'tailscale0'
+uci_set 'firewall.@forwarding[0]' forwarding; uci_set 'firewall.@forwarding[0].src' lan; uci_set 'firewall.@forwarding[0].dest' wan
+printf '%s\n' '{"schema":1,"lan_devices":["br-lan","tailscale0"],"outputs":{"direct":{"kind":"direct"},"vpn":{"kind":"interface","device":"wg0","on_fail":"direct"}},"channels":[]}' > "$T/etc/spec.json"
+out="$(rpcd apply)"
+check "apply с устройством клиентов из чужой зоны прошёл" "true" "$(printf '%s' "$out" | jget ok)"
+check "проброс в зону туннелей заведён и из lan, и из зоны tailscale0" "lan ts" "$(fwd_srcs steer_iface)"
+check "проброс из чужой зоны записан за нами" "yes" \
+      "$(grep -qx 'fwd steer_iface ts' "$T/etc/fw-owned" 2>/dev/null && echo yes || echo no)"
+check "и назван в ответе apply" "yes" \
+      "$(printf '%s' "$out" | grep -q 'проброс ts -> steer_iface' && echo yes || echo no)"
+# Повторный apply ничего не дублирует.
+out="$(rpcd apply)"
+check "второй apply проброс не дублирует" "lan ts" "$(fwd_srcs steer_iface)"
+# Устройство из зоны ts ушло из спеки — наш проброс убирается, расписка снимается, lan остаётся.
+printf '%s\n' '{"schema":1,"lan_devices":["br-lan"],"outputs":{"direct":{"kind":"direct"},"vpn":{"kind":"interface","device":"wg0","on_fail":"direct"}},"channels":[]}' > "$T/etc/spec.json"
+out="$(rpcd apply)"
+check "устройств из зоны ts в спеке нет — наш проброс убран" "lan" "$(fwd_srcs steer_iface)"
+check "и расписка снята" "no" \
+      "$(grep -qx 'fwd steer_iface ts' "$T/etc/fw-owned" 2>/dev/null && echo yes || echo no)"
+# Зона объявлена через network, а не device: интерфейс tailscale с устройством tailscale0.
+uci_set 'network.tailscale' interface; uci_set 'network.tailscale.device' 'tailscale0'
+uci_set 'firewall.@zone[2].device' ''; uci_set 'firewall.@zone[2].network' 'tailscale'
+printf '%s\n' '{"schema":1,"lan_devices":["br-lan","tailscale0"],"outputs":{"direct":{"kind":"direct"},"vpn":{"kind":"interface","device":"wg0","on_fail":"direct"}},"channels":[]}' > "$T/etc/spec.json"
+out="$(rpcd apply)"
+check "зона, заданная через network, тоже узнаётся" "lan ts" "$(fwd_srcs steer_iface)"
+# Оба устройства в lan — лишних пробросов нет.
+rm -f "$T/uci.store" "$T/etc/fw-owned"; : > "$T/uci.store"
+uci_set 'firewall.@zone[0]' zone;  uci_set 'firewall.@zone[0].name' lan; uci_set 'firewall.@zone[0].device' 'br-lan tailscale0'
+out="$(rpcd apply)"
+check "оба устройства в lan — проброс один" "lan" "$(fwd_srcs steer_iface)"
+rm -f "$T/uci.store"; : > "$T/uci.store"
+
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo "ЕСТЬ ПРОВАЛЫ: $fails")"
 [ "$fails" -eq 0 ]
