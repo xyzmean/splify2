@@ -87,8 +87,8 @@ export default function ObfsPanel({ output, onChange }: Props) {
                 {on && <Badge variant="secondary">обфускация включена</Badge>}
             </label>
             <p className="mt-1 text-xs text-muted-foreground">
-                Уносит датаграммы туннеля внутрь потока, похожего на обычный TCP. Нужно там, где
-                UDP режут: маршрутизация выглядит исправной, а туннель не поднимается вовсе.
+                Прячет туннель в поток, похожий на обычный TCP. Нужно там, где UDP режут: маршрутизация выглядит
+                исправной, а туннель не поднимается.
                 На другой стороне должен работать <code>steer obfs-server</code> или phantun.
             </p>
 

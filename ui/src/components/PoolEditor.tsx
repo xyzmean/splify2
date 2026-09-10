@@ -443,8 +443,7 @@ export default function PoolEditor({
                     </CardHeader>
                     <CardContent className="space-y-3 text-sm">
                         <div className="text-muted-foreground">
-                            Устройства у этого выхода нет: трафик уходит обычным маршрутом, а по
-                            дороге его разбирает свой обработчик со своей стратегией. Стратегия
+                            Устройства у этого выхода нет: трафик идёт обычным маршрутом через обход DPI. Стратегия
                             выбирается во вкладке Zapret.
                         </div>
                         <div className="space-y-1.5">

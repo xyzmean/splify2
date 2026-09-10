@@ -46,7 +46,7 @@ function offloadLabel(o?: { gso: boolean; gro: boolean; rx: boolean }) {
         return {
             text: 'выключена',
             variant: 'destructive' as const,
-            tip: 'Быстрый путь не встал: устройство без multi_queue, ядро без vnet_hdr или разгрузка выключена в настройке интерфейса. Туннель работает, но в разы медленнее — отдача в устройство стоит 3920 нс на пакет вместо 269.',
+            tip: 'Разгрузка не включилась: устройство или ядро её не поддерживают, либо она выключена в настройке интерфейса. Туннель работает, но заметно медленнее.',
         }
     if (o.gso && o.gro && o.rx)
         return {
@@ -165,9 +165,7 @@ export default function XsteerPanel({ live }: { live: Live }) {
                     <CardTitle>Роутер не рассказывает про xsteer</CardTitle>
                 </CardHeader>
                 <CardContent className="text-[13px] text-subtle">
-                    Состояние туннелей отдаёт бэкенд splify2, и установленный его не отдаёт —
-                    обновите splify2. Сами туннели при этом работают: экран не знает про них, а
-                    не они про сеть.
+                    Установленный splify2 состояние туннелей не отдаёт — обновите splify2. Сами туннели работают.
                 </CardContent>
             </Card>
         )
@@ -371,9 +369,8 @@ export default function XsteerPanel({ live }: { live: Live }) {
                                         </summary>
                                         <div className="mt-2 space-y-2">
                                             <p className="text-subtle">
-                                                Заменит настройку этого интерфейса целиком — ключ,
-                                                адрес и хаб — и поднимет его заново. Зона фаервола и
-                                                имя устройства останутся свои: их в ссылке нет.
+                                                Заменит настройку этого интерфейса целиком — ключ, адрес и хаб — и поднимет его заново. Зона
+                                                фаервола и имя устройства останутся.
                                             </p>
                                             <textarea
                                                 className="w-full rounded-sm border bg-background px-2 py-1 font-mono text-[11px]"

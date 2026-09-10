@@ -287,7 +287,7 @@ export default function Doh({ live }: { live: Live }) {
                         после которой доменные правила молча перестают действовать. */}
                     {st.needs_dnsd && st.force_conflict !== true && (
                         <div className="mb-2 rounded-lg bg-accent px-3 py-2 text-xs text-muted-foreground">
-                            {t('У вас есть правила по доменам, поэтому DNS сети заворачивает движок, а не https-dns-proxy (force_dns = 0). Иначе два перенаправления на порт 53 спорят между собой, и правила по доменам перестают действовать.')}
+                            {t('DNS сети перенаправляет движок, а не https-dns-proxy — иначе правила по доменам перестают действовать.')}
                         </div>
                     )}
                     {/* СПОР ЗА ПОРТ 53, а не отчёт о нашей же настройке. Возникает он там,
@@ -297,7 +297,7 @@ export default function Doh({ live }: { live: Live }) {
                     {st.force_conflict === true && (
                         <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning-fg">
                             <span className="min-w-0 flex-1">
-                                {t('https-dns-proxy заворачивает DNS сети сам (force_dns = 1), и это спорит с резолвером движка: чей из двух перехватов порта 53 победит, решает порядок запуска служб, а проигравший молчит — правила по доменам действуют через раз.')}
+                                {t('https-dns-proxy перенаправляет DNS сети сам и спорит с движком: правила по доменам действуют через раз.')}
                             </span>
                             <Button size="sm" disabled={busy !== ''} onClick={() => void fixForce()}>
                                 {busy === 'force' ? t('минуту…') : t('Оставить движку')}
@@ -482,7 +482,7 @@ export default function Doh({ live }: { live: Live }) {
                                 </div>
                             )}
                             <div className="mt-1 text-xs text-muted-foreground">
-                                {t('Касается только самого роутера — устройств сети не затрагивает. Туннель упал — запросы сами пойдут напрямую: иначе роутер не смог бы разрешить имя узла своего же туннеля и не поднял бы его никогда.')}
+                                {t('Касается только самого роутера — устройств сети не затрагивает. Если туннель упал, запросы пойдут напрямую.')}
                             </div>
                         </div>
                     </div>

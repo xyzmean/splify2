@@ -18,9 +18,8 @@ export default function FirstRun({ live }: { live: Live }) {
                 <div className="rounded-2xl border border-border bg-card p-5 shadow-card">
                     <h1 className="sp-title">Движок не установлен</h1>
                     <p className="mt-2 text-sm text-muted-foreground">
-                        splify2 — это интерфейс, а маршрутизацией занимается <b>steer</b>: он превращает
-                        правила в собственную таблицу nftables и раздаёт метки. Без него интерфейсу нечего
-                        ни проверить, ни применить, поэтому начинать надо отсюда.
+                        splify2 — это интерфейс, а маршрутизацией занимается <b>steer</b>. Без него интерфейсу нечего ни
+                        проверить, ни применить, поэтому начинать надо отсюда.
                     </p>
                     <ul className="mt-3 space-y-1.5 text-sm">
                         <li>
@@ -44,9 +43,8 @@ export default function FirstRun({ live }: { live: Live }) {
 
                 <p className="text-xs text-muted-foreground">
                     Пакет можно поставить и руками:{' '}
-                    <code className="font-mono">apk add --allow-untrusted ./steer-extended-*.apk</code>. На
-                    роутере с 64 МБ перед установкой стоит остановить движок, если он уже работал: apk
-                    иногда убивает нехватка памяти, и тогда обновление молча не происходит.
+                    <code className="font-mono">apk add --allow-untrusted ./steer-extended-*.apk</code>. На роутере с 64 МБ памяти перед установкой остановите движок, если он работает: иначе обновлению
+                    может не хватить памяти.
                 </p>
             </div>
         </div>

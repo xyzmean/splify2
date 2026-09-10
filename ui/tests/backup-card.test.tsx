@@ -92,7 +92,7 @@ describe('карточка бекапа', () => {
 
     it('говорит, что категорий издателя в архиве нет (R-005)', () => {
         render(<BackupCard />)
-        expect(screen.getByText(/284 КБ/)).toBeInTheDocument()
+        expect(screen.getByText(/роутер скачает их сам/)).toBeInTheDocument()
     })
 
     it('предупреждает про ключи в файле до нажатия (R-005)', () => {

@@ -172,9 +172,8 @@ export default function ClientNetsCard({ spec, status, onChange }: Props) {
             </CardHeader>
             <CardContent className="space-y-3">
                 <p className="text-[13px] text-muted-foreground">
-                    Правила касаются устройств, которые приходят через эти интерфейсы. Роутер
-                    бывает выходной точкой не только для домашней сети — например, для хостов из
-                    Tailscale или ZeroTier, которым он шлюз.
+                    Правила касаются устройств, которые приходят через эти интерфейсы — например, из Tailscale или
+                    ZeroTier, если роутер им шлюз.
                 </p>
 
                 {byNets && (
@@ -242,7 +241,7 @@ export default function ClientNetsCard({ spec, status, onChange }: Props) {
                     })}
                     {nets !== null && rows.length === 0 && (
                         <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                            Устройств не нашлось — бэкенд старее интерфейса?
+                            Устройств не нашлось. Если splify2 только что обновился — откройте страницу заново.
                         </p>
                     )}
                 </div>
@@ -251,9 +250,8 @@ export default function ClientNetsCard({ spec, status, onChange }: Props) {
 
                 {engineOld && (
                     <p className="text-xs text-warning-fg">
-                        Движок этой версии перечня устройств не понимает и заберёт трафик только с
-                        br-lan: незнакомое поле настройки он пропускает молча. Обновите движок в
-                        разделе «Система» — иначе выбор здесь ничего не изменит.
+                        Движок этой версии перечня устройств не понимает и заберёт трафик только с br-lan. Обновите
+                        движок в разделе «Настройки» — иначе выбор здесь ничего не изменит.
                     </p>
                 )}
 

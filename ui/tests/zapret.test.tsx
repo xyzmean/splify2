@@ -421,6 +421,6 @@ describe('вкладка Zapret', () => {
         mockAll()
         render(<Zapret />)
         await waitFor(() =>
-            expect(screen.getByText(/Пользовательского трафика проверка не касается/)).toBeInTheDocument())
+            expect(screen.getByText(/Ваш трафик она не трогает/)).toBeInTheDocument())
     })
 })

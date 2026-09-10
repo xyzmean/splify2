@@ -94,7 +94,7 @@ describe('вкладка DoH', () => {
     it('про force_dns сказано, когда движку нужен свой резолвер', async () => {
         vi.spyOn(rpc, 'dohState').mockResolvedValue({ ...base, needs_dnsd: true, force_dns: '0' })
         render(<Doh live={live} />)
-        await waitFor(() => expect(screen.getByText(/force_dns = 0/)).toBeInTheDocument())
+        await waitFor(() => expect(screen.getByText(/перенаправляет движок, а не https-dns-proxy/)).toBeInTheDocument())
     })
 
     it('и НЕ сказано, когда доменных правил нет — лишнее предупреждение учит не читать их', async () => {
@@ -213,7 +213,7 @@ describe('вкладка DoH: чужое хозяйство', () => {
         })
         const fix = vi.spyOn(rpc, 'dohForceFix').mockResolvedValue({ ok: true, force_dns_now: '0' })
         render(<Doh live={live} />)
-        await waitFor(() => expect(screen.getByText(/заворачивает DNS сети сам/)).toBeInTheDocument())
+        await waitFor(() => expect(screen.getByText(/перенаправляет DNS сети сам и спорит с движком/)).toBeInTheDocument())
         fireEvent.click(screen.getByRole('button', { name: 'Оставить движку' }))
         await waitFor(() => expect(fix).toHaveBeenCalled())
     })

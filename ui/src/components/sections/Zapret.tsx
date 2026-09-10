@@ -267,7 +267,7 @@ export default function Zapret() {
                         {t('Zapret не установлен. Он ставится по желанию: обход нужен не всем, а весит около полумегабайта.')}
                     </div>
                     <div className="text-xs text-muted-foreground">
-                        {t('Пакет приезжает из релизов remittor/zapret-openwrt, стратегии — из Zapret Manager и Flowseal, теми же источниками, что у самого менеджера. Вместе с обходом ставится curl: без него нечем проверять стратегии.')}
+                        {t('Пакет — из релизов remittor/zapret-openwrt, стратегии — из Zapret Manager и Flowseal.')}
                     </div>
                     <Button
                         disabled={busy !== ''}
@@ -562,7 +562,7 @@ export default function Zapret() {
                         </div>
                     ) : (
                         <p className="text-xs text-muted-foreground">
-                            {t('Проверка идёт в фоне — окно можно закрыть. Пользовательского трафика проверка не касается: у неё свой обработчик и свои запросы, ваша стратегия работает как обычно.')}
+                            {t('Проверка идёт в фоне — окно можно закрыть. Ваш трафик она не трогает: стратегия работает как обычно.')}
                         </p>
                     )}
                     {test?.state === 'error' && test.error_text && (
@@ -749,7 +749,7 @@ export default function Zapret() {
                 <CardHeader><CardTitle className="text-base">{t('Автоподбор')}</CardTitle></CardHeader>
                 <CardContent className="space-y-3 text-sm">
                     <p className="text-xs text-muted-foreground">
-                        {t('Та же проверка в изоляции, затем применяется победитель — и только если он открывает больше, чем без обхода и чем нынешняя стратегия: менять работающее на равное — риск без выигрыша.')}
+                        {t('Проверяет стратегии и применяет победителя — только если он открывает больше, чем нынешняя стратегия и чем без обхода.')}
                     </p>
 
                     {/* Приговор. Строка отказа здесь ценнее пустоты: «уже применена лучшая» и
@@ -1005,7 +1005,7 @@ function StrategyDetails({
                         <LoaderCircle className="h-3 w-3 animate-spin" aria-hidden="true" /> {t('читаю…')}
                     </div>
                 ) : opts === null ? (
-                    <div className="mt-1 text-warning-fg">{t('бэкенд постарше ключи не отдаёт — обновите интерфейс')}</div>
+                    <div className="mt-1 text-warning-fg">{t('ключи не пришли — если splify2 только что обновился, откройте страницу заново')}</div>
                 ) : (
                     <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-muted p-2 font-mono text-[11px] leading-relaxed">
                         {opts.join('\n')}
