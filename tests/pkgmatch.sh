@@ -430,6 +430,15 @@ check "установка убирает uci-defaults после успеха" "
     "$(grep -c 'rm -f /etc/uci-defaults/99-splify2' build.sh)"
 check "uci-defaults заводит секцию main" "1" \
     "$(grep -c "splify2.main=splify2" "$UD" 2>/dev/null)"
+# Перезапуск rpcd из uci-defaults — В ФОНЕ И С ЗАДЕРЖКОЙ. Скрипт исполняет postinst, а
+# postinst при обновлении из интерфейса запускает сам rpcd (splify2_install → pkg_install →
+# apk/opkg → postinst): перезапуск здесь же обрывал ответ метода, и человек видел «сбой» у
+# удавшейся установки. На роутере проверено: `reload` у rpcd — это procd_send_signal (мягкий),
+# и единственный жёсткий перезапуск на пути обновления был именно этот.
+check "перезапуск rpcd в uci-defaults отложен и уведён в фон" "1" \
+    "$(grep -c '( sleep 2; /etc/init.d/rpcd restart ) >/dev/null 2>&1 &$' "$UD")"
+check "немедленного перезапуска rpcd в uci-defaults нет" "0" \
+    "$(grep -c '^[[:space:]]*\[ -x /etc/init.d/rpcd \] && /etc/init.d/rpcd restart' "$UD")"
 
 # ---- что именно переживает обновление прошивки --------------------------------
 # Настройку МАЛО ЗАВЕСТИ. sysupgrade и «Создать архив» собирают список из conffiles
