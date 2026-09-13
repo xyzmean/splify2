@@ -61,7 +61,20 @@ function syncBleed(root: HTMLElement) {
       pad += parseFloat(getComputedStyle(el).paddingLeft || '0') || 0
       el = el.parentElement
     }
-    root.style.setProperty('--sp-bleed', `${Math.max(0, Math.min(48, Math.round(pad)))}px`)
+    const bleed = Math.max(0, Math.min(48, Math.round(pad)))
+    root.style.setProperty('--sp-bleed', `${bleed}px`)
+    // Где по горизонтали стоит подложка — для элементов с position: fixed (нижняя панель
+    // разделов, пилюля «Применить»). Они считаются от окна, а окно на телефоне в альбомной
+    // ориентации шире нашего контейнера: у Argon до 1152 пикселей слева стоит колонка меню на
+    // 13rem поверх всего, и панель «от края до края» уходила под неё первыми пунктами. Подложка
+    // выходит за контейнер на --sp-bleed в обе стороны (index.css), поэтому поля считаются от
+    // контейнера минус вылет. Ширина — clientWidth, а не innerWidth: полоса прокрутки не окно.
+    const r = root.getBoundingClientRect()
+    const vw = document.documentElement.clientWidth || window.innerWidth
+    const l = Math.max(0, Math.round(r.left - bleed))
+    const rr = Math.max(0, Math.round(vw - r.right - bleed))
+    root.style.setProperty('--sp-inset-l', `${l}px`)
+    root.style.setProperty('--sp-inset-r', `${rr}px`)
   } catch (e) {
     console.error('Failed to measure page padding', e)
   }
@@ -78,7 +91,16 @@ function mount(el?: HTMLElement | null) {
    * слушатель, а не тот же observer: тот следит за атрибутами, а не за размерами окна. */
   const onResize = () => syncBleed(rootElement)
   window.addEventListener('resize', onResize)
-  window.__splifyBleedOff = () => window.removeEventListener('resize', onResize)
+  // Ширина контейнера меняется и без окна: тема раскрывает и прячет колонку меню (у Argon —
+  // с переходом в 0,2 с), и поля fixed-элементов обязаны последовать за ней. ResizeObserver
+  // видит именно это; событие resize окна — нет. В старом WebView его может не быть — тогда
+  // остаётся пересчёт по окну, как прежде.
+  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(onResize) : undefined
+  ro?.observe(rootElement)
+  window.__splifyBleedOff = () => {
+    window.removeEventListener('resize', onResize)
+    ro?.disconnect()
+  }
   const observer = new MutationObserver(syncTheme)
   observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class', 'style', 'data-darkmode'] })
   observer.observe(document.body, { attributes: true, attributeFilter: ['data-theme', 'class', 'style'] })

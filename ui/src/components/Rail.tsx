@@ -123,9 +123,15 @@ export default function Rail({ live, section, onSection, counts }: RailProps) {
             </aside>
 
             {/* ── узкий экран: нижняя панель ───────────────────────────────────────── */}
+            {/* Края панели — НЕ края окна, а края нашей подложки (left/right ставит index.css из
+                переменных, которые измеряет main.tsx). Панель во всю ширину окна на телефоне в
+                альбомной ориентации ложилась под меню темы: Argon до 1152 пикселей держит слева
+                колонку меню на 13rem с z-index 100, и первые два пункта («Главная», «Правила»)
+                оказывались под ней — человек видел четыре кнопки из шести. Портрет уже 768, там
+                меню у темы спрятано, и панель была целой; отсюда «не всегда». */}
             <nav
                 aria-label="Разделы"
-                className="sp-bottom-bar fixed inset-x-0 bottom-0 z-40 flex border-t border-border bg-rail lg:hidden"
+                className="sp-bottom-bar fixed bottom-0 z-40 flex border-t border-border bg-rail lg:hidden"
             >
                 {ITEMS.map(({ id, label, icon: Icon }) => {
                     const on = section === id

@@ -10,9 +10,11 @@ import { usePending } from '@/lib/pending'
 export default function ApplyPill() {
     const { count, applying, justApplied, apply } = usePending()
     if (count === 0 && !applying && !justApplied) return null
-    /* На телефоне снизу рельс: пилюля встаёт над ним, а не на него. */
+    /* На телефоне снизу рельс: пилюля встаёт над ним, а не на него. По горизонтали — по середине
+       НАШЕЙ подложки, а не окна (sp-float-center): рядом с колонкой меню темы середина окна
+       смещена относительно содержимого, и пилюля уезжала к меню. */
     return (
-        <div className="fixed bottom-20 left-1/2 z-50 -translate-x-1/2 lg:bottom-6">
+        <div className="sp-float-center fixed bottom-20 z-50 -translate-x-1/2 lg:bottom-6">
             <button
                 type="button"
                 onClick={apply}

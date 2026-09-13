@@ -427,6 +427,17 @@
    *  экранные кнопки Android: без него нижний ряд подписей оказывается под ними. */
   .splify-react-root .sp-bottom-bar {
     padding-bottom: env(safe-area-inset-bottom, 0px);
+    /* Края панели — края подложки, а не окна. Переменные измеряет main.tsx (syncBleed): слева
+     * и справа от подложки может стоять колонка темы (у Argon до 1152 пикселей — меню на 13rem
+     * поверх всего, z-index 100), и панель на всю ширину окна уходила под неё вместе с первыми
+     * пунктами. Без измеренных значений — как прежде, от края до края. */
+    left: var(--sp-inset-l, 0px);
+    right: var(--sp-inset-r, 0px);
+  }
+  /* Середина подложки для плавающих элементов (пилюля «Применить»): у fixed проценты
+   * считаются от окна, поэтому середина выводится из тех же измеренных полей. */
+  .splify-react-root .sp-float-center {
+    left: calc(var(--sp-inset-l, 0px) + (100% - var(--sp-inset-l, 0px) - var(--sp-inset-r, 0px)) / 2);
   }
   .splify-react-root ol,
   .splify-react-root ul {
