@@ -4060,6 +4060,28 @@ uci_set 'firewall.@zone[2].device' ''; uci_set 'firewall.@zone[2].network' 'tail
 printf '%s\n' '{"schema":1,"lan_devices":["br-lan","tailscale0"],"outputs":{"direct":{"kind":"direct"},"vpn":{"kind":"interface","device":"wg0","on_fail":"direct"}},"channels":[]}' > "$T/etc/spec.json"
 out="$(rpcd apply)"
 check "зона, заданная через network, тоже узнаётся" "lan ts" "$(fwd_srcs steer_iface)"
+# Зона — ИМЕНОВАННАЯ секция (`config zone 'ts'`): так её пишут руками по руководствам, и uci
+# зовёт её не «@zone[N]», а именем. До правки такая зона для нас не существовала: устройство
+# клиентов считалось ничьим, проброс не заводился — то есть H-206 для неё не работал вовсе.
+rm -f "$T/uci.store" "$T/etc/fw-owned"; : > "$T/uci.store"
+uci_set 'firewall.@zone[0]' zone;  uci_set 'firewall.@zone[0].name' lan; uci_set 'firewall.@zone[0].device' 'br-lan'
+uci_set 'firewall.ts' zone;        uci_set 'firewall.ts.name' ts;        uci_set 'firewall.ts.device' 'tailscale0'
+# Правило с тем же именем — не зона, и по нему устройство искать нельзя.
+uci_set 'firewall.ts_rule' rule;   uci_set 'firewall.ts_rule.name' ts;   uci_set 'firewall.ts_rule.src' ts
+printf '%s\n' '{"schema":1,"lan_devices":["br-lan","tailscale0"],"outputs":{"direct":{"kind":"direct"},"vpn":{"kind":"interface","device":"wg0","on_fail":"direct"}},"channels":[]}' > "$T/etc/spec.json"
+out="$(rpcd apply)"
+check "именованная зона с устройством клиентов узнаётся — проброс заведён" "lan ts" "$(fwd_srcs steer_iface)"
+# Проброс в нашу зону человек дописал сам именованной секцией — второго не заводим и чужой не трогаем.
+rm -f "$T/uci.store" "$T/etc/fw-owned"; : > "$T/uci.store"
+uci_set 'firewall.@zone[0]' zone;  uci_set 'firewall.@zone[0].name' lan; uci_set 'firewall.@zone[0].device' 'br-lan'
+uci_set 'firewall.ts' zone;        uci_set 'firewall.ts.name' ts;        uci_set 'firewall.ts.device' 'tailscale0'
+uci_set 'firewall.@zone[1]' zone;  uci_set 'firewall.@zone[1].name' steer_iface; uci_set 'firewall.@zone[1].device' 'wg0'
+uci_set 'firewall.ts2vpn' forwarding; uci_set 'firewall.ts2vpn.src' ts; uci_set 'firewall.ts2vpn.dest' steer_iface
+out="$(rpcd apply)"
+check "чужой именованный проброс ts -> зона туннелей не дублируется" "1" \
+      "$(grep -c '^firewall\.[^.]*\.dest=steer_iface$' "$T/uci.store" | { read -r n; echo $((n - $(grep -c '^firewall\.@forwarding\[[0-9]*\]\.src=lan$' "$T/uci.store"))); })"
+check "и за нами не записан" "no" \
+      "$(grep -qx 'fwd steer_iface ts' "$T/etc/fw-owned" 2>/dev/null && echo yes || echo no)"
 # Оба устройства в lan — лишних пробросов нет.
 rm -f "$T/uci.store" "$T/etc/fw-owned"; : > "$T/uci.store"
 uci_set 'firewall.@zone[0]' zone;  uci_set 'firewall.@zone[0].name' lan; uci_set 'firewall.@zone[0].device' 'br-lan tailscale0'

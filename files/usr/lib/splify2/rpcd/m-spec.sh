@@ -138,8 +138,22 @@ fw_unnote() {  # СТРОКА
     mv "$FW_OWNED.tmp" "$FW_OWNED" 2>/dev/null || rm -f "$FW_OWNED.tmp"
 }
 
-zone_index() {  # ИМЯ_ЗОНЫ
-    uci show firewall 2>/dev/null | sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.name='$1'$/\1/p" | head -1
+# СЕКЦИИ ФАЕРВОЛА ПО ИДЕНТИФИКАТОРУ, А НЕ ПО НОМЕРУ. Безымянную секцию uci зовёт «@zone[N]»,
+# именованную («config zone 'ts'») — её именем, и обращаться к обеим можно одинаково:
+# firewall.<ид>.<опция>. Прежде здесь искалось только «@zone[N]» — и зона, заведённая
+# именованной секцией (так её пишут руками по руководствам к Tailscale и ZeroTier), для нас не
+# существовала: устройство клиентов из неё считалось ничьим, проброс к туннелю не заводился, и
+# «выбрал tailscale0, применил, не заработало» оставалось в силе после H-206. Тип секции
+# проверяется отдельно: имя «ts» может носить и правило (`config rule` с option name), а
+# устройство лежит только в зоне.
+fw_sections() {  # ТИП -> идентификаторы секций этого типа, по одному в строке
+    uci show firewall 2>/dev/null | sed -n "s/^firewall\.\([^.=]*\)=$1$/\1/p"
+}
+
+zone_index() {  # ИМЯ_ЗОНЫ -> идентификатор секции
+    fw_sections zone | while IFS= read -r _zi_s; do
+        [ "$(uci -q get "firewall.$_zi_s.name" 2>/dev/null)" = "$1" ] && { printf '%s' "$_zi_s"; return 0; }
+    done
 }
 
 # В какой зоне уже лежит это устройство. Пусто — ни в какой.
@@ -147,13 +161,16 @@ zone_index() {  # ИМЯ_ЗОНЫ
 # Нужно потому, что устройство в ДВУХ зонах fw4 не прощает, а устройство выхода kind=interface
 # человек мог назначить в зону сам — страница интерфейса в LuCI это предлагает. Молча добавив
 # его во вторую, мы получили бы отказ перезагрузки правил и неработающий фаервол целиком.
-fw_zone_of_device() {  # ИМЯ_УСТРОЙСТВА
-    uci show firewall 2>/dev/null |
-        sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.device=.*'\?$1'\?.*$/\1/p" | head -1
+fw_zone_of_device() {  # ИМЯ_УСТРОЙСТВА -> идентификатор секции зоны
+    fw_sections zone | while IFS= read -r _fzd_s; do
+        for _fzd_d in $(uci -q get "firewall.$_fzd_s.device" 2>/dev/null); do
+            [ "$_fzd_d" = "$1" ] && { printf '%s' "$_fzd_s"; return 0; }
+        done
+    done
 }
 
-fw_zone_devices() {  # ИНДЕКС
-    uci -q get "firewall.@zone[$1].device" 2>/dev/null | tr ' ' '\n' | grep . | sort -u
+fw_zone_devices() {  # ИДЕНТИФИКАТОР_СЕКЦИИ
+    uci -q get "firewall.$1.device" 2>/dev/null | tr ' ' '\n' | grep . | sort -u
 }
 
 # ЗОНЫ, В КОТОРЫХ ЛЕЖАТ УСТРОЙСТВА КЛИЕНТОВ из спеки (lan_devices; одиночная lan_device и
@@ -172,24 +189,28 @@ fw_client_zones() {
                       sed -n "s/^network\.\([^.@][^.]*\)\.device='\{0,1\}$_fcz_d'\{0,1\}$/\1/p" | head -1)"
             [ -n "$_fcz_n" ] && _fcz_i="$(fw_zone_of_network "$_fcz_n")"
         fi
-        [ -n "$_fcz_i" ] && uci -q get "firewall.@zone[$_fcz_i].name" 2>/dev/null
+        [ -n "$_fcz_i" ] && uci -q get "firewall.$_fcz_i.name" 2>/dev/null
     done | grep . | sort -u
 }
 
-fw_zone_of_network() {  # ИМЯ_ИНТЕРФЕЙСА -> индекс зоны, в чей список network он входит
-    uci show firewall 2>/dev/null | sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.network=\(.*\)$/\1 \2/p" |
-        while IFS=' ' read -r _fzn_i _fzn_v; do
-            for _fzn_w in $(printf '%s' "$_fzn_v" | tr -d "'"); do
-                [ "$_fzn_w" = "$1" ] && { printf '%s' "$_fzn_i"; return 0; }
-            done
+fw_zone_of_network() {  # ИМЯ_ИНТЕРФЕЙСА -> идентификатор зоны, в чей список network он входит
+    fw_sections zone | while IFS= read -r _fzn_s; do
+        for _fzn_w in $(uci -q get "firewall.$_fzn_s.network" 2>/dev/null); do
+            [ "$_fzn_w" = "$1" ] && { printf '%s' "$_fzn_s"; return 0; }
         done
+    done
 }
 
-fw_forwarding_id() {  # SRC DEST -> @forwarding[N] или пусто
-    uci show firewall 2>/dev/null | sed -n "s/^firewall\.\(@forwarding\[[0-9]*\]\)\.dest='$2'$/\1/p" |
-        while IFS= read -r _ffi_f; do
-            [ "$(uci -q get "firewall.$_ffi_f.src" 2>/dev/null)" = "$1" ] && { printf '%s' "$_ffi_f"; return 0; }
-        done
+fw_forwardings_to() {  # ЗОНА-ПОЛУЧАТЕЛЬ -> идентификаторы секций проброса в неё, по одной в строке
+    fw_sections forwarding | while IFS= read -r _fft_s; do
+        [ "$(uci -q get "firewall.$_fft_s.dest" 2>/dev/null)" = "$1" ] && printf '%s\n' "$_fft_s"
+    done
+}
+
+fw_forwarding_id() {  # SRC DEST -> идентификатор секции проброса или пусто
+    fw_forwardings_to "$2" | while IFS= read -r _ffi_f; do
+        [ "$(uci -q get "firewall.$_ffi_f.src" 2>/dev/null)" = "$1" ] && { printf '%s' "$_ffi_f"; return 0; }
+    done
 }
 
 # Принять существующую зону за свою, если отличить её от нашей нельзя.
@@ -251,13 +272,13 @@ fw_zone_sync() {  # ЗОНА ВИДЫ MASQ
         # Сначала правила проброса на зону, потом сама зона: удалив зону первой, мы оставили бы
         # forwarding, ссылающийся в пустоту, и fw4 отказался бы перезагружаться.
         while :; do
-            f="$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.\(@forwarding\[[0-9]*\]\)\.dest='$_z'$/\1/p" | head -1)"
+            f="$(fw_forwardings_to "$_z" | head -1)"
             [ -n "$f" ] || break
             uci -q delete "firewall.$f" || break
             changed=1
         done
         for d in $(fw_zone_devices "$idx"); do fw_unnote "dev $_z $d"; done
-        uci -q delete "firewall.@zone[$idx]" && changed=1
+        uci -q delete "firewall.$idx" && changed=1
         if [ "$changed" = 1 ]; then
             uci -q commit firewall
             fw_unnote "zone $_z"
@@ -289,7 +310,7 @@ fw_zone_sync() {  # ЗОНА ВИДЫ MASQ
     added=""
     for d in $want; do
         printf '%s\n' "$have" | grep -qx "$d" && continue
-        uci -q add_list "firewall.@zone[$idx].device"="$d"
+        uci -q add_list "firewall.$idx.device"="$d"
         fw_note "dev $_z $d"
         added="$added $d"
         changed=1
@@ -301,7 +322,7 @@ fw_zone_sync() {  # ЗОНА ВИДЫ MASQ
     for d in $have; do
         printf '%s\n' "$want" | grep -qx "$d" && continue
         fw_noted "dev $_z $d" || continue
-        uci -q del_list "firewall.@zone[$idx].device"="$d"
+        uci -q del_list "firewall.$idx.device"="$d"
         fw_unnote "dev $_z $d"
         removed="$removed $d"
         changed=1
@@ -309,7 +330,7 @@ fw_zone_sync() {  # ЗОНА ВИДЫ MASQ
 
     # Разрешение lan -> зона. Без него зона есть, а трафик всё равно не идёт: политика forward
     # у fw4 применяется к паре зон, а не к одной.
-    uci show firewall 2>/dev/null | grep -q "\.dest='$_z'" || {
+    [ -n "$(fw_forwardings_to "$_z")" ] || {
         uci -q add firewall forwarding >/dev/null
         uci -q set firewall.@forwarding[-1].src='lan'
         uci -q set firewall.@forwarding[-1].dest="$_z"

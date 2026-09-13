@@ -143,15 +143,25 @@ purge_engine() {
 # Разбор расписки и зоны — те же выражения, что в m-spec.sh: два разных разбора одного
 # формата однажды разошлись бы, и разошлись бы молча, а цена — удалённая чужая зона.
 fw_noted() { grep -qxF "$1" "$FW_OWNED" 2>/dev/null; }
-zone_index() {  # ИМЯ_ЗОНЫ
-    uci show firewall 2>/dev/null | sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.name='$1'$/\1/p" | head -1
+# Секции — по идентификатору, а не по номеру: безымянная у uci зовётся «@zone[N]», именованная
+# («config zone 'ts'») — своим именем, и firewall.<ид>.<опция> работает для обеих. Наши зоны
+# безымянные, но проброс В нашу зону человек мог дописать именованной секцией — его тоже надо
+# снять раньше зоны, иначе fw4 откажется перезагружаться.
+fw_sections() {  # ТИП -> идентификаторы секций этого типа
+    uci show firewall 2>/dev/null | sed -n "s/^firewall\.\([^.=]*\)=$1$/\1/p"
 }
-zone_devices() {  # ИНДЕКС
-    uci -q get "firewall.@zone[$1].device" 2>/dev/null | tr ' ' '\n' | grep . | sort -u
+zone_index() {  # ИМЯ_ЗОНЫ -> идентификатор секции
+    fw_sections zone | while IFS= read -r _zi_s; do
+        [ "$(uci -q get "firewall.$_zi_s.name" 2>/dev/null)" = "$1" ] && { printf '%s' "$_zi_s"; return 0; }
+    done
 }
-zone_forwardings() {  # ИМЯ_ЗОНЫ
-    uci show firewall 2>/dev/null |
-        sed -n "s/^firewall\.\(@forwarding\[[0-9]*\]\)\.dest='$1'$/\1/p"
+zone_devices() {  # ИДЕНТИФИКАТОР_СЕКЦИИ
+    uci -q get "firewall.$1.device" 2>/dev/null | tr ' ' '\n' | grep . | sort -u
+}
+zone_forwardings() {  # ИМЯ_ЗОНЫ -> идентификаторы секций проброса в неё
+    fw_sections forwarding | while IFS= read -r _zf_s; do
+        [ "$(uci -q get "firewall.$_zf_s.dest" 2>/dev/null)" = "$1" ] && printf '%s\n' "$_zf_s"
+    done
 }
 
 purge_zone() {  # ИМЯ_ЗОНЫ
@@ -174,7 +184,7 @@ purge_zone() {  # ИМЯ_ЗОНЫ
             fw_noted "dev $_z $_d" || continue
             plan "устройство $_d выносится из зоны $_z"
             [ "$DO" = 1 ] || continue
-            uci -q del_list "firewall.@zone[$_idx].device"="$_d" && FW_CHANGED=1
+            uci -q del_list "firewall.$_idx.device"="$_d" && FW_CHANGED=1
         done
         [ "$DO" = 1 ] && [ "$FW_CHANGED" = 1 ] && uci -q commit firewall
         return 0
@@ -201,7 +211,7 @@ purge_zone() {  # ИМЯ_ЗОНЫ
     # По той же причине заново берётся и индекс зоны.
     _idx="$(zone_index "$_z")"
     [ -n "$_idx" ] || return 0
-    uci -q delete "firewall.@zone[$_idx]" && FW_CHANGED=1
+    uci -q delete "firewall.$_idx" && FW_CHANGED=1
     [ "$FW_CHANGED" = 1 ] && uci -q commit firewall
     # Расписку здесь не правим: она уходит вместе с $SPLIFY2_DIR ниже, целиком. Вычёркивать
     # строки из файла, который через секунду будет удалён, значило бы завести второе место,
