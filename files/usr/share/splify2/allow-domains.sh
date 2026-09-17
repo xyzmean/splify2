@@ -45,7 +45,7 @@ AD_REPO=${AD_REPO:-itdoginfo/allow-domains}
 #
 # Разрешать `latest` через uci мы не станем (см. ad_tag): это единственное значение,
 # которое молча отменяет всё сказанное выше, и набрать его человек попробует первым.
-AD_TAG_DEFAULT=${AD_TAG_DEFAULT:-2026-08-31_16-18}
+AD_TAG_DEFAULT=${AD_TAG_DEFAULT:-2026-09-14_15-11}
 
 # Ссылка строится по тегу. Не `latest`, не `refs/heads/main` — см. выше.
 AD_BASE=${AD_BASE:-https://github.com/itdoginfo/allow-domains/releases/download}
