@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { notify } from '@/lib/notify'
 import { rpc } from '@/lib/rpc'
 import { customServices } from '@/lib/model'
+import { toPunycodeList } from '@/lib/validate'
 
 // Свои списки доменов и адресов.
 //
@@ -131,7 +132,13 @@ export default function CustomLists({
     ) {
         setBusy(true)
         try {
-            const r = await rpc.listPut({ ...target, ...payload, source })
+            /* Домены — в punycode ЗДЕСЬ, до отправки: браузер переводит `.рф` той же
+               функцией, которой спрашивает адрес, а роутеру кириллица не годится ни в
+               списке, ни в сравнении с запросом DNS. См. toPunycodeList. */
+            const body = payload.text !== undefined && target.kind === 'domains'
+                ? { ...payload, text: toPunycodeList(payload.text) }
+                : payload
+            const r = await rpc.listPut({ ...target, ...body, source })
             if (!r.ok) throw new Error(r.error || (payload.url ? 'не скачалось' : 'не сохранилось'))
             await done(target.name, r.count ?? 0, r.dropped ?? 0)
             setEditing(null)
@@ -162,7 +169,10 @@ export default function CustomLists({
     ) {
         setBusy(true)
         try {
-            const lines = (await file.text()).split(/\r?\n/)
+            const raw = await file.text()
+            // Тот же перевод, что у текстового пути: файл со своими доменами приносят чаще,
+            // чем набирают их руками.
+            const lines = (target.kind === 'domains' ? toPunycodeList(raw) : raw).split(/\r?\n/)
             let count = 0
             let dropped = 0
             // Первая порция ЗАМЕЩАЕТ, остальные дописываются. Иначе повторная загрузка
@@ -301,7 +311,8 @@ export default function CustomLists({
                 </div>
                 {name && !nameOk && (
                     <p className="text-xs text-destructive">
-                        имя пойдёт в имя файла на роутере: только латиница, цифры, дефис и подчёркивание
+                        {/* Ограничение отсюда: имя списка становится именем файла на роутере. */}
+                        только латиница, цифры, дефис и подчёркивание
                     </p>
                 )}
 
@@ -483,9 +494,13 @@ function ListEditor({
                         </p>
                     ) : loadErr ? (
                         <p className="text-xs text-destructive">
-                            Записи не прочитались: {loadErr}. Правка текстом заменила бы список
-                            целиком, поэтому поле не показано — иначе сохранение потеряло бы то,
-                            чего мы не увидели.
+                            {/* Поле правки прячется НАМЕРЕННО: сохранение заменяет список целиком,
+                              * и если записи не прочитались, то сохранение из пустого поля стёрло
+                              * бы то, чего мы не увидели. Человеку эта арифметика не нужна — ему
+                              * нужно знать, что правка текстом сейчас недоступна, и чем её
+                              * заменить. */}
+                            Записи не прочитались: {loadErr}. Править текстом сейчас нельзя —
+                            замените список файлом или ссылкой.
                         </p>
                     ) : text === null ? (
                         <p className="text-xs text-muted-foreground">Читаем записи…</p>
