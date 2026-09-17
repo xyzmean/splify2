@@ -383,7 +383,17 @@ export default function CatalogTab({ onUseInRule }: Props) {
                                         className="px-3 py-2 whitespace-nowrap text-muted-foreground"
                                         data-label="записей"
                                     >
-                                        {(localCount || sv.count || 0).toLocaleString('ru-RU')}
+                                        {/* НЕЗАГРУЖЕННЫЙ СПИСОК И ПУСТОЙ СПИСОК — РАЗНЫЕ ВЕЩИ.
+                                            Здесь стояло `localCount || sv.count || 0`: пока
+                                            на диске нет ни одной части, столбец показывал
+                                            число ИЗ КАТАЛОГА, то есть обещание издателя, а
+                                            если и его нет — ноль. Именно этим столбцом люди
+                                            проверяют, лёг ли список на роутер, и обе подмены
+                                            отвечали им неправдой: первая — «всё на месте»,
+                                            вторая — «список пуст». */}
+                                        {have.length === 0
+                                            ? 'не загружен'
+                                            : localCount.toLocaleString('ru-RU')}
                                     </td>
                                     <td className="px-3 py-2">
                                         {byRules.length ? (
@@ -403,7 +413,7 @@ export default function CatalogTab({ onUseInRule }: Props) {
                                             {have.length === 0 ? (
                                                 /* Не кнопка, а обещание: файл скачает бэкенд в момент
                                                    применения — человеку здесь делать нечего. */
-                                                <Hint tip="Списка ещё нет на роутере. Как только правило на него укажет и вы нажмёте «Применить», бэкенд скачает его сам.">
+                                                <Hint tip="Списка ещё нет на роутере. Как только правило на него укажет и вы нажмёте «Применить», роутер скачает его сам.">
                                                     <span className="text-xs text-muted-foreground">
                                                         скачается сам
                                                     </span>

@@ -116,7 +116,10 @@ describe('устройство в панели подписки', () => {
         render(<VlessPanel name="vl" output={OUT} onChange={() => {}} saved />)
         expect(await screen.findByText('splify2-6202c56e402d4e29c012')).toBeInTheDocument()
         // Про MAC сказано прямо: человек имеет право знать, что уходит наружу, а что нет.
-        expect(screen.getByText(/MAC порта/)).toBeInTheDocument()
+        // Проверяется ИМЕННО ЭТО обещание, а не фраза о его устройстве: откуда строка
+        // выведена, с экрана убрано нарочно (fe1d806 — «состояние и действие, а не причины
+        // наших решений»), и стенд, ждавший «MAC порта», с тех пор падал.
+        expect(screen.getByText(/MAC роутера панели не отправляется/)).toBeInTheDocument()
     })
 
     it('вставленным руками ссылкам панель не нужна — идентификатора нет', async () => {

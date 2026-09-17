@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Check, Download, Loader2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -30,7 +30,22 @@ interface Props {
 export default function EngineCard({ engine, releases, onInstalled }: Props) {
     const versions = releases?.versions ?? null
     const [ver, setVer] = useState('')
+    /* Вариант сборки — от ТОГО, ЧТО СТОИТ, а не «всегда расширенный».
+     *
+     * Здесь было `useState(true)`, и карточка рисовала намерение вместо состояния: у
+     * человека с базовой сборкой галочка всё равно стояла на расширенной. Стоило это не
+     * косметики — кнопка «Обновить» ставила ДРУГОЙ вариант, чем был, и базовая сборка молча
+     * превращалась в расширенную (лишние 250 КБ на флеше там, где их берегут), а карточка до
+     * этого момента показывала неправду.
+     *
+     * Выбор человека при этом главнее показаний: тронул радиокнопку — дальнейшие ответы
+     * `engine` его выбор не двигают, иначе обновление состояния переставляло бы галочку
+     * прямо под рукой. */
     const [ext, setExt] = useState(true)
+    const extChosen = useRef(false)
+    useEffect(() => {
+        if (!extChosen.current && engine?.present) setExt(engine.vless)
+    }, [engine?.present, engine?.vless])
     const [busy, setBusy] = useState(false)
     const action = engineAction(engine, releases)
     // Движок младше того, под который собран интерфейс, — см. engineTooOld.
@@ -99,7 +114,11 @@ export default function EngineCard({ engine, releases, onInstalled }: Props) {
                 {!engine?.present && (
                     <>
                         <p className="text-sm">
-                            {t('Без него маршрутизировать нечем: splify2 только показывает и настраивает, а решает, куда идёт трафик, движок.')}
+                            {/* Разделение ролей (splify2 показывает и настраивает, steer решает,
+                                куда идёт трафик) — это про наше устройство. Человеку на этом
+                                экране нужно одно: без движка ничего не заработает, ставить
+                                отсюда. */}
+                            {t('Без него маршрутизировать нечем: ни одно правило не заработает.')}
                         </p>
                         {/* Архитектура — именно здесь, где движка ещё нет. Это единственное
                             состояние, в котором её не показывает никто (у метода engine в
@@ -155,7 +174,7 @@ export default function EngineCard({ engine, releases, onInstalled }: Props) {
                             key={String(o.on)}
                             type="button"
                             aria-pressed={ext === o.on}
-                            onClick={() => setExt(o.on)}
+                            onClick={() => { extChosen.current = true; setExt(o.on) }}
                             className={[
                                 'flex w-full items-start gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors',
                                 ext === o.on ? 'border-primary bg-primary/10' : 'border-border',
