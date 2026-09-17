@@ -231,7 +231,18 @@ export default function Zapret() {
         try {
             const spec: Spec = await pending.load()
             if (spec.outputs[n]) throw new Error(`${t('Выход уже есть')}: ${n}`)
-            const out: Output = { name: n, kind: 'zapret', on_fail: 'drop' }
+            /* on_fail: 'direct', А НЕ 'drop', И ЭТО РАЗНИЦА МЕЖДУ «НЕ ПОМОГЛИ» И «СЛОМАЛИ».
+             *
+             * Движок выражает on_fail отсутствием `bypass` у `queue num`: при 'drop' ядро
+             * РОНЯЕТ пакет, если на очереди нет обработчика. Для выхода-туннеля это
+             * осмысленный killswitch — там обход правила означает утечку мимо VPN. Здесь
+             * смысл обратный: обход DPI — это улучшение доступа, а не запрет, и любая осечка
+             * nfqws (не поднялся, упал, перезапускается после «Применить») превращалась в
+             * «то, что в правиле, не открывается вообще».
+             *
+             * Выбрать другое значение человеку негде: радиокнопка on_fail живёт только у
+             * выходов VPN, а сюда оно зашивалось при заведении выхода. */
+            const out: Output = { name: n, kind: 'zapret', on_fail: 'direct' }
             pending.edit({ ...spec, outputs: { ...spec.outputs, [n]: out } })
             setNewOut('')
             /* Выход обязан появиться в списке «Куда применить» СРАЗУ, а не после «Применить»
@@ -264,7 +275,10 @@ export default function Zapret() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                     <div className="text-sm">
-                        {t('Zapret не установлен. Он ставится по желанию: обход нужен не всем, а весит около полумегабайта.')}
+                        {/* «Обход нужен не всем» — это наше объяснение, почему пакет не в
+                          * зависимостях. Размер остаётся: на роутере с тесной флешкой полмегабайта
+                          * решают, ставить или нет. */}
+                        {t('Zapret не установлен. Ставится по желанию, занимает на флеше около полумегабайта.')}
                     </div>
                     <div className="text-xs text-muted-foreground">
                         {t('Пакет — из релизов remittor/zapret-openwrt, стратегии — из Zapret Manager и Flowseal.')}
