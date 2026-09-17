@@ -178,18 +178,63 @@ fw_zone_devices() {  # ИДЕНТИФИКАТОР_СЕКЦИИ
 # через сетевой интерфейс (`list network`, а у интерфейса `option device`) — у Tailscale и
 # ZeroTier по руководствам встречаются оба способа, поэтому спрашиваются оба. Имена зон — по
 # одному в строке, без повторов.
+# Устройства, которые спека называет клиентами. Отдельной функцией, потому что спрашивают о
+# них двое: перечень зон для пробросов (fw_client_zones) и перечень БЕЗЗОННЫХ устройств, для
+# которых зону заводим мы (fw_client_devices_unzoned). Два списка, выведенных по-разному, рано
+# или поздно разошлись бы ровно на том устройстве, из-за которого всё и заводилось.
+fw_client_devices() {
+    _fcd="$(jsonfilter -i "$SPEC" -e '@.lan_devices[*]' 2>/dev/null)"
+    [ -n "$_fcd" ] || _fcd="$(jsonfilter -i "$SPEC" -e '@.lan_device' 2>/dev/null)"
+    [ -n "$_fcd" ] || _fcd="br-lan"
+    printf '%s\n' $_fcd | grep . | sort -u
+}
+
+# Зона устройства — своя или через сетевой интерфейс. Пусто = зоны нет вовсе.
+#
+# ДВА СПОСОБА, А НЕ ОДИН, и второй не для красоты: зона `lan` перечисляет не устройства, а
+# СЕТИ (`list network 'lan'`), поэтому поиск только по `device` объявил бы br-lan беззонным —
+# и мы завели бы ему вторую зону рядом с той, в которой он и так лежит.
+fw_zone_id_of_client() {  # ИМЯ_УСТРОЙСТВА -> идентификатор секции зоны или пусто
+    _fzc_i="$(fw_zone_of_device "$1")"
+    if [ -z "$_fzc_i" ]; then
+        _fzc_n="$(uci show network 2>/dev/null |
+                  sed -n "s/^network\.\([^.@][^.]*\)\.device='\{0,1\}$1'\{0,1\}$/\1/p" | head -1)"
+        [ -n "$_fzc_n" ] && _fzc_i="$(fw_zone_of_network "$_fzc_n")"
+    fi
+    printf '%s' "$_fzc_i"
+}
+
 fw_client_zones() {
-    _fcz_devs="$(jsonfilter -i "$SPEC" -e '@.lan_devices[*]' 2>/dev/null)"
-    [ -n "$_fcz_devs" ] || _fcz_devs="$(jsonfilter -i "$SPEC" -e '@.lan_device' 2>/dev/null)"
-    [ -n "$_fcz_devs" ] || _fcz_devs="br-lan"
-    for _fcz_d in $_fcz_devs; do
-        _fcz_i="$(fw_zone_of_device "$_fcz_d")"
-        if [ -z "$_fcz_i" ]; then
-            _fcz_n="$(uci show network 2>/dev/null |
-                      sed -n "s/^network\.\([^.@][^.]*\)\.device='\{0,1\}$_fcz_d'\{0,1\}$/\1/p" | head -1)"
-            [ -n "$_fcz_n" ] && _fcz_i="$(fw_zone_of_network "$_fcz_n")"
-        fi
+    for _fcz_d in $(fw_client_devices); do
+        _fcz_i="$(fw_zone_id_of_client "$_fcz_d")"
         [ -n "$_fcz_i" ] && uci -q get "firewall.$_fcz_i.name" 2>/dev/null
+    done | grep . | sort -u
+}
+
+# Устройства клиентов, у которых зоны фаервола НЕТ ВООБЩЕ.
+#
+# ЗАЧЕМ ИМ НУЖНА ЗОНА, и это не про удобство. Интерфейс, не входящий ни в одну зону, fw4
+# роняет дважды: `forward` — значит маршрутизации через нас нет совсем, и `input` — значит до
+# самого роутера с него не доходит ничего. Второе бьёт по DNS: заворот `udp dport 53 → :5300`
+# делает DNAT на адрес самого роутера, дальше пакет идёт через `input`, и без зоны он там и
+# кончается. Снаружи это «выбрал tailscale0 в клиентах — правила стоят, а DNS не подхватывает».
+#
+# Так живут ровно те интерфейсы, из-за которых перечень клиентов и появился: `tailscale0` и
+# интерфейс сервера WireGuard, заведённый мастером OpenWrt, — оба поднимаются без зоны, а
+# руководства предлагают дописать её самому.
+#
+# УСЛОВИЕ РОВНО ОДНО: своей зоны нет. Устройство, которое человек положил в свою зону (хоть в
+# `lan`, хоть в `ts` по руководству к Tailscale), мы не трогаем вовсе — ему нужен только
+# проброс, и его заводит fw_client_zones выше.
+# НАША СОБСТВЕННАЯ ЗОНА «СВОЕЙ ЗОНОЙ» НЕ СЧИТАЕТСЯ, и поэтому имя её здесь аргументом.
+# Иначе выходило так: первое применение заводит зону и кладёт в неё tailscale0, второе видит
+# устройство «устроенным», список беззонных пустеет — и та же самая зона снимается вместе с
+# пробросами. Зона моргала бы через раз, а с ней и связность у клиентов. Поймано стендом.
+fw_client_devices_unzoned() {  # ИМЯ_НАШЕЙ_ЗОНЫ
+    for _fcu_d in $(fw_client_devices); do
+        _fcu_i="$(fw_zone_id_of_client "$_fcu_d")"
+        [ -n "$_fcu_i" ] || { printf '%s\n' "$_fcu_d"; continue; }
+        [ "$(uci -q get "firewall.$_fcu_i.name" 2>/dev/null)" = "$1" ] && printf '%s\n' "$_fcu_d"
     done | grep . | sort -u
 }
 
@@ -207,6 +252,15 @@ fw_forwardings_to() {  # ЗОНА-ПОЛУЧАТЕЛЬ -> идентификат
     done
 }
 
+# Пробросы, у которых зона ИСТОЧНИК. Нужны при удалении зоны клиентов: из неё пробрасывают в
+# wan и в зоны туннелей, и forwarding, чей `src` указывает на удалённую зону, fw4 при
+# перезагрузке отвергает — то есть роутер остаётся без фаервола целиком. Тот же довод, по
+# которому пробросы В зону снимаются раньше самой зоны.
+fw_forwardings_from() {  # ЗОНА-ИСТОЧНИК -> идентификаторы секций проброса из неё
+    fw_sections forwarding | while IFS= read -r _ffm_s; do
+        [ "$(uci -q get "firewall.$_ffm_s.src" 2>/dev/null)" = "$1" ] && printf '%s\n' "$_ffm_s"
+    done
+}
 fw_forwarding_id() {  # SRC DEST -> идентификатор секции проброса или пусто
     fw_forwardings_to "$2" | while IFS= read -r _ffi_f; do
         [ "$(uci -q get "firewall.$_ffi_f.src" 2>/dev/null)" = "$1" ] && { printf '%s' "$_ffi_f"; return 0; }
@@ -235,7 +289,15 @@ fw_adopt_if_ours() {  # ЗОНА ИНДЕКС СПИСОК_НУЖНЫХ
 # осталось. Удаляет ТОЛЬКО записанное за нами. Печатает, что сделала; код 1 — изменения были.
 fw_zone_sync() {  # ЗОНА ВИДЫ MASQ
     _z="$1"; _kinds="$2"; _masq="$3"
-    want="$(fw_devices_of "$_kinds")"
+    # `clients` — не вид выхода, а единственная зона, которую мы заводим не для туннеля, а для
+    # устройств КЛИЕНТОВ без своей зоны (см. fw_client_devices_unzoned). Отдельной веткой здесь,
+    # а не отдельной функцией рядом: всё остальное — отсев чужих устройств, расписка, порядок
+    # «сначала пробросы, потом зона» — у неё то же самое, и вторая копия этого разошлась бы.
+    if [ "$_kinds" = clients ]; then
+        want="$(fw_client_devices_unzoned "$_z")"
+    else
+        want="$(fw_devices_of "$_kinds")"
+    fi
     idx="$(zone_index "$_z")"
     changed=0
     msg=""
@@ -271,10 +333,14 @@ fw_zone_sync() {  # ЗОНА ВИДЫ MASQ
         fw_adopt_if_ours "$_z" "$idx" "" || return 0
         # Сначала правила проброса на зону, потом сама зона: удалив зону первой, мы оставили бы
         # forwarding, ссылающийся в пустоту, и fw4 отказался бы перезагружаться.
+        # Пробросы В зону и ИЗ зоны — оба: у зоны туннелей вторых не бывает вовсе, а у зоны
+        # клиентов не бывает первых, и оставленный проброс с `src` на удалённую зону роняет
+        # перезагрузку фаервола так же надёжно, как оставленный `dest`.
         while :; do
-            f="$(fw_forwardings_to "$_z" | head -1)"
+            f="$( { fw_forwardings_to "$_z"; fw_forwardings_from "$_z"; } | head -1)"
             [ -n "$f" ] || break
             uci -q delete "firewall.$f" || break
+            fw_unnote "fwd wan $_z"
             changed=1
         done
         for d in $(fw_zone_devices "$idx"); do fw_unnote "dev $_z $d"; done
@@ -292,7 +358,17 @@ fw_zone_sync() {  # ЗОНА ВИДЫ MASQ
         uci -q set firewall.@zone[-1].name="$_z"
         # input REJECT: зона нужна для транзита, а не для доступа к самому роутеру со стороны
         # туннеля. forward ACCEPT — иначе смысла в ней нет.
-        uci -q set firewall.@zone[-1].input='REJECT'
+        #
+        # У ЗОНЫ КЛИЕНТОВ input ACCEPT, И ЭТО ГЛАВНОЕ ЕЁ ОТЛИЧИЕ. С той стороны к роутеру
+        # обращаются законно, и в первую очередь за именами: заворот DNS делает DNAT на адрес
+        # самого роутера, дальше пакет идёт через `input`, и при REJECT там и кончается. Зона с
+        # REJECT дала бы маршрутизацию без разрешения имён — то есть половину работы, которую
+        # снаружи не отличить от полной поломки.
+        if [ "$_kinds" = clients ]; then
+            uci -q set firewall.@zone[-1].input='ACCEPT'
+        else
+            uci -q set firewall.@zone[-1].input='REJECT'
+        fi
         uci -q set firewall.@zone[-1].output='ACCEPT'
         uci -q set firewall.@zone[-1].forward='ACCEPT'
         uci -q set firewall.@zone[-1].masq="$_masq"
@@ -328,42 +404,66 @@ fw_zone_sync() {  # ЗОНА ВИДЫ MASQ
         changed=1
     done
 
-    # Разрешение lan -> зона. Без него зона есть, а трафик всё равно не идёт: политика forward
-    # у fw4 применяется к паре зон, а не к одной.
-    [ -n "$(fw_forwardings_to "$_z")" ] || {
-        uci -q add firewall forwarding >/dev/null
-        uci -q set firewall.@forwarding[-1].src='lan'
-        uci -q set firewall.@forwarding[-1].dest="$_z"
-        changed=1
-        msg="${msg:+$msg, }проброс lan -> $_z добавлен"
-    }
+    # У ЗОНЫ КЛИЕНТОВ ПРОБРОСЫ СМОТРЯТ В ДРУГУЮ СТОРОНУ, и дальше её ветка отдельная.
+    #
+    # Зона туннеля — получатель: в неё пробрасывают из lan и из зон клиентов. Зона клиентов —
+    # источник: из неё пробрасывают в зоны туннелей (это делает блок ниже при синхронизации
+    # каждой из них — устройства-то теперь в зоне, и fw_client_zones её называет) и в `wan`.
+    #
+    # ЗАЧЕМ ИМЕННО `wan`. Правило канала забирает то, что названо в спеке; всё прочее у этих
+    # клиентов идёт «напрямую», то есть в интернет через wan. Без этого проброса заведение зоны
+    # сделало бы хуже, чем было: адресованное туннелю заработало бы, а всё остальное с того же
+    # интерфейса продолжало бы молча падать — и объяснить разницу человеку было бы нечем.
+    #
+    # Обратного проброса (`lan -> зона клиентов`) мы не заводим: он открыл бы локальной сети
+    # доступ к пирам чужого туннеля, а об этом нас никто не просил.
+    if [ "$_kinds" = clients ]; then
+        [ -n "$(fw_forwarding_id "$_z" wan)" ] || {
+            uci -q add firewall forwarding >/dev/null
+            uci -q set firewall.@forwarding[-1].src="$_z"
+            uci -q set firewall.@forwarding[-1].dest='wan'
+            fw_note "fwd wan $_z"
+            changed=1
+            msg="${msg:+$msg, }проброс $_z -> wan добавлен"
+        }
+    else
+        # Разрешение lan -> зона. Без него зона есть, а трафик всё равно не идёт: политика forward
+        # у fw4 применяется к паре зон, а не к одной.
+        [ -n "$(fw_forwardings_to "$_z")" ] || {
+            uci -q add firewall forwarding >/dev/null
+            uci -q set firewall.@forwarding[-1].src='lan'
+            uci -q set firewall.@forwarding[-1].dest="$_z"
+            changed=1
+            msg="${msg:+$msg, }проброс lan -> $_z добавлен"
+        }
 
-    # ПРОБРОС ИЗ ЗОН УСТРОЙСТВ КЛИЕНТОВ. Спека может назвать интерфейс из другой зоны — tailscale0
-    # в своей зоне ts по руководствам: движок помечает пакет (iifname), маршрут ведёт в туннель,
-    # а forward-цепочка fw4 его отбрасывает, потому что пары «ts -> зона туннелей» никто не
-    # заводил. Так и пришло первое обращение по Андромеде: «выбираю tailscale0, проксирование не
-    # взлетает». Устройства в спеке выбираем мы — значит и проброс из их зон наша забота. С
-    # расписки: убирается, когда устройств из этой зоны в спеке больше нет; чужие пробросы (без
-    # расписки) не трогаются. lan пробрасывается выше и всегда; зона туннеля сама в себя — нет.
-    _cz_want="$(fw_client_zones)"
-    for _cz in $_cz_want; do
-        [ "$_cz" = lan ] && continue
-        [ "$_cz" = "$_z" ] && continue
-        [ -n "$(fw_forwarding_id "$_cz" "$_z")" ] && continue
-        uci -q add firewall forwarding >/dev/null
-        uci -q set firewall.@forwarding[-1].src="$_cz"
-        uci -q set firewall.@forwarding[-1].dest="$_z"
-        fw_note "fwd $_z $_cz"
-        changed=1
-        msg="${msg:+$msg, }проброс $_cz -> $_z добавлен (в зоне $_cz устройства клиентов)"
-    done
-    for _cz in $(sed -n "s/^fwd $_z //p" "$FW_OWNED" 2>/dev/null); do
-        printf '%s\n' "$_cz_want" | grep -qx "$_cz" && continue
-        _f="$(fw_forwarding_id "$_cz" "$_z")"
-        [ -n "$_f" ] && uci -q delete "firewall.$_f" && changed=1
-        fw_unnote "fwd $_z $_cz"
-        msg="${msg:+$msg, }проброс $_cz -> $_z убран — устройств клиентов в зоне $_cz больше нет"
-    done
+        # ПРОБРОС ИЗ ЗОН УСТРОЙСТВ КЛИЕНТОВ. Спека может назвать интерфейс из другой зоны — tailscale0
+        # в своей зоне ts по руководствам: движок помечает пакет (iifname), маршрут ведёт в туннель,
+        # а forward-цепочка fw4 его отбрасывает, потому что пары «ts -> зона туннелей» никто не
+        # заводил. Так и пришло первое обращение по Андромеде: «выбираю tailscale0, проксирование не
+        # взлетает». Устройства в спеке выбираем мы — значит и проброс из их зон наша забота. С
+        # расписки: убирается, когда устройств из этой зоны в спеке больше нет; чужие пробросы (без
+        # расписки) не трогаются. lan пробрасывается выше и всегда; зона туннеля сама в себя — нет.
+        _cz_want="$(fw_client_zones)"
+        for _cz in $_cz_want; do
+            [ "$_cz" = lan ] && continue
+            [ "$_cz" = "$_z" ] && continue
+            [ -n "$(fw_forwarding_id "$_cz" "$_z")" ] && continue
+            uci -q add firewall forwarding >/dev/null
+            uci -q set firewall.@forwarding[-1].src="$_cz"
+            uci -q set firewall.@forwarding[-1].dest="$_z"
+            fw_note "fwd $_z $_cz"
+            changed=1
+            msg="${msg:+$msg, }проброс $_cz -> $_z добавлен (в зоне $_cz устройства клиентов)"
+        done
+        for _cz in $(sed -n "s/^fwd $_z //p" "$FW_OWNED" 2>/dev/null); do
+            printf '%s\n' "$_cz_want" | grep -qx "$_cz" && continue
+            _f="$(fw_forwarding_id "$_cz" "$_z")"
+            [ -n "$_f" ] && uci -q delete "firewall.$_f" && changed=1
+            fw_unnote "fwd $_z $_cz"
+            msg="${msg:+$msg, }проброс $_cz -> $_z убран — устройств клиентов в зоне $_cz больше нет"
+        done
+    fi
 
     if [ "$changed" = 1 ]; then
         uci -q commit firewall

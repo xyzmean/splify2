@@ -4094,5 +4094,75 @@ out="$(rpcd apply)"
 check "оба устройства в lan — проброс один" "lan" "$(fwd_srcs steer_iface)"
 rm -f "$T/uci.store"; : > "$T/uci.store"
 
+# ---- устройство клиентов БЕЗ ЗОНЫ ВОВСЕ: зону заводим мы -----------------------------------
+#
+# Второе обращение по Андромеде, и корень у него общий с первым: интерфейс, не входящий ни в
+# одну зону, fw4 роняет дважды. `forward` — маршрутизации через нас нет совсем; `input` — до
+# самого роутера с него не доходит ничего, включая завёрнутый нами DNS (заворот делает DNAT на
+# адрес роутера, дальше пакет идёт через `input`). Снаружи это «выбрал tailscale0 в клиентах,
+# правила стоят, а DNS не подхватывает». Без зоны поднимаются ровно те интерфейсы, из-за
+# которых перечень клиентов и появился: tailscale0 и интерфейс сервера WireGuard от мастера
+# OpenWrt. Условие ровно одно — СВОЕЙ ЗОНЫ НЕТ; лежащее в чужой зоне не трогаем (проверено выше).
+zone_id_by_name() {  # ИМЯ_ЗОНЫ -> идентификатор секции
+    sed -n 's/^firewall\.\([^.=]*\)\.name='"$1"'$/\1/p' "$T/uci.store" | while IFS= read -r _z; do
+        [ "$(uci_get "firewall.$_z")" = zone ] && { printf '%s' "$_z"; return 0; }
+    done
+}
+zone_devs() {  # ИМЯ_ЗОНЫ -> её устройства через пробел
+    _zd_i="$(zone_id_by_name "$1")"
+    [ -n "$_zd_i" ] || return 0
+    uci_get "firewall.$_zd_i.device" | tr ' ' '\n' | grep . | sort | tr '\n' ' ' | sed 's/ $//'
+}
+fwd_dests() {  # ЗОНА-ИСТОЧНИК -> зоны-получатели пробросов из неё
+    sed -n 's/^firewall\.\([^.=]*\)\.src='"$1"'$/\1/p' "$T/uci.store" | while IFS= read -r _f; do
+        [ "$(uci_get "firewall.$_f")" = forwarding ] && { uci_get "firewall.$_f.dest"; echo; }
+    done | grep . | sort | tr '\n' ' ' | sed 's/ $//'
+}
+rm -f "$T/uci.store" "$T/etc/fw-owned"; : > "$T/uci.store"
+uci_set 'firewall.@zone[0]' zone;  uci_set 'firewall.@zone[0].name' lan; uci_set 'firewall.@zone[0].device' 'br-lan'
+uci_set 'firewall.@zone[1]' zone;  uci_set 'firewall.@zone[1].name' wan; uci_set 'firewall.@zone[1].device' 'eth1'
+uci_set 'firewall.@forwarding[0]' forwarding; uci_set 'firewall.@forwarding[0].src' lan; uci_set 'firewall.@forwarding[0].dest' wan
+printf '%s\n' '{"schema":1,"lan_devices":["br-lan","tailscale0"],"outputs":{"direct":{"kind":"direct"},"vpn":{"kind":"interface","device":"wg0","on_fail":"direct"}},"channels":[]}' > "$T/etc/spec.json"
+out="$(rpcd apply)"
+check "apply с беззонным устройством клиентов прошёл" "true" "$(printf '%s' "$out" | jget ok)"
+# Только беззонное: br-lan лежит в lan и остаётся там.
+check "зона клиентов заведена и в ней ровно беззонное устройство" "tailscale0" "$(zone_devs steer_clients)"
+check "br-lan в неё не попал" "br-lan" "$(zone_devs lan)"
+# input ACCEPT — то самое отличие от зон туннелей: без него будет маршрутизация без имён.
+check "у зоны клиентов input ACCEPT" "ACCEPT" "$(uci_get "firewall.$(zone_id_by_name steer_clients).input")"
+check "forward ACCEPT — иначе смысла в зоне нет" "ACCEPT" "$(uci_get "firewall.$(zone_id_by_name steer_clients).forward")"
+# NAT здесь не нужен: адреса клиентов транслирует зона туннеля, куда пакет уходит.
+check "NAT у зоны клиентов не включается" "0" "$(uci_get "firewall.$(zone_id_by_name steer_clients).masq")"
+# Пробросы — ИЗ зоны: в зону туннелей (её заводит синхронизация той зоны) и в wan, без которого
+# всё, что не названо в правилах, продолжало бы молча падать.
+check "из зоны клиентов пробрасывается и в туннель, и в wan" "steer_iface wan" "$(fwd_dests steer_clients)"
+check "в зону туннелей пробрасывается и из lan, и из зоны клиентов" "lan steer_clients" "$(fwd_srcs steer_iface)"
+# Обратных пробросов не заводим ВОВСЕ: `lan -> зона клиентов` открыл бы локальной сети доступ
+# к пирам чужого туннеля, а об этом нас никто не просил.
+check "в зону клиентов не пробрасывается ниоткуда" "" "$(fwd_srcs steer_clients)"
+check "зона и проброс в wan записаны за нами" "yes" \
+      "$(grep -qx 'zone steer_clients' "$T/etc/fw-owned" 2>/dev/null &&
+         grep -qx 'fwd wan steer_clients' "$T/etc/fw-owned" 2>/dev/null && echo yes || echo no)"
+# Повторный apply ничего не дублирует.
+out="$(rpcd apply)"
+check "второй apply зону и пробросы не дублирует" "steer_iface wan" "$(fwd_dests steer_clients)"
+# Устройство ушло из спеки — зона уходит вместе с ОБОИМИ пробросами. Оставленный проброс с
+# `src` на удалённую зону fw4 отвергает так же, как с `dest`, — роутер остался бы без фаервола.
+printf '%s\n' '{"schema":1,"lan_devices":["br-lan"],"outputs":{"direct":{"kind":"direct"},"vpn":{"kind":"interface","device":"wg0","on_fail":"direct"}},"channels":[]}' > "$T/etc/spec.json"
+out="$(rpcd apply)"
+check "устройства беззонных клиентов ушли — зоны нет" "" "$(zone_id_by_name steer_clients)"
+check "и ни одного проброса, её касающегося" "" "$(fwd_dests steer_clients)$(fwd_srcs steer_clients)"
+check "а проброс lan -> зона туннелей остался" "lan" "$(fwd_srcs steer_iface)"
+# Человек положил tailscale0 в свою зону — своей мы больше не заводим, только проброс.
+rm -f "$T/uci.store" "$T/etc/fw-owned"; : > "$T/uci.store"
+uci_set 'firewall.@zone[0]' zone;  uci_set 'firewall.@zone[0].name' lan; uci_set 'firewall.@zone[0].device' 'br-lan'
+uci_set 'firewall.@zone[1]' zone;  uci_set 'firewall.@zone[1].name' wan; uci_set 'firewall.@zone[1].device' 'eth1'
+uci_set 'firewall.ts' zone;        uci_set 'firewall.ts.name' ts;        uci_set 'firewall.ts.device' 'tailscale0'
+printf '%s\n' '{"schema":1,"lan_devices":["br-lan","tailscale0"],"outputs":{"direct":{"kind":"direct"},"vpn":{"kind":"interface","device":"wg0","on_fail":"direct"}},"channels":[]}' > "$T/etc/spec.json"
+out="$(rpcd apply)"
+check "у устройства есть своя зона — нашей не появляется" "" "$(zone_id_by_name steer_clients)"
+check "ему хватает проброса из его зоны" "lan ts" "$(fwd_srcs steer_iface)"
+rm -f "$T/uci.store"; : > "$T/uci.store"
+
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo "ЕСТЬ ПРОВАЛЫ: $fails")"
 [ "$fails" -eq 0 ]

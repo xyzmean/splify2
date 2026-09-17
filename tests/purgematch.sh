@@ -223,6 +223,9 @@ firewall.@zone[1].device=$_dev
 firewall.@zone[2]=zone
 firewall.@zone[2].name=steer_iface
 firewall.@zone[2].device=wg0
+firewall.@zone[3]=zone
+firewall.@zone[3].name=steer_clients
+firewall.@zone[3].device=tailscale0
 firewall.@forwarding[0]=forwarding
 firewall.@forwarding[0].src=lan
 firewall.@forwarding[0].dest=wan
@@ -232,6 +235,12 @@ firewall.@forwarding[1].dest=steer_vless
 firewall.@forwarding[2]=forwarding
 firewall.@forwarding[2].src=lan
 firewall.@forwarding[2].dest=steer_iface
+firewall.@forwarding[3]=forwarding
+firewall.@forwarding[3].src=steer_clients
+firewall.@forwarding[3].dest=wan
+firewall.@forwarding[4]=forwarding
+firewall.@forwarding[4].src=steer_clients
+firewall.@forwarding[4].dest=steer_iface
 rpcd.@rpcd[0]=rpcd
 rpcd.@rpcd[0].timeout=$_rt
 zapret.config=zapret
@@ -256,6 +265,9 @@ zone steer_vless
 dev steer_vless tun-vless
 zone steer_iface
 dev steer_iface wg0
+zone steer_clients
+dev steer_clients tailscale0
+fwd wan steer_clients
 EOF
     echo '{"manifest":1}' > "$T/etc/splify2/manifest.json"
     echo '{"outputs":{}}' > "$T/etc/steer/spec.json"
@@ -347,9 +359,14 @@ check "показ говорит, чем удалять" "yes" "$(outhas '--yes'
 setup
 run_purge --yes
 check "удаление завершается успехом" "0" "$rc"
-# ПОРЯДОК. Сначала правило проброса, потом зона — и так по каждой зоне. Обратный порядок даёт
+# ПОРЯДОК. Сначала правила проброса, потом зона — и так по каждой зоне. Обратный порядок даёт
 # то же хранилище, но живой fw4 отказывается перезагрузить набор со ссылкой в пустоту.
-check "проброс удаляется раньше своей зоны" "forwarding zone forwarding zone " "$(del_seq)"
+#
+# Первой уходит зона клиентов, и у неё пробросов ДВА: она источник, а не получатель, и ведут
+# они из неё в wan и в зону туннелей. Проброс с `src` на удалённую зону fw4 отвергает точно
+# так же, как с `dest`, — поэтому снимаются оба и оба раньше самой зоны.
+check "правила проброса удаляются раньше своей зоны" \
+      "forwarding forwarding zone forwarding zone forwarding zone " "$(del_seq)"
 check "наши зоны удалены" "lan " "$(zones)"
 check "чужая зона lan не тронута" "br-lan" "$(val 'firewall.@zone\[0\].device')"
 check "пробросы в наши зоны удалены" "wan " "$(fwds)"
@@ -415,7 +432,8 @@ check "чужое устройство не вынесено" "eth7" "$(val 'fir
 check "своё устройство вынесено" "1" "$(grep -c '^del_list firewall.@zone\[1\].device=tun-vless' "$T/uci.log")"
 # Вторая зона в этой же песочнице наша целиком — она уходит, и уходит после своего
 # проброса. То есть чужая зона останавливает чистку только себя, а не всей работы.
-check "наша вторая зона удалена, и снова после проброса" "forwarding zone " "$(del_seq)"
+check "наши остальные зоны удалены, и снова после своих пробросов" \
+      "forwarding forwarding zone forwarding zone " "$(del_seq)"
 check "о чужой зоне сказано" "yes" "$(outhas 'steer_vless')"
 
 # ---- --keep-config -----------------------------------------------------------------
