@@ -276,8 +276,10 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
                 <p className="text-xs text-muted-foreground">
                     Идентификатор этого роутера для панели:{' '}
                     <span className="select-all font-mono">{sub.hwid}</span>
-                    {' '}— выведен из MAC порта, поэтому переживает сброс настроек. Сам MAC панели
-                    не отправляется.
+                    {/* Строка выведена из MAC порта — потому она и переживает сброс настроек.
+                      * Откуда именно она берётся, человеку не нужно; нужно, что она не меняется
+                      * и что сам MAC наружу не уходит. */}
+                    {' '}— он переживает сброс настроек. MAC роутера панели не отправляется.
                 </p>
             )}
 
@@ -356,7 +358,9 @@ export default function VlessPanel({ name, output, onChange, saved }: Props) {
                         />
                         <span className="font-medium">Первый рабочий</span>
                         <span className="text-xs text-muted-foreground">
-                            движок сам проверит узлы при подъёме — не сломается при обновлении подписки
+                            {/* Узлы проверяет движок при подъёме и берёт первый ответивший — сам
+                              * механизм на экране не нужен, нужно его следствие. */}
+                            не сломается при обновлении подписки
                         </span>
                     </label>
 

@@ -18,8 +18,11 @@ export default function FirstRun({ live }: { live: Live }) {
                 <div className="rounded-2xl border border-border bg-card p-5 shadow-card">
                     <h1 className="sp-title">Движок не установлен</h1>
                     <p className="mt-2 text-sm text-muted-foreground">
-                        splify2 — это интерфейс, а маршрутизацией занимается <b>steer</b>. Без него интерфейсу нечего ни
-                        проверить, ни применить, поэтому начинать надо отсюда.
+                        {/* Разделение ролей (splify2 — интерфейс, steer — маршрутизация) на экран
+                          * не выносим: человеку нужно не устройство продукта, а то, что до
+                          * установки движка ничего не заработает, и с чего начать. */}
+                        Маршрутизацией занимается <b>steer</b>. Пока его нет, проверять и применять
+                        нечего — начните отсюда.
                     </p>
                     <ul className="mt-3 space-y-1.5 text-sm">
                         <li>

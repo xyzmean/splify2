@@ -259,7 +259,9 @@ export function useLive(): Live {
             if (!v || typeof v !== 'object') return null
             const o = v as { ok?: unknown; error?: unknown }
             if (o.ok === false || o.ok === 0)
-                return typeof o.error === 'string' && o.error ? o.error : 'бэкенд вернул ошибку'
+                /* Текста у отказа может не быть вовсе — тогда своя строка. Слово «бэкенд»
+                 * человеку ничего не говорит: для него отказал роутер. */
+                return typeof o.error === 'string' && o.error ? o.error : 'роутер вернул ошибку'
             return null
         }
         const asText = (e: unknown): string => String(e instanceof Error ? e.message : e)

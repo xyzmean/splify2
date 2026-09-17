@@ -204,7 +204,9 @@ export default function Doh({ live }: { live: Live }) {
                 <CardContent className="space-y-2 text-sm">
                     <div>{t('Пакет https-dns-proxy не установлен.')}</div>
                     <div className="text-xs text-muted-foreground">
-                        {t('Он объявлен зависимостью splify2, поэтому обычно приезжает вместе с ним. Если его нет — поставьте его пакетным менеджером роутера.')}
+                        {/* Пакет объявлен зависимостью splify2 и обычно приезжает вместе с ним;
+                          * раз его нет — ставить руками. Человеку нужно только действие. */}
+                        {t('Поставьте его пакетным менеджером роутера.')}
                     </div>
                 </CardContent>
             </Card>
