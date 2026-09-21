@@ -1618,6 +1618,20 @@ out="$(rpcd spec_set "$(spec_req "$(vless_spec_named de-1 2)")")"
 check "смена узла у выхода с дефисом в имени — params" "params" \
       "$(cat "$T/var/vless-dirty" 2>/dev/null)"
 
+# ИМЯ ВЫХОДА — ТОЛЬКО ИМЯ. vless_nodes и vless_probe отдают аргумент движку как есть, а движок
+# трактует аргумент с ведущим `/` как путь к файлу подписки: `{"output":"/etc/passwd"}` читал
+# любой файл роутера, и его строки уезжали в ответ примерами пропусков. Рубеж «путь — только
+# свой» стоял лишь на поле `sub`. outbound_probe подставлял имя в регулярное выражение sed без
+# проверки, тогда как соседний outbound_geo проверяет состав имени.
+: > "$T/steer.log"
+out="$(rpcd vless_nodes '{"output":"/etc/passwd"}')"
+check "vless_nodes: путь вместо имени выхода — отказ" "false" "$(printf '%s' "$out" | jget ok)"
+check "vless_nodes: движок с путём не вызывался" "0" "$(grep -c 'vless-nodes /etc/passwd' "$T/steer.log")"
+out="$(rpcd vless_probe '{"output":"--spec","node":0}')"
+check "vless_probe: флаг вместо имени выхода — отказ" "false" "$(printf '%s' "$out" | jget ok)"
+out="$(rpcd outbound_probe '{"output":"a/b"}')"
+check "outbound_probe: имя с косой — отказ" "false" "$(printf '%s' "$out" | jget ok)"
+
 # ИМЯ ПОДПИСКИ НЕ ЛАТИНИЦЕЙ. sub_slug оставлял от «Дом» пустоту (tr побайтно превращал каждый
 # байт UTF-8 в подчёркивание, sed снимал хвост), а sub_use на пустом имени подставлял main —
 # то есть вторая подписка человека молча ПЕРЕЗАПИСЫВАЛА основную, а sub_del по такому имени
