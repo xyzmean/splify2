@@ -146,7 +146,10 @@ fi
 [ -n "$ARCH" ] || die "не удалось определить архитектуру пакетов"
 
 mkdir -p "$TMP"
-trap 'rm -rf "$TMP"' EXIT INT TERM
+# Ловушка INT/TERM завершает скрипт (exit запускает ловушку EXIT, та убирает каталог); одна
+# общая на EXIT INT TERM убирала каталог по сигналу и продолжала установку без него.
+trap 'rm -rf "$TMP"' EXIT
+trap 'exit 143' INT TERM
 
 say "splify2: установка"
 info "архитектура: $ARCH"
@@ -420,7 +423,9 @@ info "установлен"
 # вызовы (установка, подписка, каталог стратегий) на середине. Подробно — в
 # files/etc/uci-defaults/99-splify2, который делает то же самое при установке пакетом; здесь
 # повтор на случай, если uci-defaults на этой системе отложен до перезагрузки.
-_rt="$(uci -q get rpcd.@rpcd[0].timeout)"
+# `|| true` — под set -e: отсутствующий ключ даёт uci код 1, и без этого установщик молча
+# завершался ПОСЛЕ установки пакетов — без рестарта rpcd, пустой спеки и слова «Готово».
+_rt="$(uci -q get rpcd.@rpcd[0].timeout 2>/dev/null || true)"
 case "${_rt:-30}" in ''|*[!0-9]*) _rt=30 ;; esac
 if [ "$_rt" -lt 120 ]; then
     uci -q set rpcd.@rpcd[0].timeout=120 && uci -q commit rpcd
