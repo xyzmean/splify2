@@ -323,8 +323,10 @@ cat > "$T/etc/spec.json" <<EOF
 EOF
 
 # curl отдаёт заранее положенное тело по имени файла: размерами иначе не поуправлять.
+# CURL_SLEEP — задержка на запрос: нужна проверке обрыва по TERM посреди прогона.
 cat > "$T/bin/curl" <<'EOF'
 #!/bin/sh
+[ -n "${CURL_SLEEP:-}" ] && sleep "$CURL_SLEEP"
 out=""; url=""
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -1293,6 +1295,43 @@ rm -f "$T/rcd/S94steer" "$T/applied.log"
 run_update
 check "работающей службе правила ставятся, даже если ссылка снята" "yes" \
       "$([ -s "$T/applied.log" ] && echo yes || echo no)"
+
+# ---- HTML вместо манифеста: рабочий манифест не перезаписывается ---------------------------
+#
+# Заглушка провайдера или captive portal отдают 200 и HTML; `[ -s ]` такой файл пропускает.
+# Манифест подменялся без проверки, jsonfilter на нём молчал, и каждый список «нет в манифесте,
+# пропущен» — до следующей удачной ночи каталог был пуст и в интерфейсе.
+rm -rf "$T/lists" "$T/var/last-update"
+mkdir -p "$T/lists/domains"
+cp "$T/manifest.src" "$T/manifest.good"
+printf '<html><body>blocked</body></html>\n' > "$T/manifest.src"
+: > "$T/syslog"
+run_update
+check "HTML вместо манифеста: рабочий манифест остался JSON" "yes" \
+      "$(python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$T/etc/manifest.json" 2>/dev/null && echo yes || echo no)"
+check "и об этом сказано" "yes" "$(grep -q 'манифест' "$T/syslog" && grep -q 'не JSON\|не разбирается' "$T/syslog" && echo yes || echo no)"
+cp "$T/manifest.good" "$T/manifest.src"
+
+# ---- TERM посреди прогона: скрипт ЗАВЕРШАЕТСЯ, а не продолжает без замка --------------------
+#
+# Ловушка на INT/TERM снимала каталог замка и... продолжала работу: флаги failed/changed
+# терялись вместе с ним, а второй прогон мог начаться параллельно — ровно то, ради чего замок.
+rm -rf "$T/lists" "$T/var/last-update" "$T/var/update.lock"
+mkdir -p "$T/lists/domains"
+CURL_SLEEP=5 SANDBOX="$T" PATH="$T/bin:$PATH" STEER="$T/bin/steer" SPEC="$T/etc/spec.json" \
+    LISTS="$T/lists" MANIFEST="$T/etc/manifest.json" STAMP="$T/var/last-update" \
+    LOCK="$T/var/update.lock" FETCH_SH="$ROOT/files/usr/lib/splify2/fetch.sh" \
+    STEER_INIT="$T/bin/initd-steer" RC_D="$T/rcd" \
+    sh "$SCRIPT" > "$T/out-term" 2>&1 &
+bg=$!
+sleep 1
+kill -TERM "$bg" 2>/dev/null
+i=0; while [ $i -lt 40 ] && kill -0 "$bg" 2>/dev/null; do sleep 0.25; i=$((i + 1)); done
+alive=0; kill -0 "$bg" 2>/dev/null && alive=1
+kill -KILL "$bg" 2>/dev/null; wait "$bg" 2>/dev/null
+check "TERM: прогон завершился, а не продолжил работу" "0" "$alive"
+check "TERM: замок снят" "no" "$([ -d "$T/var/update.lock" ] && echo yes || echo no)"
+pkill -f "$T/bin/curl" 2>/dev/null
 
 printf '\n%s\n' "$([ "$fails" -eq 0 ] && echo 'все проверки прошли' || echo 'ЕСТЬ ПРОВАЛЫ')"
 [ "$fails" -eq 0 ]
