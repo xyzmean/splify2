@@ -239,10 +239,27 @@ for expr in os.environ.get('EXPRS', '').splitlines():
     # Числовой индекс массива (`@[0].tag_name`) — им читается список релизов GitHub.
     # Приводится к обычному шагу пути: скобки становятся точками, а walk() ниже понимает
     # цифровой шаг как индекс в списке.
+    # Грамматика настоящего jsonfilter: голый шаг пути — LABEL [a-zA-Z_][a-zA-Z0-9_]*; имя с
+    # дефисом или точкой годится только в скобках `['имя']`. Заглушка этому раньше не
+    # следовала и делила путь по точкам как угодно — из-за чего стенд не видел, что имя
+    # выхода `de-1` ломает каждый запрос по нему (I-284).
     norm = expr.replace('@.', '', 1).replace('[*]', '.*')
+    norm = re.sub(r"\[(['\"])([^'\"]*)\1\]", lambda m: '.\x00' + m.group(2), norm)
     norm = norm.replace('[', '.').replace(']', '')
     parts = [x for x in norm.split('.') if x and x != '@']
-    for v in walk(d, parts):
+    bad = False
+    clean = []
+    for x in parts:
+        if x.startswith('\x00'):
+            clean.append(x[1:])
+        elif x == '*' or x.isdigit() or re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', x):
+            clean.append(x)
+        else:
+            bad = True
+    if bad:
+        sys.stderr.write('Syntax error\n')
+        sys.exit(1)
+    for v in walk(d, clean):
         print(render(v))
 PY
 EOF
@@ -1580,6 +1597,26 @@ check "смена узла у существующего выхода — params
 out="$(rpcd apply)"
 check "apply сигналит экземпляру, а набор не пересобирает" "yes;no" \
       "$(grep -q 'vless_vpn' "$T/ubus.log" && echo yes || echo no);$(grep -qx start "$T/initd.log" && echo yes || echo no)"
+
+# ИМЯ ВЫХОДА С ДЕФИСОМ. Движок и интерфейс разрешают в имени выхода `-` и `.`, а объект rpcd
+# подставлял имя в путь jsonfilter голым: `@.outputs.de-1.node` — для jsonfilter это синтаксическая
+# ошибка, оба отпечатка выходили пустыми и равными, смена узла не давала params, и выбранный
+# узел не применялся до перезагрузки (I-284). Имя обязано идти в скобках: `@.outputs['de-1']`.
+vless_spec_named() {  # ИМЯ [НОМЕР_УЗЛА]
+    python3 -c 'import json,sys
+o = {"kind": "vless", "sub_file": sys.argv[2]}
+if len(sys.argv) > 3 and sys.argv[3]:
+    o["node"] = int(sys.argv[3])
+print(json.dumps({"schema": 1, "outputs": {sys.argv[1]: o}, "channels": []}))' "$1" "$T/etc/sub.txt" "${2:-}"
+}
+rm -f "$T/var/vless-dirty"
+printf '{"schema":1,"outputs":{},"channels":[]}\n' > "$T/etc/spec.json"
+out="$(rpcd spec_set "$(spec_req "$(vless_spec_named de-1 1)")")"
+: > "$T/initd.log"; : > "$T/ubus.log"
+out="$(rpcd apply)"
+out="$(rpcd spec_set "$(spec_req "$(vless_spec_named de-1 2)")")"
+check "смена узла у выхода с дефисом в имени — params" "params" \
+      "$(cat "$T/var/vless-dirty" 2>/dev/null)"
 
 # Новая подписка тоже перечитывается клиентом только при перезапуске, и sub_set помечал это
 # ПУСТЫМ файлом. Пустой признак — не «параметры», а отсутствие слова: он затирал instances

@@ -282,8 +282,8 @@ case "$2" in
             else
                 json_add_boolean drifted 0
             fi
-            json_add_int queue "$(printf '%s' "$st" | jsonfilter -e "@.outputs.$o.queue" 2>/dev/null || echo 0)"
-            case "$(printf '%s' "$st" | jsonfilter -e "@.outputs.$o.up" 2>/dev/null)" in
+            json_add_int queue "$(printf '%s' "$st" | jsonfilter -e "@.outputs['$o'].queue" 2>/dev/null || echo 0)"
+            case "$(printf '%s' "$st" | jsonfilter -e "@.outputs['$o'].up" 2>/dev/null)" in
                 true) json_add_boolean up 1 ;;
                 *)    json_add_boolean up 0 ;;
             esac

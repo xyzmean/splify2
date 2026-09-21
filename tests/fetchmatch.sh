@@ -139,12 +139,18 @@ def out(v):
     elif v is not None:
         print(v)
 
-m = re.fullmatch(r'@\.outputs\.([^.]+)\.(\w+)', expr)
+# Грамматика настоящего jsonfilter: голый шаг — LABEL [A-Za-z_][A-Za-z0-9_]*, имя с дефисом
+# или точкой годится только в скобках `['имя']`. Заглушка следует ей, иначе она не увидела бы,
+# что имя выхода `wg-home` ломает запрос (I-284).
+m = re.fullmatch(r"@\.outputs(?:\.([A-Za-z_]\w*)|\['([^']+)'\])\.(\w+)", expr)
 if m:
-    o = (d.get('outputs') or {}).get(m.group(1))
-    if isinstance(o, dict) and m.group(2) in o:
-        out(o[m.group(2)])
+    o = (d.get('outputs') or {}).get(m.group(1) or m.group(2))
+    if isinstance(o, dict) and m.group(3) in o:
+        out(o[m.group(3)])
     sys.exit(0)
+if expr.startswith('@.outputs.'):
+    sys.stderr.write('Syntax error\n')
+    sys.exit(1)
 if expr == '@.node':
     out(d.get('node'))
     sys.exit(0)
@@ -495,6 +501,11 @@ check "raw без refs/heads" "xyzmean/r main lists/a.lst" \
       "$(parts https://raw.githubusercontent.com/xyzmean/r/main/lists/a.lst)"
 check "ссылка релиза сводится к ветке dist" "xyzmean/steer dist p.apk" \
       "$(parts https://github.com/xyzmean/steer/releases/download/v1.0.0/p.apk)"
+# Адрес манифеста по умолчанию — `releases/latest/download/`: без этой формы у каталога
+# списков не было ни одного обходного пути, и там, где githubusercontent закрыт, манифест
+# не обновлялся вовсе (а на свежем роутере каталога не было).
+check "ссылка latest-релиза сводится к ветке dist" "xyzmean/splify2-lists dist lists.json" \
+      "$(parts https://github.com/xyzmean/splify2-lists/releases/latest/download/lists.json)"
 check "raw без пути к файлу не разбирается" "НЕ_РАЗОБРАН" \
       "$(parts https://raw.githubusercontent.com/xyzmean/r/main)"
 check "чужой адрес не разбирается" "НЕ_РАЗОБРАН" "$(parts https://example.org/a.lst)"

@@ -382,9 +382,9 @@ doh_out() {
     for _do_o in $_do_want $("$STEER" outputs --spec "$SPEC" 2>/dev/null); do
         [ "$_do_o" = direct ] && continue
         case "$_do_o" in *[!a-zA-Z0-9_-]*) continue ;; esac
-        [ "$(printf '%s' "$_do_st" | jsonfilter -e "@.outputs.$_do_o.up" 2>/dev/null)" = true ] ||
+        [ "$(printf '%s' "$_do_st" | jsonfilter -e "@.outputs['$_do_o'].up" 2>/dev/null)" = true ] ||
             continue
-        _do_d="$(printf '%s' "$_do_st" | jsonfilter -e "@.outputs.$_do_o.device" 2>/dev/null)"
+        _do_d="$(printf '%s' "$_do_st" | jsonfilter -e "@.outputs['$_do_o'].device" 2>/dev/null)"
         [ -n "$_do_d" ] || continue
         printf '%s %s' "$_do_o" "$_do_d"
         return 0
@@ -452,7 +452,7 @@ zapret_needs_instances() {
     [ -n "$_zn" ] || return 1
     _zn_st="$("$STEER" status --spec "$SPEC" 2>/dev/null)"
     for _zn_o in $_zn; do
-        [ "$(printf '%s' "$_zn_st" | jsonfilter -e "@.outputs.$_zn_o.up" 2>/dev/null)" = true ] ||
+        [ "$(printf '%s' "$_zn_st" | jsonfilter -e "@.outputs['$_zn_o'].up" 2>/dev/null)" = true ] ||
             return 0
     done
     return 1

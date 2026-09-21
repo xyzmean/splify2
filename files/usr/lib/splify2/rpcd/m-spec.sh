@@ -18,7 +18,7 @@ zm_mark() {  # печатает МЕТКУ
     for _zm_o in $("$STEER" outputs --spec "$SPEC" 2>/dev/null); do
         [ "$_zm_o" = direct ] && continue
         case "$_zm_o" in *[!a-zA-Z0-9_-]*) continue ;; esac
-        _zm_m="$(printf '%s' "$_zm_st" | jsonfilter -e "@.outputs.$_zm_o.mark" 2>/dev/null)"
+        _zm_m="$(printf '%s' "$_zm_st" | jsonfilter -e "@.outputs['$_zm_o'].mark" 2>/dev/null)"
         case "${_zm_m:-}" in 0x*) printf '%s' "$_zm_m"; return 0 ;; esac
     done
     return 1
@@ -93,9 +93,9 @@ vless_fingerprint() {  # ФАЙЛ_СПЕКИ
     [ -s "$f" ] || { echo none; return; }
     for o in $("$STEER" outputs --kind vless --spec "$f" 2>/dev/null); do
         printf '%s:%s:%s:%s\n' "$o" \
-            "$(jsonfilter -i "$f" -e "@.outputs.$o.sub_file" 2>/dev/null)" \
-            "$(jsonfilter -i "$f" -e "@.outputs.$o.node" 2>/dev/null)" \
-            "$(jsonfilter -i "$f" -e "@.outputs.$o.nodes[*]" 2>/dev/null | tr '\n' ',')"
+            "$(jsonfilter -i "$f" -e "@.outputs['$o'].sub_file" 2>/dev/null)" \
+            "$(jsonfilter -i "$f" -e "@.outputs['$o'].node" 2>/dev/null)" \
+            "$(jsonfilter -i "$f" -e "@.outputs['$o'].nodes[*]" 2>/dev/null | tr '\n' ',')"
     done | md5sum | awk '{print $1}'
 }
 
@@ -108,8 +108,8 @@ obfs_fingerprint() {  # ФАЙЛ_СПЕКИ
     [ -s "$f" ] || { echo none; return; }
     for o in $("$STEER" outputs --obfs --spec "$f" 2>/dev/null); do
         printf '%s:%s:%s\n' "$o" \
-            "$(jsonfilter -i "$f" -e "@.outputs.$o.obfs.server" 2>/dev/null)" \
-            "$(jsonfilter -i "$f" -e "@.outputs.$o.obfs.listen" 2>/dev/null)"
+            "$(jsonfilter -i "$f" -e "@.outputs['$o'].obfs.server" 2>/dev/null)" \
+            "$(jsonfilter -i "$f" -e "@.outputs['$o'].obfs.listen" 2>/dev/null)"
     done | md5sum | awk '{print $1}'
 }
 

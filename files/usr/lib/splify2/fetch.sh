@@ -216,9 +216,9 @@ fetch_out() {
     [ -n "$_fo_st" ] || return 1
     for _fo_n in $("$FETCH_STEER" outputs --spec "$FETCH_SPEC" 2>/dev/null); do
         case "$_fo_n" in *[!a-zA-Z0-9_-]*) continue ;; esac
-        _fo_up="$(printf '%s' "$_fo_st" | jsonfilter -e "@.outputs.$_fo_n.up" 2>/dev/null)"
+        _fo_up="$(printf '%s' "$_fo_st" | jsonfilter -e "@.outputs['$_fo_n'].up" 2>/dev/null)"
         [ "$_fo_up" = "true" ] || [ "$_fo_up" = "1" ] || continue
-        _fo_t="$(printf '%s' "$_fo_st" | jsonfilter -e "@.outputs.$_fo_n.table" 2>/dev/null)"
+        _fo_t="$(printf '%s' "$_fo_st" | jsonfilter -e "@.outputs['$_fo_n'].table" 2>/dev/null)"
         case "${_fo_t:-}" in ''|*[!0-9]*) continue ;; esac
         printf '%s %s\n' "$_fo_n" "$_fo_t"
         return 0
