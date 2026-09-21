@@ -129,6 +129,14 @@ fetch_gh_parts() {  # URL
             _gp="${1#https://github.com/}"
             printf '%s %s %s' "${_gp%%/releases/download/*}" "$FETCH_DIST_BRANCH" "${1##*/}"
             return 0 ;;
+        # Форма `releases/latest/download/` — это адрес манифеста каталога списков по
+        # умолчанию. Без этой ветки у манифеста не было ни одного обходного пути: прямой
+        # адрес перенаправляет на release-assets.githubusercontent.com — ровно закрытый хост,
+        # — и там, где он закрыт, каталог не обновлялся вовсе, а на свежем роутере его не было.
+        https://github.com/*/releases/latest/download/*)
+            _gp="${1#https://github.com/}"
+            printf '%s %s %s' "${_gp%%/releases/latest/download/*}" "$FETCH_DIST_BRANCH" "${1##*/}"
+            return 0 ;;
         *) return 1 ;;
     esac
     _gp_o="${_gp%%/*}"; _gp="${_gp#*/}"
