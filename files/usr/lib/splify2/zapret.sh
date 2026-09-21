@@ -572,6 +572,16 @@ zp_apply_global() {  # ИМЯ
         printf "'\n"
     } >> "$_zg_tmp"
     grep -q "option NFQWS_OPT '" "$_zg_tmp" || { rm -f "$_zg_tmp"; return 1; }
+    # Проверка ключей ДО записи — тем же dry-run, что у выхода (zp_apply_out). Без неё ключ,
+    # которого эта версия nfqws не знает, записывался в конфигурацию, служба zapret падала при
+    # перезапуске, и обход ВСЕГО роутера лежал; у выхода тот же вход отвергался до записи.
+    zp_block "$1" > "$_zg_tmp.keys"
+    if zp_installed && ! zp_dry_run "$_zg_tmp.keys"; then
+        rm -f "$_zg_tmp" "$_zg_tmp.keys"
+        ZP_NOTE="ключи стратегии $1 не принимает nfqws этой версии"
+        return 1
+    fi
+    rm -f "$_zg_tmp.keys"
     mv "$_zg_tmp" "$ZP_CONF" || return 1
     zp_ports_add NFQWS_PORTS_TCP "2053,2083,2087,2096,8443"
     zp_ports_add NFQWS_PORTS_UDP "19294-19344,50000-50100"

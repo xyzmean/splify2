@@ -419,6 +419,26 @@ check "проверка ключей: обычный файл с перевод�
     "$(grep -c -- '--dpi-desync=fake' "$zp_nfqws_args" 2>/dev/null; true)"
 ZP_NFQWS="$tmp/nfqws-none"
 
+# ---- применение на весь роутер тоже проверяет ключи ДО записи -----------------------------
+#
+# У выхода (zp_apply_out) негодная стратегия отвергается dry-run'ом до того, как файл встанет на
+# место. У применения на весь роутер (zp_apply_global) проверки не было: ключ, которого эта
+# версия nfqws не знает, записывался в конфигурацию, служба zapret падала при перезапуске, и
+# обход ВСЕГО роутера лежал. Подставной nfqws отвечает на --dry-run отказом — конфигурация
+# обязана остаться прежней.
+cat > "$tmp/nfqws-refuse" <<'REF'
+#!/bin/sh
+case "$*" in *--dry-run*) exit 1 ;; esac
+exit 0
+REF
+chmod +x "$tmp/nfqws-refuse"
+ZP_NFQWS="$tmp/nfqws-refuse"
+cp "$ZP_CONF" "$tmp/conf.before"
+zp_apply_global v1 >/dev/null 2>&1
+check "весь роутер: негодные ключи — отказ применения" "1" "$?"
+check "весь роутер: конфигурация не тронута" "same" "$(cmp -s "$ZP_CONF" "$tmp/conf.before" && echo same || echo differs)"
+ZP_NFQWS="$tmp/nfqws-none"
+
 # ---- СБОРКА ПАЧКИ: слои переживают смену основной стратегии --------------------------
 #
 # У Zapret Manager значение `option NFQWS_OPT` — не одна стратегия, а пачка блоков: слой
