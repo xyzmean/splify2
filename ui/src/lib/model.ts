@@ -964,13 +964,21 @@ export function expandNarrow(spec: Spec): Spec {
         const rest = files.filter((f) => !narrowed.has(f))
         const bare = !rest.length && !plain.match.domains_files?.length && !plain.match.any
         const gs = [...groups.values()]
-        if (bare && gs.length === 1) {
-            channels.push({ ...plain, match: { ...plain.match, prefixes_files: files, proto: gs[0].n.proto, ports: gs[0].n.ports } })
-            continue
+        /* Правило, в котором кроме суженных подсетей ничего нет, несёт ПЕРВУЮ группу само:
+         * родитель с пустым `match` — это канал, который ничем не совпадает, и движок отвергает
+         * такую спеку целиком («channel … matches nothing»). Пока сокращение работало только при
+         * одной группе, правило из двух суженных наборов (udp у Discord и tcp 443 у второго)
+         * уезжало в spec_set именно так — и «Применить» падало для всех правил разом. */
+        let sats = gs
+        if (bare) {
+            const [first, ...others] = gs
+            channels.push({ ...plain, match: { ...plain.match, prefixes_files: first.files, proto: first.n.proto, ports: first.n.ports } })
+            sats = others
+        } else {
+            const { prefixes_files: _pf, ...m } = plain.match
+            channels.push({ ...plain, match: rest.length ? { ...m, prefixes_files: rest } : m })
         }
-        const { prefixes_files: _pf, ...m } = plain.match
-        channels.push({ ...plain, match: rest.length ? { ...m, prefixes_files: rest } : m })
-        gs.forEach((g, i) => {
+        sats.forEach((g, i) => {
             const { match: _m, ...head } = plain
             channels.push({
                 ...head,

@@ -70,6 +70,31 @@ describe('сужение подсетей — канал-спутник', () => 
         expect(back.channels[0].narrow).toEqual({ [DISCORD_PFX]: NARROW })
     })
 
+    it('правило из подсетей ДВУХ разных сужений без доменов: ни один канал не остаётся без совпадения', () => {
+        // Сокращение «правило несёт сужение само» работало только при одной группе. При двух
+        // (udp 50000-65535 у Discord и tcp 443 у второго набора) родитель уезжал в спеку с
+        // match: {} — ни подсетей, ни доменов, ни any, — и движок отвергал спеку ЦЕЛИКОМ
+        // («channel … matches nothing»); в интерфейсе правило при этом выглядело нормальным.
+        const OTHER = '/etc/steer/lists/itdog/cloudflare.lst'
+        const two: Spec = {
+            ...ui,
+            channels: [{
+                name: 'Голос', out: 'vpn',
+                match: { prefixes_files: [DISCORD_PFX, OTHER] },
+                narrow: { [DISCORD_PFX]: NARROW, [OTHER]: { proto: 'tcp', ports: ['443'] } },
+            }],
+        }
+        const disk = expandNarrow(two)
+        for (const c of disk.channels) {
+            const m = c.match
+            expect(Boolean(m.prefixes_files?.length || m.domains_files?.length || m.any)).toBe(true)
+        }
+        // И круг замкнут: назад складывается в одно правило с обоими сужениями.
+        const back = normalizeSpec(disk)
+        expect(back.channels).toHaveLength(1)
+        expect(back.channels[0].narrow).toEqual(two.channels[0].narrow)
+    })
+
     it('без сужения спека не трогается', () => {
         const plain: Spec = { ...ui, channels: [ui.channels[1]] }
         const disk = expandNarrow(plain)
