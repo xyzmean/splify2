@@ -47,15 +47,23 @@ gh_load() {  # ВЛАДЕЛЕЦ/РЕПОЗИТОРИЙ
     GH_NAMES="|"
     GH_NOTE=""
     _gl_c="${GH_CACHE:-/tmp/splify2-releases.json}.$(printf '%s' "$1" | tr -c 'A-Za-z0-9' '_').cache"
-    if [ -s "$_gl_c" ] && [ -z "$(find "$_gl_c" -mmin "+$GH_CACHE_TTL_MIN" 2>/dev/null)" ]; then
-        . "$_gl_c" 2>/dev/null && [ -n "$GH_VERS" ] && return 0
+    # ПАМЯТЬ — ДАННЫЕ, А НЕ КОД, и только СВОЯ. Файл лежит в /tmp под предсказуемым именем, а
+    # /tmp на роутере пишут все процессы, включая непривилегированные (nobody у
+    # https-dns-proxy, dnsmasq, logd). Прежняя редакция читала его через `.`, то есть
+    # исполняла от root всё, что туда положили; любой процесс роутера мог дождаться открытия
+    # страницы версий. Теперь три строки читаются как текст (версии, имена, примечание — по
+    # строке на поле, переводов строки внутри полей не бывает), а файл чужого владельца не
+    # читается вовсе: подложить нам список версий тоже никому не полагается.
+    if own_file "$_gl_c" && [ -z "$(find "$_gl_c" -mmin "+$GH_CACHE_TTL_MIN" 2>/dev/null)" ]; then
+        GH_VERS="$(sed -n '1p' "$_gl_c" 2>/dev/null)"
+        GH_NAMES="$(sed -n '2p' "$_gl_c" 2>/dev/null)"
+        GH_NOTE="$(sed -n '3p' "$_gl_c" 2>/dev/null)"
+        [ -n "$GH_VERS" ] && return 0
         GH_VERS=""; GH_NAMES="|"; GH_NOTE=""
     fi
     gh_load_api "$1" || gh_load_version "$1" || return 1
-    # Запись в кавычках shell: значения — версии, имена выпусков и наша же строка-примечание;
-    # одинарная кавычка в них экранируется, остальное для `.` безопасно.
-    _gl_q() { printf '%s' "$1" | sed "s/'/'\\\\''/g"; }
-    printf "GH_VERS='%s'\nGH_NAMES='%s'\nGH_NOTE='%s'\n" "$(_gl_q "$GH_VERS")" "$(_gl_q "$GH_NAMES")" "$(_gl_q "$GH_NOTE")" > "$_gl_c" 2>/dev/null
+    rm -f "$_gl_c"
+    ( umask 077; printf '%s\n%s\n%s\n' "$GH_VERS" "$GH_NAMES" "$GH_NOTE" > "$_gl_c" 2>/dev/null )
     return 0
 }
 
@@ -177,7 +185,8 @@ pkg_version() {  # ИМЯ_ПАКЕТА
     _pv_db="${PKG_DB:-/lib/apk/db/installed}"
     [ "$PM" = opkg ] && _pv_db="${PKG_DB:-/usr/lib/opkg/status}"
     _pv_c="/tmp/splify2-pkgver-$1"
-    if [ -f "$_pv_db" ] && [ -f "$_pv_c" ] && [ "$_pv_c" -nt "$_pv_db" ]; then
+    # Только свой файл: чужой в /tmp мог бы подсунуть интерфейсу любую строку версии (own_file).
+    if [ -f "$_pv_db" ] && own_file "$_pv_c" && [ "$_pv_c" -nt "$_pv_db" ]; then
         cat "$_pv_c"
         return 0
     fi

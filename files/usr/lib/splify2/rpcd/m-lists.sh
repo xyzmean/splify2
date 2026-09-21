@@ -796,7 +796,8 @@ AD_EOF
         # файлов то же (удалённый файл новее не станет — его ловит счёт).
         _ll_c="${LOCAL_LISTS_CACHE:-/tmp/splify2-local_lists.json}"
         _ll_n="$(printf '%s\n' "$_ll_files" | grep -c .)"
-        if [ -s "$_ll_c" ] && [ "$(cat "$_ll_c.n" 2>/dev/null)" = "$_ll_n" ] &&
+        # Только свой файл (own_file): чужой в /tmp уехал бы клиенту дословно.
+        if own_file "$_ll_c" && [ -s "$_ll_c" ] && [ "$(cat "$_ll_c.n" 2>/dev/null)" = "$_ll_n" ] &&
            [ -z "$(find "$LISTS" -name '*.lst' -type f -newer "$_ll_c" 2>/dev/null | head -1)" ]; then
             cat "$_ll_c"
             exit 0
