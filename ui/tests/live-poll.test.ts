@@ -192,6 +192,22 @@ describe('круг опроса: один вызов вместо пяти', () 
         expect(result.current.error).toBeNull()
     })
 
+    it('объект старее интерфейса и движок молчит: снимок из памяти помечен прошлым, а не живым', async () => {
+        // В прежнем круге finish() звался ВСЕГДА, в том числе при отказе status, и его
+        // setStale(false) затирал setStale(true), выставленный failed() на первом промолчавшем
+        // круге. Снимок из памяти браузера показывался как живое состояние с зелёной точкой.
+        window.localStorage.setItem('splify2:live', JSON.stringify({ status: STATUS, diag: DIAG, build: null }))
+        vi.spyOn(rpc, 'live').mockRejectedValue(new Error('Method not found'))
+        vi.spyOn(rpc, 'status').mockResolvedValue({ ok: false, error: 'движок не ответил' } as never)
+        vi.spyOn(rpc, 'devStats').mockResolvedValue({ devices: DEVICES } as never)
+        vi.spyOn(rpc, 'netInfo').mockResolvedValue(NET as never)
+        vi.spyOn(rpc, 'diag').mockResolvedValue(DIAG as never)
+        const { result } = renderHook(() => useLive())
+        await waitFor(() => expect(rpc.status).toHaveBeenCalled())
+        await waitFor(() => expect(result.current.devs).toEqual(DEVICES))
+        expect(result.current.stale).toBe(true)
+    })
+
     it('беда приезжает успешным ответом — и не принимается за состояние', async () => {
         // Бэкенд по контракту отвечает на ошибку объектом {ok:false,error} и кодом нуль.
         // Принять его за состояние значит нарисовать «Работает» зелёной точкой на роутере,
