@@ -52,6 +52,10 @@ EOF
 # curl: последний аргумент — ссылка; «открылось», если её хост назван в CURL_OK.
 cat > "$T/bin/curl" <<'EOF'
 #!/bin/sh
+# CURL_SLEEP — сколько «отвечает» каждая цель. Пусто — мгновенно. Нужен тем проверкам,
+# которым надо застать прогон на середине: без задержки три стратегии на 59 целей
+# проходят быстрее, чем стенд успевает заглянуть в файл хода.
+[ -n "${CURL_SLEEP:-}" ] && sleep "$CURL_SLEEP"
 for u; do :; done
 h="${u#*://}"; h="${h%%/*}"
 for ok in $CURL_OK; do [ "$h" = "$ok" ] && exit 0; done
@@ -83,7 +87,7 @@ runbg() {
         ZP_PROGRESS="$T/run/progress" ZP_PIDFILE="$T/run/pid" \
         ZP_NFQWS="$T/bin/nfqws" ZT_DPI_SNAPSHOT="$ROOT/files/usr/share/splify2/dpi-suite.json" \
         ZT_CURL="$T/bin/curl" ZT_QUEUE=8399 ZT_TABLE=splify2_ztest_stand \
-        CURL_OK="${CURL_OK:-}" \
+        CURL_OK="${CURL_OK:-}" CURL_SLEEP="${CURL_SLEEP:-}" \
         sh "$SCRIPT" "$@" >/dev/null 2>&1 &
     bg=$!
 }
@@ -96,7 +100,7 @@ run() {  # ключи скрипта
         ZP_PROGRESS="$T/run/progress" ZP_PIDFILE="$T/run/pid" \
         ZP_NFQWS="$T/bin/nfqws" ZT_DPI_SNAPSHOT="$ROOT/files/usr/share/splify2/dpi-suite.json" \
         ZT_CURL="$T/bin/curl" ZT_QUEUE=8399 ZT_TABLE=splify2_ztest_stand \
-        CURL_OK="${CURL_OK:-}" \
+        CURL_OK="${CURL_OK:-}" CURL_SLEEP="${CURL_SLEEP:-}" \
         sh "$SCRIPT" "$@"
 }
 
@@ -165,6 +169,33 @@ check "остановленная проверка оставила сделан
       "$([ -s "$R" ] && [ "$(jq "$R" 'str(len(d["results"]))')" -ge 1 ] && echo yes || echo no)"
 check "и сняла таблицу изоляции" "yes" "$(grep -q 'delete table inet splify2_ztest_stand' "$T/nft.log" && echo yes || echo no)"
 check "и убила обработчик" "0" "$(for p in $(cat "$T/nfqws.pids" 2>/dev/null); do kill -0 "$p" 2>/dev/null && echo x; done | grep -c x)"
+for p in $(cat "$T/nfqws.pids" 2>/dev/null); do kill "$p" 2>/dev/null; done
+
+# ---- файл хода называет цели ТОГО набора, которым меряется текущая стратегия -----------
+#
+# Наборов два, и у каждой стратегии в результате своё число целей (проверено выше). Файл хода
+# был единственным местом, где число оставалось общим на всех: `targets=` считался один раз
+# на прогон по общему набору, и на стратегии YouTube ход сообщал 59 при 37 целях. Поле уходит
+# наверх как zapret_test.targets, то есть это неправда в контракте, а не в файле.
+#
+# Застать файл хода на середине можно только с медленным curl: CURL_SLEEP — задержка на одну
+# цель, и стратегия на 37 целей по четыре за раз живёт в ходе достаточно долго, чтобы её
+# увидеть. Читаем файл ДО остановки: обрыв затирает его сводкой.
+printf '#general (ALT)\n--filter-tcp=443\n--dpi-desync=fake\n\n#Yv01\n--filter-tcp=443\n--hostlist=/x\n' \
+    > "$T/zapret/strategies.txt"
+rm -rf "$T/zapret/results.d" "$R"; : > "$T/nfqws.pids"
+CURL_OK="" CURL_SLEEP=0.2 runbg --scope all
+i=0; seen=""
+while [ $i -lt 300 ]; do
+    if grep -q '^current=Yv01$' "$T/run/progress" 2>/dev/null; then
+        seen="$(grep '^targets=' "$T/run/progress")"
+        break
+    fi
+    sleep 0.1; i=$((i + 1))
+done
+kill -TERM "$bg" 2>/dev/null
+wait "$bg" 2>/dev/null
+check "ход на стратегии YouTube называет цели YouTube, а не общего набора" "targets=37" "$seen"
 for p in $(cat "$T/nfqws.pids" 2>/dev/null); do kill "$p" 2>/dev/null; done
 
 # ---- слой, который нечем мерить, в область «все» не попадает -------------------------

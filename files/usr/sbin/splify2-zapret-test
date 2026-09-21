@@ -537,9 +537,13 @@ total_t="$(grep -c '|' "$zt_tmp/t.general")"
 [ "$total_t" -gt 0 ] || { log "целей нет"; exit 2; }
 
 started="$(date +%s)"
-progress() {  # СДЕЛАНО ТЕКУЩАЯ
+# Третий аргумент — число целей набора, которым меряется ТЕКУЩАЯ стратегия. Наборов два, и
+# у стратегий YouTube их 37 против шести десятков в общем; одно число на весь прогон было бы
+# правдой только для одного из них. Без аргумента — общий набор: так пишется первая запись, до
+# выбора стратегии, и завершающая, где текущей уже нет (там число согласовано со сводкой).
+progress() {  # СДЕЛАНО ТЕКУЩАЯ [ЦЕЛЕЙ]
     printf 'state=running\nstarted=%s\nscope=%s\ntotal=%s\ndone=%s\ntargets=%s\ncurrent=%s\n' \
-        "$started" "$scope" "$total_s" "$1" "$total_t" "$2" > "$ZP_PROGRESS"
+        "$started" "$scope" "$total_s" "$1" "${3:-$total_t}" "$2" > "$ZP_PROGRESS"
 }
 progress 0 ''
 log "проверка стратегий: $total_s стратегий, целей: общих $(grep -c '|' "$zt_tmp/t.general"), YouTube $(grep -c '|' "$zt_tmp/t.youtube")"
@@ -564,8 +568,8 @@ done_n=0
 while IFS= read -r name; do
     [ -n "$name" ] || continue
     done_n=$((done_n + 1))
-    progress "$done_n" "$name"
     set="$(zt_set_of "$name")"
+    progress "$done_n" "$name" "$(grep -c '|' "$zt_tmp/t.$set")"
     ok="$(zt_run_one "$name" "$zt_tmp/t.$set" "$zt_tmp/ok")"
     total="$(grep -c '|' "$zt_tmp/t.$set")"
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$set" "$ok" "$total" \
