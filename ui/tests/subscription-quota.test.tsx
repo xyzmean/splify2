@@ -342,6 +342,7 @@ describe('блок своего туннеля: бесконечность бе�
         expect(screen.getByText(/Швеция/)).toBeInTheDocument()
         expect(screen.getByText('61 мс')).toBeInTheDocument()
         expect(screen.getByText('объём не ограничен')).toBeInTheDocument()
+        expect(screen.getByText('без лимита')).toBeInTheDocument()
         // Ни счёта панели, ни счёта роутера: объём здесь не считает никто, и число рядом с
         // остатком подписки читалось бы как остаток.
         expect(screen.queryByText(/ГБ|израсходовано|осталось/)).toBeNull()

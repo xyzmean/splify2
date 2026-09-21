@@ -110,6 +110,14 @@ export default function PoolList({
                 <Card>
                     <CardHeader>
                         <CardTitle>Выходов нет</CardTitle>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                            Добавьте выход (свой туннель или подписку), чтобы правила могли направлять через него трафик.
+                        </p>
+                        <div className="mt-3">
+                            <Button onClick={() => setEditing('')} size="sm">
+                                <Plus className="mr-1 h-4 w-4" aria-hidden="true" /> Добавить выход
+                            </Button>
+                        </div>
                     </CardHeader>
                 </Card>
             ) : (

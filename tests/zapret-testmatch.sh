@@ -81,7 +81,7 @@ printf '#general (ALT)\n--filter-tcp=443\n--dpi-desync=fake\n\n#v1\n--filter-tcp
 # а не самого скрипта, и TERM в неё скрипта бы не достиг (стенд это и поймал).
 runbg() {
     env SANDBOX="$T" PATH="$T/bin:$PATH" \
-        ZAPRET_SH="$ROOT/files/usr/lib/splify2/zapret.sh" FETCH_SH=/dev/null \
+        ZAPRET_SH="$ROOT/files/usr/lib/splify2/zapret.sh" FETCH_SH="${FETCH_SH_STUB:-/dev/null}" \
         ZP_DIR="$T/zapret" ZP_CATALOG="$T/zapret/strategies.txt" \
         ZP_RESULTS="$T/zapret/results.json" ZP_RESULTS_DIR="$T/zapret/results.d" \
         ZP_PROGRESS="$T/run/progress" ZP_PIDFILE="$T/run/pid" \
@@ -94,7 +94,7 @@ runbg() {
 
 run() {  # ключи скрипта
     env SANDBOX="$T" PATH="$T/bin:$PATH" \
-        ZAPRET_SH="$ROOT/files/usr/lib/splify2/zapret.sh" FETCH_SH=/dev/null \
+        ZAPRET_SH="$ROOT/files/usr/lib/splify2/zapret.sh" FETCH_SH="${FETCH_SH_STUB:-/dev/null}" \
         ZP_DIR="$T/zapret" ZP_CATALOG="$T/zapret/strategies.txt" \
         ZP_RESULTS="$T/zapret/results.json" ZP_RESULTS_DIR="$T/zapret/results.d" \
         ZP_PROGRESS="$T/run/progress" ZP_PIDFILE="$T/run/pid" \
@@ -197,6 +197,22 @@ kill -TERM "$bg" 2>/dev/null
 wait "$bg" 2>/dev/null
 check "ход на стратегии YouTube называет цели YouTube, а не общего набора" "targets=37" "$seen"
 for p in $(cat "$T/nfqws.pids" 2>/dev/null); do kill "$p" 2>/dev/null; done
+
+# ---- набор dpi-checkers иной раскладки: скачался, но не разобрался — берём снимок ---------
+#
+# Хосты из набора извлекаются построчным sed, который требует `id` и `host` в одной строке —
+# так файл устроен у издателя сегодня. Откат к снимку был только на неудачу скачивания: файл,
+# скачавшийся в иной раскладке (объект на несколько строк), давал ноль целей, и общий набор
+# молча сжимался до 23 постоянных. Здесь `download` подменена: она «скачивает» тот же снимок,
+# переформатированный по строкам, — и общий набор обязан остаться на 59.
+python3 -c 'import json,sys; json.dump(json.load(open(sys.argv[1])), open(sys.argv[2],"w"), ensure_ascii=False, indent=2)' \
+    "$ROOT/files/usr/share/splify2/dpi-suite.json" "$T/suite-pretty.json"
+printf 'download() { cp "%s" "$2"; }\n' "$T/suite-pretty.json" > "$T/fetch-stub.sh"
+printf '#general (ALT)\n--filter-tcp=443\n--dpi-desync=fake\n' > "$T/zapret/strategies.txt"
+rm -rf "$T/zapret/results.d" "$R"
+CURL_OK="" FETCH_SH_STUB="$T/fetch-stub.sh" run --scope all >/dev/null 2>&1
+check "набор иной раскладки скачался — целей по-прежнему 59, из снимка" "59" \
+      "$(jq "$R" 'str(d["sets"]["general"]["total"])')"
 
 # ---- слой, который нечем мерить, в область «все» не попадает -------------------------
 #

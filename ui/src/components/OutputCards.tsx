@@ -362,6 +362,7 @@ export function TunnelBlock({ name, st, facts, phase }: OutRef) {
                     title="объём не ограничен"
                 >
                     <InfinityIcon className="h-4 w-4" aria-hidden="true" />
+                    <span aria-hidden="true">без лимита</span>
                     <span className="sr-only">объём не ограничен</span>
                 </span>
             </CardHeader>

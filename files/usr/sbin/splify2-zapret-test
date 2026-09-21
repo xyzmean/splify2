@@ -189,9 +189,23 @@ zt_targets_general() {
     if ! { command -v download >/dev/null 2>&1 && download "$ZT_DPI_SUITE" "$_tg_suite" 2>/dev/null; }; then
         [ -s "$ZT_DPI_SNAPSHOT" ] && cp "$ZT_DPI_SNAPSHOT" "$_tg_suite" 2>/dev/null
     fi
-    [ -s "$_tg_suite" ] &&
-        sed -n 's/.*"id":[[:space:]]*"[^"]*".*"host":[[:space:]]*"\([^"]*\)".*/\1|https:\/\/\1/p' \
-            "$_tg_suite"
+    _tg_hosts="$zt_tmp/suite.hosts"
+    : > "$_tg_hosts"
+    [ -s "$_tg_suite" ] && zt_suite_hosts "$_tg_suite" > "$_tg_hosts"
+    # Скачалось, но не разобралось — это тот же отказ, что «не скачалось», и лечится тем же
+    # снимком. Разбор построчный и держится на раскладке «один объект на строку»: файл иной
+    # раскладки без этой ветки давал ноль целей, и общий набор молча сжимался до постоянной
+    # части.
+    if ! [ -s "$_tg_hosts" ] && [ -s "$ZT_DPI_SNAPSHOT" ]; then
+        zt_suite_hosts "$ZT_DPI_SNAPSHOT" > "$_tg_hosts"
+    fi
+    cat "$_tg_hosts"
+}
+
+# Хосты из набора dpi-checkers: по строке `метка|ссылка` на каждый объект. `id` и `host` обязаны
+# стоять в одной строке в этом порядке — так файл устроен у издателя.
+zt_suite_hosts() {  # ФАЙЛ
+    sed -n 's/.*"id":[[:space:]]*"[^"]*".*"host":[[:space:]]*"\([^"]*\)".*/\1|https:\/\/\1/p' "$1"
 }
 
 # Набор YouTube — домены из теста менеджера (run_test_core_youtube, переменная DOMAINS): сам

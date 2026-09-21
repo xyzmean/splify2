@@ -261,7 +261,7 @@ export default function PoolEditor({
         const subsN = g.filter((x) => x.kind === 'sub').length
         const devsN = g.length - subsN
         if (subsN > 1 || (subsN && devsN)) {
-            notify('Движок этой версии не умеет смешанный пул: либо одна подписка, либо свои туннели. Обновите движок в разделе «Система».', 'warning')
+            notify('Движок этой версии не умеет смешанный пул: либо одна подписка, либо свои туннели. Обновите движок в разделе «Настройки → О ПО».', 'warning')
             return true
         }
         return false

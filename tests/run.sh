@@ -69,6 +69,15 @@ run dohmatch sh "$ROOT/tests/dohmatch.sh"
 # записано в STATE.md, раздел «Окружение».
 if [ -d "$ROOT/ui/node_modules/vitest" ]; then
     node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+    if [ "$node_major" -lt 20 ] 2>/dev/null; then
+        for _n in /opt/node22/bin /opt/node24/bin /root/.local/opt/node-v22.14.0-linux-x64/bin; do
+            if [ -x "$_n/node" ]; then
+                PATH="$_n:$PATH"
+                node_major="$("$_n/node" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+                break
+            fi
+        done
+    fi
     if [ "$node_major" -ge 20 ] 2>/dev/null; then
         run ui-harness sh -c "cd '$ROOT/ui' && npm test --silent"
     elif docker image inspect node:22-alpine >/dev/null 2>&1; then

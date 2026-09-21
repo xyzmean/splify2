@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowRight, LoaderCircle, Plus, Search, TriangleAlert } from 'lucide-react'
+import { ArrowRight, LoaderCircle, Plus, Search, TriangleAlert, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { SubBlock, TunnelBlock, type Facts } from '@/components/OutputCards'
@@ -679,14 +679,17 @@ function OutputsColumn({
 /** «Куда пойдёт запрос» — единственный вопрос, который человек задаёт посреди работы, и
  *  отвечает на него ЖИВОЕ ядро, а не настройка. Поэтому поле здесь, на главной, а не в
  *  диагностике: спрашивают его до того, как решат, что что-то сломано. */
+const SUGGESTED_DOMAINS = ['youtube.com', 'instagram.com', 'discord.com', 'rutracker.org']
+
 function ExplainCard() {
     const [q, setQ] = useState('')
     const [answer, setAnswer] = useState<string | null>(null)
     const [asking, setAsking] = useState(false)
 
-    async function ask() {
-        const address = q.trim()
+    async function ask(customQ?: string) {
+        const address = (customQ !== undefined ? customQ : q).trim()
         if (!address) return
+        if (customQ !== undefined) setQ(customQ)
         setAsking(true)
         try {
             const r = await rpc.explain(address)
@@ -698,21 +701,38 @@ function ExplainCard() {
         }
     }
 
+    const clear = () => {
+        setQ('')
+        setAnswer(null)
+    }
+
     return (
         <Card>
-            <CardHeader>
+            <CardHeader className="pb-3">
                 <CardTitle>Куда пойдёт запрос</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
                 <div className="flex flex-wrap gap-2">
-                    <input
-                        value={q}
-                        onChange={(e) => setQ(e.currentTarget.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && ask()}
-                        placeholder="youtube.com — куда пойдёт трафик?"
-                        className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 font-mono text-[13px]"
-                    />
-                    <Button onClick={ask} disabled={asking || !q.trim()}>
+                    <div className="relative min-w-0 flex-1">
+                        <input
+                            value={q}
+                            onChange={(e) => setQ(e.currentTarget.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && void ask()}
+                            placeholder="youtube.com — куда пойдёт трафик?"
+                            className="w-full rounded-lg border border-border bg-background px-3 py-2 pr-8 font-mono text-[13px] focus:outline-none focus:ring-1 focus:ring-primary"
+                        />
+                        {(q || answer) && (
+                            <button
+                                type="button"
+                                onClick={clear}
+                                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                                aria-label="Очистить"
+                            >
+                                <X className="h-4 w-4" />
+                            </button>
+                        )}
+                    </div>
+                    <Button onClick={() => void ask()} disabled={asking || !q.trim()}>
                         {asking ? (
                             <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
                         ) : (
@@ -721,8 +741,24 @@ function ExplainCard() {
                         {asking ? 'Спрашиваем…' : 'Проверить'}
                     </Button>
                 </div>
+
+                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                    <span>Примеры:</span>
+                    {SUGGESTED_DOMAINS.map((domain) => (
+                        <button
+                            key={domain}
+                            type="button"
+                            onClick={() => void ask(domain)}
+                            disabled={asking}
+                            className="rounded-md border border-border bg-muted/60 px-2 py-0.5 font-mono text-[11px] text-foreground hover:bg-muted transition-colors cursor-pointer"
+                        >
+                            {domain}
+                        </button>
+                    ))}
+                </div>
+
                 {answer && (
-                    <pre className="mt-3 overflow-x-auto rounded-xl border border-border bg-muted p-3 text-xs leading-relaxed whitespace-pre-wrap">
+                    <pre className="mt-3 overflow-x-auto rounded-xl border border-border bg-muted p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap">
                         {answer}
                     </pre>
                 )}

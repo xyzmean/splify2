@@ -105,7 +105,7 @@ export default function VlessScreen() {
             notify('Имя: латиница, цифры, дефис или подчёркивание', 'warning')
             return
         }
-        setBusy(n)
+        setBusy('__adding__')
         try {
             const r = await rpc.subSet(src, n, name.trim())
             if (!r.ok) { notify(r.error || 'подписка не сохранилась', 'error'); return }
@@ -200,7 +200,7 @@ export default function VlessScreen() {
                                     ) : (
                                         <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
                                     )}
-                                    Обновить
+                                    {busy === s.name ? 'Обновляем…' : 'Обновить'}
                                 </button>
                             )}
                             <button
@@ -210,7 +210,12 @@ export default function VlessScreen() {
                                 aria-label={`удалить ${s.title || s.name}`}
                                 className="sp-row flex items-center gap-1.5 bg-transparent p-0 text-destructive underline decoration-dotted disabled:opacity-60"
                             >
-                                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" /> Удалить
+                                {busy === s.name ? (
+                                    <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                                ) : (
+                                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                                )}
+                                {busy === s.name ? 'Удаляем…' : 'Удалить'}
                             </button>
                         </div>
                     </CardHeader>
@@ -265,7 +270,12 @@ export default function VlessScreen() {
                         className="h-[38px] min-w-[14rem] flex-1 rounded-lg border border-border bg-background px-3 font-mono text-[13px]"
                     />
                     <Button onClick={add} disabled={!!busy}>
-                        <Plus className="h-4 w-4" aria-hidden="true" /> Добавить
+                        {busy === '__adding__' ? (
+                            <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
+                        ) : (
+                            <Plus className="h-4 w-4" aria-hidden="true" />
+                        )}
+                        {busy === '__adding__' ? 'Добавляем…' : 'Добавить'}
                     </Button>
                 </CardContent>
             </Card>

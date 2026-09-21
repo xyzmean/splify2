@@ -109,7 +109,7 @@ export default function Vpn({ live }: { live: Live }) {
                        случае прямо врал. */
                     state={
                         vlessCount
-                            ? `взяты: ${subCount} подп. · ${vlessCount} локац.`
+                            ? `взяты: ${subCount === 1 ? '1 подписка' : subCount >= 2 && subCount <= 4 ? `${subCount} подписки` : `${subCount} подписок`} · ${vlessCount === 1 ? '1 локация' : vlessCount >= 2 && vlessCount <= 4 ? `${vlessCount} локации` : `${vlessCount} локаций`}`
                             : 'ни одна подписка не взята выходом'
                     }
                     onClick={() => setScreen('vless')}

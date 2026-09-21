@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, ArrowRight, ArrowUp, Pencil, Plus, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowRight, ArrowUp, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { notify } from '@/lib/notify'
@@ -115,6 +115,7 @@ export default function RulesTab({
         [catalogServices, local],
     )
     const [open, setOpen] = useState<number | null>(null)
+    const [search, setSearch] = useState('')
 
     useEffect(() => {
         /* Спека приходит из общего хранилища (pending), а не своим запросом: хранилище
@@ -169,7 +170,7 @@ export default function RulesTab({
         onWantedUsed?.()
         const out = defaultOut(spec)
         if (!out) {
-            notify('Сначала соберите пул VPN — правилу некуда вести', 'warning')
+            notify('Сначала настройте выход VPN — правилу некуда вести', 'warning')
             return
         }
         const used = new Set(spec.channels.map((c) => c.name))
@@ -222,7 +223,7 @@ export default function RulesTab({
         if (!spec) return
         const out = defaultOut(spec)
         if (!out) {
-            notify('Сначала соберите пул VPN — правилу некуда вести', 'warning')
+            notify('Сначала настройте выход VPN — правилу некуда вести', 'warning')
             return
         }
         const used = new Set(spec.channels.map((c) => c.name))
@@ -388,15 +389,43 @@ export default function RulesTab({
         )
     }
 
+    const filteredChannels = useMemo(() => {
+        if (!spec) return []
+        const q = search.trim().toLowerCase()
+        if (!q) return spec.channels.map((ch, originalIndex) => ({ ch, originalIndex }))
+        return spec.channels
+            .map((ch, originalIndex) => ({ ch, originalIndex }))
+            .filter(({ ch }) => {
+                if (ch.name.toLowerCase().includes(q)) return true
+                if (ch.out.toLowerCase().includes(q)) return true
+                const desc = describe(ch, services).toLowerCase()
+                if (desc.includes(q)) return true
+                return false
+            })
+    }, [spec, search, services])
+
+    const isFiltering = search.trim().length > 0
+
     const ruleActions = (i: number) => (
         <div className="flex justify-end gap-1">
-            <Button variant="ghost" size="icon" aria-label="Поднять приоритет"
-                    disabled={i === 0} onClick={() => move(i, -1)}>
+            <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Поднять приоритет"
+                title={isFiltering ? 'Сбросьте поиск для изменения порядка' : undefined}
+                disabled={i === 0 || isFiltering}
+                onClick={() => move(i, -1)}
+            >
                 <ArrowUp className="h-4 w-4" aria-hidden="true" />
             </Button>
-            <Button variant="ghost" size="icon" aria-label="Опустить приоритет"
-                    disabled={i === spec.channels.length - 1}
-                    onClick={() => move(i, 1)}>
+            <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Опустить приоритет"
+                title={isFiltering ? 'Сбросьте поиск для изменения порядка' : undefined}
+                disabled={i === spec!.channels.length - 1 || isFiltering}
+                onClick={() => move(i, 1)}
+            >
                 <ArrowDown className="h-4 w-4" aria-hidden="true" />
             </Button>
             <Button variant="ghost" size="icon" aria-label="Изменить правило"
@@ -405,7 +434,7 @@ export default function RulesTab({
             </Button>
             <Button variant="ghost" size="icon" aria-label="Удалить правило"
                     className="hover:bg-destructive/10 hover:text-destructive"
-                    onClick={() => edit({ ...spec, channels: spec.channels.filter((_, k) => k !== i) })}>
+                    onClick={() => edit({ ...spec!, channels: spec!.channels.filter((_, k) => k !== i) })}>
                 <Trash2 className="h-4 w-4" aria-hidden="true" />
             </Button>
         </div>
@@ -441,47 +470,86 @@ export default function RulesTab({
                 </div>
             </div>
 
-            {/* ДВЕ РАСКЛАДКИ. Таблица из трёх столбцов на телефоне не работала: «кого
-                касается» переносилось по слову, а столбец «куда» вместе со всеми действиями
-                (выше, ниже, изменить, удалить) уезжал за край экрана — то есть правило нельзя
-                было ни переставить, ни удалить, и об этом ничто не сообщало.
+            {spec.channels.length > 0 && (
+                <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-1.5 shadow-card">
+                    <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <input
+                        value={search}
+                        onChange={(e) => setSearch(e.currentTarget.value)}
+                        placeholder="Поиск правил по названию, сервису или выходу…"
+                        className="min-w-0 flex-1 bg-transparent py-1 text-sm outline-none placeholder:text-muted-foreground"
+                    />
+                    {search && (
+                        <button
+                            type="button"
+                            onClick={() => setSearch('')}
+                            aria-label="Очистить строку поиска"
+                            className="text-muted-foreground transition-colors hover:text-foreground"
+                        >
+                            <X className="h-4 w-4" aria-hidden="true" />
+                        </button>
+                    )}
+                    {search.trim() ? (
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                            найдено {filteredChannels.length} из {spec.channels.length}
+                        </span>
+                    ) : null}
+                </div>
+            )}
 
-                На узком экране правило читается фразой, как и велит дизайн 26.9: что → кому →
-                куда, по строке на каждое, а действия — рядом и целиком. Куски строки собраны
-                функциями выше: вёрстка, повторённая дважды, разошлась бы на первой же правке. */}
             {spec.channels.length === 0 ? (
                 <div className="rounded-xl border border-border bg-card p-6 text-center text-sm text-muted-foreground shadow-card lg:rounded-2xl">
-                    Правил нет — весь трафик идёт напрямую.
+                    <p className="font-medium text-foreground">Правил нет — весь трафик идёт напрямую.</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                        Добавьте правила для сервисов (YouTube, Telegram, Discord...) или направьте нужный трафик через VPN.
+                    </p>
+                    <div className="mt-4 flex flex-wrap justify-center gap-2">
+                        <Button onClick={add}>
+                            <Plus className="mr-1 h-4 w-4" aria-hidden="true" /> Новое правило
+                        </Button>
+                        <Button variant="ghost" onClick={addException}>
+                            Исключение
+                        </Button>
+                    </div>
                     {routedOutputs(outputs).length === 0 && (
-                        <div className="mt-2 text-xs">
+                        <div className="mt-3 text-xs">
                             <button
                                 type="button"
                                 onClick={onGoOutbounds}
                                 className="text-primary underline decoration-dotted"
                             >
-                                Собрать пул VPN
+                                Настроить выход VPN
                             </button>
                         </div>
                     )}
                 </div>
+            ) : filteredChannels.length === 0 ? (
+                <div className="rounded-xl border border-border bg-card p-6 text-center text-sm text-muted-foreground shadow-card lg:rounded-2xl">
+                    По запросу «{search}» ничего не нашлось.
+                    <div className="mt-3">
+                        <Button variant="outline" size="sm" onClick={() => setSearch('')}>
+                            Сбросить поиск
+                        </Button>
+                    </div>
+                </div>
             ) : (
                 <>
                     <ul className="space-y-2 md:hidden">
-                        {spec.channels.map((ch, i) => {
+                        {filteredChannels.map(({ ch, originalIndex }) => {
                             const on = ch.enabled !== false
                             return (
                                 <li
-                                    key={`rule-m-${i}`}
+                                    key={`rule-m-${originalIndex}`}
                                     className={`rounded-xl border border-border bg-card p-3 shadow-card ${on ? '' : 'opacity-50'}`}
                                 >
-                                    {ruleName(ch, i, on)}
+                                    {ruleName(ch, originalIndex, on)}
                                     <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[13px]">
                                         <span className="text-muted-foreground">для</span>
                                         <span>{whoTextFor(ch)}</span>
                                         <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
                                         {ruleOut(ch)}
                                     </div>
-                                    <div className="mt-1 border-t border-border pt-1">{ruleActions(i)}</div>
+                                    <div className="mt-1 border-t border-border pt-1">{ruleActions(originalIndex)}</div>
                                 </li>
                             )
                         })}
@@ -498,20 +566,20 @@ export default function RulesTab({
                                 </tr>
                             </thead>
                             <tbody>
-                                {spec.channels.map((ch, i) => {
+                                {filteredChannels.map(({ ch, originalIndex }) => {
                                     const on = ch.enabled !== false
                                     return (
                                         <tr
-                                            key={`rule-${i}`}
+                                            key={`rule-${originalIndex}`}
                                             /* Выключенное приглушено, но НА ВИДУ и на своём месте: спрятанное
                                                правило человек считает удалённым и заводит второе такое же, а
                                                уехавшее вниз меняет порядок, то есть приоритет. */
                                             className={`border-b border-border/50 transition-colors last:border-b-0 hover:bg-muted/40 ${on ? '' : 'opacity-50'}`}
                                         >
-                                            <td className="px-3 py-2">{ruleName(ch, i, on)}</td>
+                                            <td className="px-3 py-2">{ruleName(ch, originalIndex, on)}</td>
                                             <td className="px-3 py-2 text-muted-foreground">{whoText(ch)}</td>
                                             <td className="px-3 py-2">{ruleOut(ch)}</td>
-                                            <td className="px-3 py-2">{ruleActions(i)}</td>
+                                            <td className="px-3 py-2">{ruleActions(originalIndex)}</td>
                                         </tr>
                                     )
                                 })}

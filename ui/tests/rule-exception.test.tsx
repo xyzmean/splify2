@@ -46,7 +46,7 @@ function mount(s: ReturnType<typeof spec>) {
 async function openRule(n: number) {
     const edit = await screen.findAllByLabelText('Изменить правило')
     fireEvent.click(edit[n])
-    await screen.findByText('Куда — пул VPN')
+    await screen.findByText('Куда — направление (выход)')
 }
 
 beforeEach(() => {
