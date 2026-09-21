@@ -1618,6 +1618,24 @@ out="$(rpcd spec_set "$(spec_req "$(vless_spec_named de-1 2)")")"
 check "смена узла у выхода с дефисом в имени — params" "params" \
       "$(cat "$T/var/vless-dirty" 2>/dev/null)"
 
+# ИМЯ ПОДПИСКИ НЕ ЛАТИНИЦЕЙ. sub_slug оставлял от «Дом» пустоту (tr побайтно превращал каждый
+# байт UTF-8 в подчёркивание, sed снимал хвост), а sub_use на пустом имени подставлял main —
+# то есть вторая подписка человека молча ПЕРЕЗАПИСЫВАЛА основную, а sub_del по такому имени
+# удалял её. Два разных нелатинских имени обязаны дать два разных имени файла, и ни одно из
+# них — не main.
+out="$(rpcd sub_set '{"name":"main","url":"vless://main@h:443#m"}')"
+out="$(rpcd sub_set '{"name":"Дом","url":"vless://dom@h:443#d"}')"
+dom_name="$(printf '%s' "$out" | jget name)"
+out="$(rpcd sub_set '{"name":"Работа","url":"vless://rab@h:443#r"}')"
+rab_name="$(printf '%s' "$out" | jget name)"
+check "нелатинское имя подписки не превращается в main" "no" "$([ "$dom_name" = main ] && echo yes || echo no)"
+check "два нелатинских имени различимы" "no" "$([ "$dom_name" = "$rab_name" ] && echo yes || echo no)"
+check "основная подписка при этом не тронута" "yes" \
+      "$(grep -q 'vless://main@' "$T/etc/sub.txt" 2>/dev/null && echo yes || echo no)"
+# Убираем за собой: перечень подписок ниже проверяется на точный состав.
+rpcd sub_del "{\"name\":\"$dom_name\"}" >/dev/null 2>&1
+rpcd sub_del "{\"name\":\"$rab_name\"}" >/dev/null 2>&1
+
 # Новая подписка тоже перечитывается клиентом только при перезапуске, и sub_set помечал это
 # ПУСТЫМ файлом. Пустой признак — не «параметры», а отсутствие слова: он затирал instances
 # ровно так же, как params, а прочитать его как instances нельзя (тогда любая смена
