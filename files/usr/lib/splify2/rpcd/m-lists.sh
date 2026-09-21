@@ -122,7 +122,7 @@ case "$2" in
                     *) fail "издатель не публикует $(ad_kind_ru "$kind") сервиса $svc" ;;
                 esac
                 ad_tag_resolve
-                AD_TMP="/tmp/splify2-srs.$$"
+                AD_TMP="$(mktemp -d /tmp/splify2-srs.XXXXXX)" || fail "не удалось завести временный каталог — кончилось место?"
                 ad_get "$svc"
                 ad_rc=$?
                 if [ "$ad_rc" != 0 ]; then
@@ -202,7 +202,7 @@ case "$2" in
             [ -n "$srs_url" ] || fail "у списка $id в каталоге нет ссылки на набор"
             [ -r "$AD_SH" ] || fail "описания источника $AD_SH нет — пакет собран не целиком"
             . "$AD_SH"
-            AD_TMP="/tmp/splify2-srs.$$"
+            AD_TMP="$(mktemp -d /tmp/splify2-srs.XXXXXX)" || fail "не удалось завести временный каталог — кончилось место?"
             ad_get_url "$srs_url" set
             ad_rc=$?
             if [ "$ad_rc" != 0 ]; then
@@ -401,9 +401,10 @@ AD_EOF
         # здесь терминала нет. Поэтому ему передаётся REPORT — файл, куда он дублирует те
         # же строки. Отправлять человека в журнал за ответом на нажатие кнопки нельзя.
         [ -x "$UPDATE_LISTS" ] || fail "обновлятор списков не найден"
-        rep="/tmp/splify2-lists-update.$$"
-        rm -f "$rep"
-        : > "$rep"
+        # mktemp, а не имя с PID и `: >`: имя предсказуемо, а отказ перенаправления у
+        # специальной встроенной роняет весь метод без JSON, когда /tmp полон (тот же класс,
+        # что I-085/I-102).
+        rep="$(mktemp /tmp/splify2-lists-update.XXXXXX)" || fail "не удалось завести файл отчёта — кончилось место?"
         REPORT="$rep" "$UPDATE_LISTS" >/dev/null 2>&1
         lu_rc=$?
         lu_changed="$(grep -c ': обновлён' "$rep" 2>/dev/null)"
@@ -460,8 +461,8 @@ AD_EOF
             domains|prefixes) ;;
             *) fail "вид списка: domains (домены) или prefixes (подсети)" ;;
         esac
-        raw="/tmp/splify2-put.$$"
-        rm -f "$raw" "$raw.clean" "$raw.stat"
+        raw="$(mktemp /tmp/splify2-put.XXXXXX)" || fail "не удалось завести временный файл — кончилось место?"
+        rm -f "$raw.clean" "$raw.stat"
         if [ -n "$url" ]; then
             case "$url" in
                 http://*|https://*) ;;
