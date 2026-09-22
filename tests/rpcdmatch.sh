@@ -3638,6 +3638,27 @@ check "применённой спеки нет — проверки берут 
       "$(tail -n1 "$T/diag-spec.log" 2>/dev/null)"
 printf '{"schema":2,"outputs":{},"channels":[]}\n' > "$T/etc/spec.applied.json"
 
+# СНИМОК ПРИМЕНЁННОГО ЗАМЕНЯЕТСЯ ЦЕЛИКОМ ИЛИ НИКАК (I-327). `cp` открывает назначение с
+# усечением и пишет в него — кончилось место посреди копии, и на диске остаётся обрезанный
+# снимок, по которому applied_get и проверки движка потом читают полспеки. Заглушка cp делает
+# ровно то, что делает настоящий cp на полном разделе: усекает назначение, пишет половину и
+# выходит с ошибкой. Снимок обязан остаться прежним, целым.
+printf '{"schema":2,"outputs":{},"channels":[],"old":1}\n' > "$T/etc/spec.applied.json"
+cat > "$T/bin/cp" <<'CPEOF'
+#!/bin/sh
+eval "_dst=\${$#}"
+head -c 10 "$1" > "$_dst"
+exit 1
+CPEOF
+chmod +x "$T/bin/cp"
+rpcd apply >/dev/null 2>&1
+rm -f "$T/bin/cp"
+check "apply: сорванная копия не портит прежний снимок применённого" "1" \
+      "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("old"))' "$T/etc/spec.applied.json" 2>&1)"
+check "apply: от сорванной копии не остаётся временных файлов" "" \
+      "$(ls "$T/etc" | grep 'spec.applied.json.' || :)"
+printf '{"schema":2,"outputs":{},"channels":[]}\n' > "$T/etc/spec.applied.json"
+
 out2="$(rpcd live '{"diag":true}')"
 check "круг: по просьбе проверки приходят дословно" "таблица на месте" \
       "$(printf '%s' "$out2" | python3 -c 'import json,sys
