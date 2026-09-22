@@ -1370,6 +1370,20 @@ check "происхождение «файл» запомнено вместе �
 for l in json.load(sys.stdin)["lists"]:
     if l["name"] == "fromfile": print(l["source"], l["filename"])')"
 
+# Длинное имя файла обрезается до 64 байт — и не посреди буквы (I-329). `cut -c` считает байты,
+# и кириллическое имя с нечётным числом латинских букв впереди резалось на половине последней
+# буквы: на экран уезжал обломок, который браузер показывает знаком «�».
+rpcd list_put "{\"name\":\"longname\",\"kind\":\"prefixes\",\"text\":\"10.9.0.0/16\\n\",\"source\":\"file\",\"filename\":\"a$(printf 'я%.0s' $(seq 40))\"}" >/dev/null
+check "длинное имя файла обрезано по букве, а не по байту" "ok 63" \
+      "$(rpcd list_custom | python3 -c 'import json,sys
+b = sys.stdin.buffer.read()
+try: d = json.loads(b.decode("utf-8"))
+except Exception as e: print("битый UTF-8:", e); sys.exit()
+for l in d["lists"]:
+    if l["name"] == "longname":
+        f = l["filename"]; print("ok" if f == "a" + "я" * 31 else f, len(f.encode()))')"
+rpcd list_remove '{"name":"longname","kind":"prefixes"}' >/dev/null
+
 rpcd list_put '{"name":"fromurl","kind":"domains","url":"https://example.invalid/my.lst","source":"url"}' >/dev/null
 out="$(rpcd list_custom)"
 check "происхождение «ссылка» запомнено вместе со ссылкой" \
