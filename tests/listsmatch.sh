@@ -1312,6 +1312,36 @@ check "HTML вместо манифеста: рабочий манифест о�
 check "и об этом сказано" "yes" "$(grep -q 'манифест' "$T/syslog" && grep -q 'не JSON\|не разбирается' "$T/syslog" && echo yes || echo no)"
 cp "$T/manifest.good" "$T/manifest.src"
 
+# ---- замок без pid — это второй прогон между mkdir и записью pid, а не зависший ------------
+#
+# Замок берётся `mkdir`, а pid пишется в него следующей строкой. Второй прогон, пришедший между
+# ними, читал пустой pid, объявлял замок «зависшим» и сносил чужой — два прогона шли параллельно,
+# ровно то, ради чего замок заведён (I-334). Окно здесь застывает: каталог замка есть, pid в нём
+# нет, а заглушка sleep — то, что делает первый прогон, пока второй ждёт: дописывает свой pid.
+# Pid — живого процесса (самого стенда), иначе замок законно сочли бы брошенным.
+rm -rf "$T/lists" "$T/var/last-update" "$T/var/update.lock"
+mkdir -p "$T/lists/domains" "$T/var/update.lock"
+cat > "$T/bin/sleep" <<EOF
+#!/bin/sh
+[ -f "$T/var/update.lock/pid" ] || echo $$ > "$T/var/update.lock/pid"
+EOF
+chmod +x "$T/bin/sleep"
+: > "$T/syslog"
+run_update
+rm -f "$T/bin/sleep"
+check "замок без pid не снесён как зависший" "yes;$$" \
+      "$([ -d "$T/var/update.lock" ] && echo yes || echo no);$(cat "$T/var/update.lock/pid" 2>/dev/null)"
+check "и второй прогон вышел, сказав, что обновление идёт" "yes" \
+      "$(grep -q 'уже идёт' "$T/syslog" && echo yes || echo no)"
+rm -rf "$T/var/update.lock"
+# А брошенный замок без pid (прогон умер между mkdir и записью pid) по-прежнему снимается:
+# pid не появился и через секунду — значит ждать некого.
+mkdir -p "$T/var/update.lock"
+: > "$T/syslog"
+run_update
+check "брошенный замок без pid снят, прогон прошёл" "yes;yes" \
+      "$(grep -q 'зависший' "$T/syslog" && echo yes || echo no);$([ -s "$T/lists/rkn.lst" ] && echo yes || echo no)"
+
 # ---- TERM посреди прогона: скрипт ЗАВЕРШАЕТСЯ, а не продолжает без замка --------------------
 #
 # Ловушка на INT/TERM снимала каталог замка и... продолжала работу: флаги failed/changed
