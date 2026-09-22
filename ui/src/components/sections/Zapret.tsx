@@ -56,12 +56,15 @@ const FAMILY: Record<ZapretFamily, string> = {
     flowseal: 'Flowseal',
     v: 'v',
     yv: 'YouTube',
+    dv: 'Discord',
     other: 'другие',
 }
-const FAMILY_ORDER: ZapretFamily[] = ['flowseal', 'v', 'yv', 'other']
-/** Семейство → набор целей, которым его меряет проверка (см. splify2-zapret-test, zt_set_of). */
-const SET_OF: Record<ZapretFamily, ZapretSet> = {
-    flowseal: 'general', v: 'general', yv: 'youtube', other: 'general',
+const FAMILY_ORDER: ZapretFamily[] = ['flowseal', 'v', 'yv', 'dv', 'other']
+/** Семейство → набор целей, которым его меряет проверка (см. splify2-zapret-test, zt_set_of).
+ *  У `dv` набора нет: Dv подменяет только порты discord.media, и ни одна цель проверки через
+ *  них не ходит — бэкенд такую стратегию не меряет, и число ей не выдумывается (I-335). */
+const SET_OF: Record<ZapretFamily, ZapretSet | null> = {
+    flowseal: 'general', v: 'general', yv: 'youtube', dv: null, other: 'general',
 }
 const SET_NAME: Record<ZapretSet, string> = { general: 'общий набор', youtube: 'YouTube' }
 /** Сроки расписания. Ноль первым — «не надо» это умолчание, и оно обязано быть видно как
@@ -85,6 +88,7 @@ function scoreOf(res: ZapretResults | null, name: string, family: ZapretFamily) 
     const r = res?.results.find((x) => x.name === name)
     if (!r) return undefined
     const set = r.set || SET_OF[family]
+    if (!set) return undefined
     const s = res?.sets?.[set]
     return {
         ok: r.ok,

@@ -1079,7 +1079,7 @@ export type ZapretGame = {
     fakes: { name: string; present: boolean }[]
 }
 
-export type ZapretFamily = 'flowseal' | 'v' | 'yv' | 'other'
+export type ZapretFamily = 'flowseal' | 'v' | 'yv' | 'dv' | 'other'
 
 /** Слой отвечает на вопрос «можно ли применить это одно», а семейство — на вопрос «откуда
  *  оно взято». Интерфейсу нужен именно первый: `Yv05` и `Dv3` — надстройки над основной

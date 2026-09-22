@@ -101,6 +101,22 @@ describe('вкладка Zapret', () => {
         expect(screen.getByText('general (ALT)')).toBeInTheDocument()
     })
 
+    it('стратегии Dv показаны своим семейством и без выдуманного числа (I-335)', async () => {
+        // Бэкенд относит Dv* к семейству dv и не меряет их: ни одна цель проверки не ходит
+        // через порты discord.media. Прежде семейства dv не знал список — стратегии не
+        // попадали ни в одну группу и пропадали с экрана.
+        mockAll({
+            cat: { ...cat, strategies: [...cat.strategies, { name: 'Dv3', family: 'dv' as const, layer: 'discord' as const }] },
+            res: { ...results, results: [...results.results, { name: 'Dv3', ok: 12 }] },
+        })
+        render(<Zapret />)
+        await waitFor(() => expect(screen.getByRole('button', { name: 'v5' })).toBeInTheDocument())
+        openFamily('Discord')
+        const row = screen.getByRole('button', { name: 'Dv3' })
+        expect(row).toBeInTheDocument()
+        expect(row.closest('li, div')?.textContent || '').not.toMatch(/12/)
+    })
+
     it('стратегии перечислены, активная отмечена', async () => {
         mockAll()
         render(<Zapret />)
