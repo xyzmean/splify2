@@ -3769,6 +3769,16 @@ uci_set "network.home.device_name" "xs-dom"
 mv "$T/var/lib/steer/xsteer-xs-home.json" "$T/var/lib/steer/xsteer-xs-dom.json"
 check "xsteer_state: заданное имя устройства уважается" "198.51.100.9:8443" \
       "$(rpcd xsteer_state | python3 -c 'import json,sys; print(json.load(sys.stdin)["tunnels"]["home"]["state"]["hub"])')"
+# Файл состояния пуст или оборван — движок его как раз переписывает, или кончилось место.
+# Подставленный как есть, он делал весь ответ невалидным JSON (`"state":}`), и экран терял
+# состояние ВСЕХ туннелей, а не одного (I-327). Такой файл — «состояния нет», null.
+: > "$T/var/lib/steer/xsteer-xs-dom.json"
+check "xsteer_state: пустой файл состояния — null, ответ остаётся JSON" "null" \
+      "$(rpcd xsteer_state | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["tunnels"]["home"]["state"]))' 2>&1 | tail -n1)"
+printf '{"schema":1,"out":"xs-dom","up":tr' > "$T/var/lib/steer/xsteer-xs-dom.json"
+check "xsteer_state: оборванный файл состояния — null, ответ остаётся JSON" "null" \
+      "$(rpcd xsteer_state | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["tunnels"]["home"]["state"]))' 2>&1 | tail -n1)"
+printf '{"schema":1,"out":"xs-dom","up":true}\n' > "$T/var/lib/steer/xsteer-xs-dom.json"
 uci "-q" delete "network.home.device_name" 2>/dev/null || :
 grep -v '^network.home.device_name=' "$T/uci.store" > "$T/uci.store.t"; mv "$T/uci.store.t" "$T/uci.store"
 mv "$T/var/lib/steer/xsteer-xs-dom.json" "$T/var/lib/steer/xsteer-xs-home.json"
