@@ -40,6 +40,43 @@ sub_put() {  # NAME FIELD VALUE
     fi
 }
 
+# Интервал автообновления в минутах. Ноль (или пусто) — не обновлять.
+#
+# ПРЕДЕЛЫ ПРОВЕРЯЮТСЯ ЗДЕСЬ, а не только в интерфейсе: метод зовут и мимо интерфейса. Меньше
+# получаса — это хождение к чужой панели чаще, чем она меняется, и первым от этого страдает
+# тот, кто раздаёт подписку; больше трёх суток — обновление, которого человек не дождётся.
+SUB_AUTO_MIN=30
+SUB_AUTO_MAX=4320
+
+sub_auto_get() {  # NAME -> минуты (0, если выключено или значение испорчено)
+    _a="$(sub_get "$1" auto)"
+    case "$_a" in
+        ''|*[!0-9]*) printf '0' ;;
+        *) [ "$_a" -ge "$SUB_AUTO_MIN" ] && [ "$_a" -le "$SUB_AUTO_MAX" ] && printf '%s' "$_a" || printf '0' ;;
+    esac
+}
+
+# Когда в последний раз ПЫТАЛИСЬ обновить. Отдельно от времени файла узлов, и это важно:
+# неудачная попытка файл не трогает, а повторять её каждые десять минут при мёртвой панели —
+# значит стучаться к ней 144 раза в сутки вместо одного-двух.
+# Работает с ТЕКУЩЕЙ подпиской, как и остальные помощники: путь берётся из $SUB, который
+# поставил sub_use. Своего разбора имени здесь нет — иначе он однажды разойдётся с sub_use.
+sub_auto_stamp() {  # -> путь к отметке текущей подписки
+    printf '%s.auto' "${SUB%.txt}"
+}
+
+sub_auto_due() {  # -> 0, если текущую подписку пора обновлять
+    _m="$(sub_auto_get "$SUB_NAME")"
+    [ "$_m" = 0 ] && return 1
+    [ "$(sub_kind_of "$SUB_NAME")" = url ] || return 1
+    _st="$(sub_auto_stamp)"
+    _last=0
+    [ -r "$_st" ] && _last="$(cat "$_st" 2>/dev/null)"
+    case "$_last" in ''|*[!0-9]*) _last=0 ;; esac
+    _now="$(date -u +%s)"
+    [ $(( _now - _last )) -ge $(( _m * 60 )) ]
+}
+
 # Вид источника: url — подписка, которую есть чем обновить, links — вставленные руками
 # ссылки, none — источника нет.
 sub_kind_of() {  # NAME
@@ -107,6 +144,17 @@ sub_used_by() {  # PATH -> ЧИСЛО
 # Обход по ИМЕНАМ выходов, а не одним выражением: `@.outputs[*].nodes[*]` вернул бы номера
 # всех выходов сразу, без разбора, чьи они, — то есть посчитал бы и чужие. Выходов единицы,
 # лишние вызовы jsonfilter здесь ничего не стоят.
+# Какие выходы читают этот файл узлов. Нужно затем, чтобы обновлённую подписку перечитал
+# именно тот туннель, который ею живёт, а не все подряд: сигнал '*' однажды уже убивал
+# работающий туннель при каждом сохранении.
+sub_outputs_using() {  # PATH -> имена выходов по одному на строку
+    [ -s "$SPEC" ] || return 0
+    for _oo in $(jsonfilter -i "$SPEC" -e '@.outputs[*].name' 2>/dev/null); do
+        [ "$(jsonfilter -i "$SPEC" -e "@.outputs['$_oo'].sub_file" 2>/dev/null)" = "$1" ] || continue
+        printf '%s\n' "$_oo"
+    done
+}
+
 sub_nodes_used() {  # PATH -> ЧИСЛО
     _un=0
     [ -s "$SPEC" ] || { printf '0'; return; }
@@ -309,6 +357,9 @@ case "$2" in
         # строке. Пустая строка значит «не из чего считать» — ни одного физического порта с
         # постоянным MAC; тогда заголовок не уходит вовсе, и об этом говорит sub_set.
         json_add_string hwid "$(hwid)"
+        json_add_int auto "$(sub_auto_get "$SUB_NAME")"
+        _as="$(sub_auto_stamp)"
+        [ -r "$_as" ] && json_add_int auto_at "$(cat "$_as" 2>/dev/null || echo 0)"
         if [ -s "$SUB" ]; then
             json_add_boolean present 1
             json_add_int bytes "$(wc -c 2>/dev/null < "$SUB" || echo 0)"
@@ -400,11 +451,104 @@ case "$2" in
             # занята подписка, и отказывается удалять занятую.
             json_add_int used "$(sub_used_by "$SUB")"
             json_add_int used_nodes "$(sub_nodes_used "$SUB")"
+            # Интервал автообновления и время последней попытки: интерфейс показывает «когда
+            # обновится», а не только «когда обновилась».
+            json_add_int auto "$(sub_auto_get "$SUB_NAME")"
+            _as="$(sub_auto_stamp)"
+            [ -r "$_as" ] && json_add_int auto_at "$(cat "$_as" 2>/dev/null || echo 0)"
+            # Пора ли обновлять — ОТВЕЧАЕТ ЗДЕСЬ, а не считает тот, кто спросил. Часы, интервал
+            # и отметка живут в одном месте; вторые такие же в задании крона разошлись бы с
+            # этими молча, и подписка обновлялась бы то чаще, то реже обещанного.
+            sub_auto_due && json_add_boolean due 1 || json_add_boolean due 0
             sub_userinfo_emit
             json_close_object
         done
         json_close_array
         json_add_string hwid "$(hwid)"
+        json_dump
+        ;;
+
+    sub_auto)
+        # Как часто обновлять подписку саму. Минуты; ноль — не обновлять.
+        #
+        # У КАЖДОЙ ПОДПИСКИ СВОЙ интервал, и это не прихоть: у одной панели узлы меняются
+        # раз в сутки, у другой — при каждой смене сервера, и общая настройка означала бы
+        # либо лишние хождения к первой, либо устаревшие узлы у второй.
+        read -r input
+        json_load "$input" 2>/dev/null || fail "неразбираемый запрос"
+        json_get_var sub_name name
+        json_get_var minutes minutes
+        sub_use "$sub_name"
+        case "$minutes" in
+            ''|0) minutes=0 ;;
+            *[!0-9]*) fail "интервал задаётся числом минут" ;;
+            *)
+                [ "$minutes" -ge "$SUB_AUTO_MIN" ] || fail "реже получаса: $SUB_AUTO_MIN минут — наименьший интервал"
+                [ "$minutes" -le "$SUB_AUTO_MAX" ] || fail "не дольше трёх суток: $SUB_AUTO_MAX минут — наибольший интервал"
+                [ "$(sub_kind_of "$SUB_NAME")" = url ] || fail "узлы заданы ссылками vless:// — обновлять нечем"
+                ;;
+        esac
+        uci_file || fail "не удалось создать $UCI_SPLIFY2 — кончилось место?"
+        [ "$minutes" = 0 ] && sub_put "$SUB_NAME" auto "" || sub_put "$SUB_NAME" auto "$minutes"
+        uci -q commit splify2
+        # Отметка о последней попытке снимается: человек только что задал интервал, и первое
+        # обновление должно случиться от ЭТОГО момента, а не от давно просроченного прежнего.
+        # Иначе включение интервала в 72 часа обновляло бы подписку немедленно.
+        date -u +%s > "$(sub_auto_stamp)" 2>/dev/null
+        json_init
+        json_add_boolean ok 1
+        json_add_string name "$SUB_NAME"
+        json_add_int auto "$minutes"
+        json_dump
+        ;;
+
+    sub_refresh)
+        # Обновить подписку по сохранённой ссылке. Этот метод зовёт расписание; человек
+        # нажимает «Обновить», и тогда работает sub_set — у него на входе ссылка.
+        #
+        # ТУННЕЛЬ ПЕРЕЧИТЫВАЕТСЯ ТОЛЬКО ПРИ ИЗМЕНИВШИХСЯ УЗЛАХ. Подписка опрашивается по
+        # часам, а узлы у панели меняются редко: помечай мы правку каждый раз, туннель
+        # перезапускался бы по расписанию на ровном месте, и человек видел бы обрыв связи
+        # каждые полчаса. Поэтому сравниваем файл до и после.
+        input=''
+        read -r input 2>/dev/null || true
+        sub_use "$(jsonfilter -s "${input:-{\}}" -e '@.name' 2>/dev/null)"
+        url="$(sub_get "$SUB_NAME" url)"
+        [ "$(sub_kind_of "$SUB_NAME")" = url ] && [ -n "$url" ] ||
+            fail "узлы заданы ссылками vless:// — обновлять нечем"
+        before="$(md5sum < "$SUB" 2>/dev/null | cut -d' ' -f1)"
+        # Отметка ставится ДО похода наружу: попытка была, и повторять её через десять минут
+        # при мёртвой панели незачем. Иначе отказ означал бы обращение на каждом тике.
+        date -u +%s > "$(sub_auto_stamp)" 2>/dev/null
+        sub_fetch "$url" || fail "подписка не скачалась${SUB_ANSWER:+: $(sub_answer error)}"
+        _u="$(sub_answer url)"
+        [ -n "$_u" ] && [ "$_u" != "$url" ] && { sub_put "$SUB_NAME" url "$_u"; uci -q commit splify2; }
+        after="$(md5sum < "$SUB" 2>/dev/null | cut -d' ' -f1)"
+        json_init
+        json_add_boolean ok 1
+        json_add_string name "$SUB_NAME"
+        if [ "$before" != "$after" ]; then
+            json_add_boolean changed 1
+            # Помечаем правку — на случай, если туннель сейчас не поднят: тогда узлы он
+            # прочитает при ближайшем применении.
+            dirty_mark "$VLESS_DIRTY" params
+            # И сразу говорим живым туннелям этой подписки перечитать узлы. Ждать, пока
+            # человек нажмёт «Применить», здесь нельзя: обновление затем и по часам, чтобы
+            # человек в него не вмешивался. Сигнал ИМЕННО ЭТИМ экземплярам — тем же способом,
+            # каким это делает применение спеки.
+            _rs=0
+            for _ro in $(sub_outputs_using "$SUB"); do
+                ubus call service signal \
+                    "{\"name\":\"steer\",\"instance\":\"vless_$_ro\",\"signal\":15}" 2>/dev/null
+                _rs=$((_rs + 1))
+            done
+            json_add_int restarted "$_rs"
+        else
+            json_add_boolean changed 0
+        fi
+        json_add_int bytes "$(wc -c 2>/dev/null < "$SUB" || echo 0)"
+        [ -n "$(sub_answer usable)" ] && json_add_int usable "$(sub_answer usable)"
+        sub_userinfo_emit
         json_dump
         ;;
 
@@ -422,7 +566,7 @@ case "$2" in
         sub_use "$sub_name"
         used="$(sub_used_by "$SUB")"
         [ "${used:-0}" = 0 ] || fail "подписка занята выходами: $used"
-        rm -f "$SUB" "$SUB_INFO"
+        rm -f "$SUB" "$SUB_INFO" "$(sub_auto_stamp)"
         if [ "$SUB_NAME" = main ]; then
             uci -q delete splify2.main.sub_url 2>/dev/null
             uci -q delete splify2.main.sub_kind 2>/dev/null

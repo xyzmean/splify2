@@ -1765,16 +1765,16 @@ check "путь файла настройки — шов, а не литерал
       "$(grep -c '^UCI_SPLIFY2=' "$SCRIPT")"
 check "прямых путей /etc/config/splify2 в коде не осталось" "1" \
       "$(grep -c '/etc/config/splify2' "$SCRIPT")"
-# Девять мест: sub_set, sub_put (ключи подписок), ветка настроек, ui_get|ui_set,
-# fetch_mode|fetch_mode_set, lists_source|lists_source_set, zm_fix|zm_fix_set, doh_tunnel_set
-# и telemetry_set. Число растёт вместе с методами, которые пишут в uci, — и это ровно тот
-# случай, когда барьер должен ломаться: новый метод обязан заводить файл той же функцией.
+# Десять мест: sub_set, sub_put (ключи подписок), ветка настроек, ui_get|ui_set,
+# fetch_mode|fetch_mode_set, lists_source|lists_source_set, zm_fix|zm_fix_set, doh_tunnel_set,
+# telemetry_set и sub_auto. Число растёт вместе с методами, которые пишут в uci, — и это ровно
+# тот случай, когда барьер должен ломаться: новый метод обязан заводить файл той же функцией.
 #
 # Девятым telemetry_set стал не потому, что метод новый, а потому, что он единственный звал
 # uci_file БЕЗ проверки — как и `uci set` с `uci commit` рядом. Ответ `ok 1` у него значил не
 # «согласие записано», а «дошли до конца функции»: на роутере с заполненным флешем ползунок
 # переезжал, страница показывала успех, а в конфигурации оставалось прежнее значение.
-check "файл заводится одной функцией на все места" "9" \
+check "файл заводится одной функцией на все места" "10" \
       "$(rpcd_src | grep -c '^ *uci_file ||')"
 check "перенаправлением файл больше не заводится" "0" \
       "$(rpcd_src | grep -c ': > "\?/etc/config')"
@@ -1865,6 +1865,86 @@ rm -f "$T/subfetch.log"
 out="$(rpcd sub_set '{"url":"vless://key@host:443#node"}')"
 check "для ссылок vless:// движок не зовётся" "links;no" \
       "$(printf '%s' "$out" | jget kind);$([ -f "$T/subfetch.log" ] && echo yes || echo no)"
+
+# ---- автообновление подписки -------------------------------------------------
+#
+# Подписка обновлялась только по нажатию, и человек с панелью, у которой узлы меняются за
+# час, узнавал об этом отказом туннеля. Теперь у каждой подписки свой интервал, а расписание
+# смотрит по часам, кому пора. Здесь проверяются пределы, отметка времени и — главное — то,
+# что туннель перечитывает узлы ТОЛЬКО когда они изменились: иначе обновление по часам
+# означало бы обрыв связи по часам.
+out="$(rpcd sub_set '{"url":"https://panel.invalid/sub/auto","name":"auto1"}')"
+check "подписка для проверки автообновления заведена" "true" "$(printf '%s' "$out" | jget ok)"
+
+out="$(rpcd sub_auto '{"name":"auto1","minutes":10}')"
+check "интервал чаще получаса отвергнут" "false" "$(printf '%s' "$out" | jget ok)"
+out="$(rpcd sub_auto '{"name":"auto1","minutes":5000}')"
+check "интервал дольше трёх суток отвергнут" "false" "$(printf '%s' "$out" | jget ok)"
+out="$(rpcd sub_auto '{"name":"auto1","minutes":"каждый час"}')"
+check "интервал не числом отвергнут" "false" "$(printf '%s' "$out" | jget ok)"
+
+rm -f "$T/etc/subs/auto1.auto"
+out="$(rpcd sub_auto '{"name":"auto1","minutes":60}')"
+check "час принят" "true;60" "$(printf '%s' "$out" | jget ok);$(printf '%s' "$out" | jget auto)"
+check "отметка времени поставлена сразу" "yes"       "$([ -s "$T/etc/subs/auto1.auto" ] && echo yes || echo no)"
+check "перечень называет интервал" "60"       "$(rpcd sub_list | python3 -c 'import json,sys
+print(next(d.get("auto") for d in json.load(sys.stdin)["subs"] if d["name"]=="auto1"))')"
+
+# Отметка ставится ОТ МОМЕНТА НАСТРОЙКИ, а не от давно просроченного прошлого: иначе выбор
+# «раз в трое суток» обновлял бы подписку немедленно, при первом же тике расписания.
+check "сразу после настройки обновлять не пора" "yes"       "$(now=$(date -u +%s); at=$(cat "$T/etc/subs/auto1.auto"); [ $((now - at)) -lt 60 ] && echo yes || echo no)"
+
+out="$(rpcd sub_auto '{"name":"auto1","minutes":0}')"
+check "ноль выключает обновление" "true;0"       "$(printf '%s' "$out" | jget ok);$(printf '%s' "$out" | jget auto)"
+
+out="$(rpcd sub_set '{"url":"vless://k@h:443#n","name":"hand1"}')"
+out="$(rpcd sub_auto '{"name":"hand1","minutes":60}')"
+check "ссылкам vless:// интервал не назначить" "false" "$(printf '%s' "$out" | jget ok)"
+
+# Обновление по сохранённой ссылке. Узлы прежние — туннель не трогаем.
+# Первое обновление узлы МЕНЯЕТ (в файле лежал образец от sub_set) — метку правки снимаем
+# после него: проверяем второе, где узлы те же самые.
+out="$(STEER_SUB_BODY='vless://same@h:443#n' rpcd sub_refresh '{"name":"auto1"}')"
+rm -f "$T/var/vless-dirty"
+out="$(STEER_SUB_BODY='vless://same@h:443#n' rpcd sub_refresh '{"name":"auto1"}')"
+check "узлы прежние — обновление это говорит" "true;false"       "$(printf '%s' "$out" | jget ok);$(printf '%s' "$out" | jget changed)"
+check "и туннель перечитывать не просит" "no"       "$([ -s "$T/var/vless-dirty" ] && echo yes || echo no)"
+
+# Узлы сменились — вот тогда просит.
+out="$(STEER_SUB_BODY='vless://other@h:443#n' rpcd sub_refresh '{"name":"auto1"}')"
+check "узлы сменились — обновление это говорит" "true;true"       "$(printf '%s' "$out" | jget ok);$(printf '%s' "$out" | jget changed)"
+check "и туннель просит перечитать" "yes"       "$(grep -qx params "$T/var/vless-dirty" 2>/dev/null && echo yes || echo no)"
+
+out="$(rpcd sub_refresh '{"name":"hand1"}')"
+check "ссылки vless:// обновлять нечем" "false" "$(printf '%s' "$out" | jget ok)"
+
+# ЖИВОЙ ТУННЕЛЬ ПЕРЕЧИТЫВАЕТ УЗЛЫ САМ. Ждать, пока человек нажмёт «Применить», нельзя:
+# обновление затем и по часам, чтобы он в него не вмешивался. Сигнал уходит ИМЕННО тому
+# экземпляру, который живёт этой подпиской.
+# Подписка здесь снова ССЫЛОЧНАЯ: выше её оставили вставленными руками vless://, а такую
+# обновлять нечем — и проверка молча проверяла бы отказ вместо перезапуска.
+out="$(rpcd sub_set '{"url":"https://panel.invalid/sub/main"}')"
+# Спека здесь своя, с полем `name` внутри выхода: именно так её пишет интерфейс и так она
+# лежит на роутере. Общая заготовка vless_spec имени не кладёт — ей оно не нужно, а здесь
+# по нему и находится, какой туннель живёт этой подпиской.
+python3 -c 'import json,sys
+print(json.dumps({"schema":1,"outputs":{"vpn":{"name":"vpn","kind":"vless","sub_file":sys.argv[1]}},"channels":[]}))' \
+    "$T/etc/sub.txt" > "$T/etc/spec.json"
+: > "$T/ubus.log"
+out="$(STEER_SUB_BODY='vless://fresh@h:443#n' rpcd sub_refresh '{"name":"main"}')"
+check "обновление по расписанию поднятый туннель перечитывает" "yes" \
+      "$(grep -q 'vless_' "$T/ubus.log" && echo yes || echo no)"
+
+# Панель молчит — отметка всё равно свежая: повторять поход каждые десять минут при мёртвой
+# панели значит стучаться к ней 144 раза в сутки вместо одного-двух.
+printf '0\n' > "$T/etc/subs/auto1.auto"
+out="$(STEER_SUB_RC=1 rpcd sub_refresh '{"name":"auto1"}')"
+check "неудача обновления названа отказом" "false" "$(printf '%s' "$out" | jget ok)"
+check "и отметка попытки всё равно обновлена" "yes"       "$(now=$(date -u +%s); at=$(cat "$T/etc/subs/auto1.auto" 2>/dev/null || echo 0); [ $((now - at)) -lt 60 ] && echo yes || echo no)"
+
+rpcd sub_del '{"name":"auto1"}' >/dev/null 2>&1
+rpcd sub_del '{"name":"hand1"}' >/dev/null 2>&1
+check "удаление подписки уносит и отметку" "no"       "$([ -e "$T/etc/subs/auto1.auto" ] && echo yes || echo no)"
 
 # ---- несколько подписок ------------------------------------------------------
 #

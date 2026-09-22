@@ -28,6 +28,9 @@ run() {  # ИМЯ КОМАНДА...
 run listsmatch sh "$ROOT/tests/listsmatch.sh"
 run rpcdmatch  sh "$ROOT/tests/rpcdmatch.sh"
 run pkgmatch   sh "$ROOT/tests/pkgmatch.sh"
+# Автообновление подписок: задание крона само ничего не качает — оно зовёт объект rpcd по тем
+# подпискам, у которых срок вышел. Стенд про то, кого позвали и кого не тронули.
+run subsmatch  sh "$ROOT/tests/subsmatch.sh"
 # Автоподбор стратегии обхода: рейтинг, три условия отказа и откат. Единственное место
 # продукта, где программа сама меняет то, что работает у всех клиентов роутера.
 run autoselmatch sh "$ROOT/tests/autoselmatch.sh"

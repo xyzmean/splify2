@@ -52,7 +52,7 @@ CRONTAB=${CRONTAB:-/etc/crontabs/root}
 # одним `grep -v` иначе не выбрать, а разводить их в два прохода значит завести второе место,
 # где перечислено, что здесь наше. Забытая строка — не мелочь: она стучится в панель каждый
 # час на роутере, с которого пакет уже снят.
-CRON_MARK=${CRON_MARK:-splify2-update-lists|splify2-telemetry}
+CRON_MARK=${CRON_MARK:-splify2-update-lists|splify2-telemetry|splify2-update-subs}
 CRON_INITD=${CRON_INITD:-/etc/init.d/cron}
 INITD=${INITD:-/etc/init.d/steer}
 FW_INITD=${FW_INITD:-/etc/init.d/firewall}

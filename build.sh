@@ -167,6 +167,9 @@ cp -r luci/htdocs/luci-static/resources/view "$PKG/www/luci-static/resources/"
 cp -r luci/root/usr/share "$PKG/usr/"
 cp files/usr/libexec/rpcd/splify2 "$PKG/usr/libexec/rpcd/splify2"
 cp files/usr/sbin/splify2-update-lists "$PKG/usr/sbin/splify2-update-lists"
+# Автообновление подписок. Отдельным файлом и отдельным заданием крона: у каждой подписки свой
+# интервал (от получаса до трёх суток), и хвостом суточного обновления списков это не сделать.
+cp files/usr/sbin/splify2-update-subs "$PKG/usr/sbin/splify2-update-subs"
 # Фоновая проверка стратегий обхода. Отдельным файлом, а не работой внутри объекта rpcd: у
 # вызова ubus свой срок жизни (две минуты), а проверка идёт десятки минут, и человек имеет
 # право закрыть окно роутера.
@@ -243,6 +246,7 @@ mkdir -p "$PKG/lib/upgrade/keep.d"
 cp files/lib/upgrade/keep.d/splify2 "$PKG/lib/upgrade/keep.d/splify2"
 chmod 0644 "$PKG/lib/upgrade/keep.d/splify2"
 chmod 0755 "$PKG/usr/libexec/rpcd/splify2" "$PKG/usr/sbin/splify2-update-lists" \
+           "$PKG/usr/sbin/splify2-update-subs" \
            "$PKG/usr/sbin/splify2-zapret-test" "$PKG/usr/sbin/splify2-zapret-autoselect" \
            "$PKG/usr/sbin/splify2-purge" "$PKG/usr/sbin/splify2-telemetry"
 chmod 0644 "$PKG/usr/share/splify2/doh-providers.conf" "$PKG/usr/share/splify2/dpi-suite.json" \
@@ -326,6 +330,21 @@ fi
 # в одну и ту же секунду — то есть минута вышла бы у них одна на двоих, и всплеск получился
 # бы уже внутри одного роутера: обновление списков и отправка пакета в одну минуту на слабой
 # коробке заметны. Поэтому к времени подмешан номер процесса.
+# Автообновление подписок: задание смотрит по часам, кому пора, и только у тех, у кого
+# интервал задан. Раз в десять минут, потому что наименьший интервал — полчаса: реже значило
+# бы промахиваться мимо получаса на треть, чаще — будить роутер без дела.
+#
+# МИНУТА ЗДЕСЬ НЕ СЛУЧАЙНАЯ, и это не забывчивость: обращение наружу делает не само задание, а
+# только те подписки, чей срок подошёл, — то есть всплеска в одну секунду у тысячи роутеров не
+# получится при любой минуте. Случайность живёт там, где она нужна: у суточного обновления
+# списков и у часовой отправки телеметрии.
+if ! grep -q splify2-update-subs /etc/crontabs/root 2>/dev/null; then
+    mkdir -p /etc/crontabs
+    printf '*/10 * * * * /usr/sbin/splify2-update-subs
+' >> /etc/crontabs/root
+    /etc/init.d/cron enable 2>/dev/null
+    /etc/init.d/cron restart 2>/dev/null
+fi
 if ! grep -q splify2-telemetry /etc/crontabs/root 2>/dev/null; then
     mkdir -p /etc/crontabs
     printf '%s * * * * /usr/sbin/splify2-telemetry --scheduled\n' \

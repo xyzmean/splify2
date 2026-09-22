@@ -33,6 +33,40 @@ interface Sub {
     /** Ссылка на продавца у опознанного источника. Опознаёт бэкенд (sub_brand в m-sub.sh),
      *  здесь она только рисуется. */
     link?: string
+    /** Через сколько минут роутер обновляет подписку сам. 0 или нет поля — не обновляет. */
+    auto?: number
+    /** Когда роутер пытался обновить её в последний раз, секунды epoch. */
+    auto_at?: number
+}
+
+/** Интервалы автообновления. Крайние — те же, что принимает бэкенд: полчаса и трое суток.
+ *
+ *  Списком, а не полем для числа: человек выбирает «как часто», а не «сколько минут», и
+ *  свободное число здесь означало бы ещё и разбор ошибок ввода ради значения, которых
+ *  осмысленных десяток. */
+const AUTO_CHOICES: { min: number; label: string }[] = [
+    { min: 0, label: 'вручную' },
+    { min: 30, label: 'каждые 30 минут' },
+    { min: 60, label: 'каждый час' },
+    { min: 120, label: 'каждые 2 часа' },
+    { min: 180, label: 'каждые 3 часа' },
+    { min: 360, label: 'каждые 6 часов' },
+    { min: 720, label: 'каждые 12 часов' },
+    { min: 1440, label: 'раз в сутки' },
+    { min: 2880, label: 'раз в двое суток' },
+    { min: 4320, label: 'раз в трое суток' },
+]
+
+/** Сколько осталось до следующего обновления. Роутер смотрит расписание раз в десять минут,
+ *  поэтому «через 3 минуты» здесь честнее округлить вверх, чем обещать точную минуту. */
+function nextText(auto: number, at: number | undefined): string | null {
+    if (!auto || !at) return null
+    const left = Math.round((at * 1000 + auto * 60000 - Date.now()) / 60000)
+    if (left <= 0) return 'обновится при ближайшей проверке'
+    if (left < 60) return `следующее через ${left} мин`
+    const h = Math.round(left / 60)
+    if (h < 48) return `следующее через ${h} ч`
+    return `следующее через ${Math.round(h / 24)} д`
 }
 
 export default function VlessScreen() {
@@ -133,6 +167,19 @@ export default function VlessScreen() {
             if (!r.ok) notify(r.error || 'подписка не скачалась', 'error')
             else if (r.warn) notify(r.warn, 'warning')
             else if (r.usable === 0) notify('Подписка обновилась, но пригодных узлов в ней нет', 'warning')
+            await load()
+        } catch (e) {
+            notify(String(e instanceof Error ? e.message : e), 'error')
+        } finally {
+            setBusy('')
+        }
+    }
+
+    async function setAuto(s: Sub, minutes: number) {
+        setBusy(s.name)
+        try {
+            const r = await rpc.subAuto(s.name, minutes)
+            if (!r.ok) { notify(r.error || 'не вышло задать обновление', 'error'); return }
             await load()
         } catch (e) {
             notify(String(e instanceof Error ? e.message : e), 'error')
@@ -245,6 +292,29 @@ export default function VlessScreen() {
                                     : 'не используется'}
                             </span>
                         </div>
+                        {/* Обновление по часам есть только у подписки: вставленные руками
+                            ссылки обновлять неоткуда. */}
+                        {s.kind === 'url' && (
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pt-1 text-xs text-muted-foreground">
+                                <label htmlFor={`auto-${s.name}`}>Обновлять</label>
+                                <select
+                                    id={`auto-${s.name}`}
+                                    value={String(s.auto || 0)}
+                                    disabled={busy === s.name}
+                                    onChange={(e) => void setAuto(s, Number(e.currentTarget.value))}
+                                    className="h-[30px] rounded-lg border border-border bg-background px-2 text-xs disabled:opacity-60"
+                                >
+                                    {AUTO_CHOICES.map((c) => (
+                                        <option key={c.min} value={String(c.min)}>
+                                            {c.label}
+                                        </option>
+                                    ))}
+                                </select>
+                                {nextText(s.auto || 0, s.auto_at) ? (
+                                    <span>{nextText(s.auto || 0, s.auto_at)}</span>
+                                ) : null}
+                            </div>
+                        )}
                     </CardContent>
                 </Card>
             ))}

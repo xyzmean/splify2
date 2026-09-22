@@ -99,7 +99,9 @@
           "zapret_autoselect_set",
           "zapret_autoselect_start",
           "zapret_autoselect_undo",
-          "telemetry_set"
+          "telemetry_set",
+          "sub_auto",
+          "sub_refresh"
         ]
       }
     }

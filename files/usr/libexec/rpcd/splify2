@@ -665,6 +665,11 @@ list)
     # Ссылку метод берёт из uci — второй источник той же ссылки означал бы, что остаток
     # можно спросить у панели, которой роутер не пользуется.
     json_add_object sub_quota; json_add_string name; json_close_object
+    # Автообновление подписки: интервал в минутах у каждой свой, ноль — не обновлять.
+    json_add_object sub_auto; json_add_string name; json_add_int minutes; json_close_object
+    # Обновить по сохранённой ссылке. Зовёт расписание; человек нажимает «Обновить», и тогда
+    # работает sub_set — у него на входе ссылка.
+    json_add_object sub_refresh; json_add_string name; json_close_object
     # Архив настроек. offset/append/final — куски: ubus не резиновый, и целиком архив в
     # одно сообщение не влезает (тот же довод, что у порций list_put).
     #
@@ -788,7 +793,7 @@ call)
         lists|list_fetch|lists_update|list_put|list_remove|list_custom|list_get|local_lists|allow_domains|fetch_mode|fetch_mode_set|zm_fix|zm_fix_set|\
         lists_source|lists_source_set) _grp=lists ;;
         engine|engine_stop|engine_start|steer_versions|splify2_versions|splify2_install|steer_install|ui_get|ui_set) _grp=engine ;;
-        sub_set|sub_info|sub_quota|sub_list|sub_del) _grp=sub ;;
+        sub_set|sub_info|sub_quota|sub_list|sub_del|sub_auto|sub_refresh) _grp=sub ;;
         backup_get|backup_put) _grp=backup ;;
         xsteer_link|xsteer_link_put) _grp=xsteer ;;
         doh_state|doh_set|doh_off|doh_tunnel_set|doh_custom_add|doh_custom_del|\
