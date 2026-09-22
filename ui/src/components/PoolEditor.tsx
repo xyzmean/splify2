@@ -380,8 +380,8 @@ export default function PoolEditor({
                 outputs[pn] = vlessOut(pn, g, 'drop', n)
                 devices.push(pn)
             }
-            if (devices.length > 8) {
-                notify('В пуле не больше восьми частей — таков предел движка; соседние локации одной подписки считаются одной частью', 'warning')
+            if (devices.length > 16) {
+                notify('В пуле не больше шестнадцати частей — таков предел движка; соседние локации одной подписки считаются одной частью', 'warning')
                 return
             }
             outputs[n] = { name: n, kind: 'interface', devices, device: devices[0], on_fail: onFail }
