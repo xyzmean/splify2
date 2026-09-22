@@ -315,6 +315,9 @@ case "${1:-}" in
         ;;
     set)
         k="$(resolve "${2%%=*}")"; v="${2#*=}"
+        # Отказ записи ОДНОГО ключа — кончилось место, испорченный файл настройки. Задаётся
+        # снаружи точным ключом; без этого ветку «запись не удалась» нечем исполнить.
+        [ -n "${UCI_SET_FAIL:-}" ] && [ "$k" = "$UCI_SET_FAIL" ] && exit 1
         : > "$S.t"
         while IFS= read -r line; do
             case "$line" in "$k="*) continue ;; esac
@@ -1962,6 +1965,12 @@ check "выход без поля name: туннель подписки пере
 check "выход без поля name: занятые локации подписки посчитаны" "1;2" \
       "$(rpcd sub_list | python3 -c 'import json,sys
 d=next(d for d in json.load(sys.stdin)["subs"] if d["name"]=="main"); print("%s;%s" % (d["used"], d["used_nodes"]))')"
+# Не записалась новая ссылка — прежняя остаётся (I-329). Запись была `[ url ] && sub_put … ||
+# sub_put … url ""`: отказ ПЕРВОЙ ветки запускал вторую, и та стирала ссылку, по которой
+# подписка обновлялась, — обновлять становилось нечем.
+out="$(UCI_SET_FAIL=splify2.main.sub_url rpcd sub_set '{"url":"https://second.invalid/sub","name":"main"}')"
+check "sub_set: отказ записи ссылки не стирает прежнюю" "https://panel.invalid/sub/main" \
+      "$(uci_get splify2.main.sub_url)"
 
 # Панель молчит — отметка всё равно свежая: повторять поход каждые десять минут при мёртвой
 # панели значит стучаться к ней 144 раза в сутки вместо одного-двух.
