@@ -196,6 +196,14 @@ zp_apply_global v2 >/dev/null 2>&1
 check "повторное применение не дублирует порты" "1" \
     "$(grep -c "option NFQWS_PORTS_TCP '80,443,2053,2083,2087,2096,8443'" "$ZP_CONF")"
 check "остальная конфигурация цела" "1" "$(grep -c "option FWTYPE 'nftables'" "$ZP_CONF")"
+# Пустой список портов: дописывание давало `',2053,…'` с ведущей запятой (I-332) — пустой
+# первый элемент в перечне портов, которого менеджер не пишет.
+cp "$ZP_CONF" "$tmp/conf.ports"
+sed -i "s/^\([[:space:]]*option NFQWS_PORTS_TCP '\).*'\$/\1'/" "$ZP_CONF"
+zp_ports_add NFQWS_PORTS_TCP "2053,2083"
+check "пустой список портов: дописано без ведущей запятой" "1" \
+    "$(grep -c "option NFQWS_PORTS_TCP '2053,2083'\$" "$ZP_CONF")"
+mv "$tmp/conf.ports" "$ZP_CONF"
 
 # ---- игровой фильтр (Gv) -----------------------------------------------------------------
 # Повторяет fix_GAME / GV_FAKE / Gv_Xtreme менеджера: блок #GvN в хвосте, порты по одному,
