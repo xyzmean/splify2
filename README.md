@@ -206,7 +206,7 @@ DNS роутера своим DoH в браузере.
 Одной строкой на роутере:
 
 ```sh
-sh -c "$(wget -qO- https://gitlab.com/xyzmean/splify2/-/raw/main/install.sh)"
+wget -O /tmp/splify2-install.sh https://gitlab.com/xyzmean/splify2/-/raw/main/install.sh && sh /tmp/splify2-install.sh
 ```
 
 Скрипт определит архитектуру и менеджер пакетов (`apk` или `opkg`), поставит движок и
@@ -240,7 +240,7 @@ sh -c "$(wget -qO- https://gitlab.com/xyzmean/splify2/-/raw/main/install.sh)"
 Если GitHub открыт, работает и так:
 
 ```sh
-sh -c "$(wget -qO- https://raw.githubusercontent.com/xyzmean/splify2/main/install.sh)"
+wget -O /tmp/splify2-install.sh https://raw.githubusercontent.com/xyzmean/splify2/main/install.sh && sh /tmp/splify2-install.sh
 ```
 
 Тем же порядком ходит всё, что роутер берёт из интернета: сначала прямой адрес, затем зеркало,

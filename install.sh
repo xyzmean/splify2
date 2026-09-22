@@ -1,12 +1,12 @@
 #!/bin/sh
 # Установка splify2 на OpenWrt одной строкой.
 #
-#   sh -c "$(wget -qO- https://gitlab.com/xyzmean/splify2/-/raw/main/install.sh)"
+#   wget -O /tmp/splify2-install.sh https://gitlab.com/xyzmean/splify2/-/raw/main/install.sh && sh /tmp/splify2-install.sh
 #
 # Прежняя строка через raw.githubusercontent.com осталась рабочей там, где этот хост
 # доступен:
 #
-#   sh -c "$(wget -qO- https://raw.githubusercontent.com/xyzmean/splify2/main/install.sh)"
+#   wget -O /tmp/splify2-install.sh https://raw.githubusercontent.com/xyzmean/splify2/main/install.sh && sh /tmp/splify2-install.sh
 #
 # Почему главной стало зеркало. splify2#15: у части аудитории провайдер закрыл
 # `githubusercontent.com`, и закрыл его целиком — на тех же четырёх адресах Fastly
