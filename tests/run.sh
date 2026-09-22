@@ -79,6 +79,12 @@ if [ -d "$ROOT/ui/node_modules/vitest" ]; then
         done
     fi
     if [ "$node_major" -ge 20 ] 2>/dev/null; then
+        # ТЕ ЖЕ ТРИ ПРОВЕРКИ, ЧТО В ACTIONS, И ДО СТЕНДА. Прежде здесь был только `npm test`, а
+        # lint, tsc и check:cn гонялись лишь в workflow — то есть локальный прогон был зелёным
+        # при красном CI, и узнавалось это через сутки, чужим коммитом. Так и вышло: условно
+        # вызванный хук в RulesTab прошёл vitest (Preact к смене числа хуков терпим) и упал на
+        # oxlint в Actions.
+        run ui-lint sh -c "cd '$ROOT/ui' && npm run lint --silent && npx tsc -b && npm run check:cn --silent"
         run ui-harness sh -c "cd '$ROOT/ui' && npm test --silent"
     elif docker image inspect node:22-alpine >/dev/null 2>&1; then
         # Node в системе старый, а образ есть — гоняем стенд в нём, а не пропускаем.
@@ -86,6 +92,8 @@ if [ -d "$ROOT/ui/node_modules/vitest" ]; then
         # которое нечем проверить больше нигде, и «ПРОПУЩЕН» на каждом прогоне читается как
         # «этого стенда нет». Каталог монтируется КОРНЕМ дерева, а не ui/: стенд загрузчика
         # читает luci/htdocs/... по относительному пути и в узком монтировании не находит его.
+        run ui-lint docker run --rm -v "$ROOT":/w -w /w/ui node:22-alpine \
+            sh -c 'npm run lint --silent && npx tsc -b && npm run check:cn --silent'
         run ui-harness docker run --rm -v "$ROOT":/w -w /w/ui node:22-alpine npm test --silent
     else
         printf '\n===== ui-harness =====\nПРОПУЩЕН: нужен node >= 20 (найден %s) либо образ node:22-alpine для docker\n' \

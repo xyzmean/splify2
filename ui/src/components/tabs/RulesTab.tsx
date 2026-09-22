@@ -281,6 +281,29 @@ export default function RulesTab({
         })
     }
 
+    /** Отбор правил по строке поиска.
+     *
+     *  ВЫШЕ РАННИХ ВОЗВРАТОВ, и это не вкус: ниже стоят два выхода из функции — «спека ещё не
+     *  загрузилась» и «открыт редактор правила», — а хук, до которого доходит не каждый
+     *  отрисовочный проход, нарушает единственное правило хуков: их порядок обязан быть один и
+     *  тот же. Пустую спеку хук разбирает сам, поэтому переезд наверх ничего не меняет в
+     *  поведении. Preact к смене числа хуков терпим, пока этот стоит последним, — но ровно до
+     *  первого хука, добавленного после него: тогда состояния разъедутся молча. */
+    const filteredChannels = useMemo(() => {
+        if (!spec) return []
+        const q = search.trim().toLowerCase()
+        if (!q) return spec.channels.map((ch, originalIndex) => ({ ch, originalIndex }))
+        return spec.channels
+            .map((ch, originalIndex) => ({ ch, originalIndex }))
+            .filter(({ ch }) => {
+                if (ch.name.toLowerCase().includes(q)) return true
+                if (ch.out.toLowerCase().includes(q)) return true
+                const desc = describe(ch, services).toLowerCase()
+                if (desc.includes(q)) return true
+                return false
+            })
+    }, [spec, search, services])
+
     if (!spec) return <div className="p-5 text-sm text-muted-foreground">Загрузка…</div>
 
     /** Выходы: спека плюс то, что о них знает движок.
@@ -388,21 +411,6 @@ export default function RulesTab({
             </span>
         )
     }
-
-    const filteredChannels = useMemo(() => {
-        if (!spec) return []
-        const q = search.trim().toLowerCase()
-        if (!q) return spec.channels.map((ch, originalIndex) => ({ ch, originalIndex }))
-        return spec.channels
-            .map((ch, originalIndex) => ({ ch, originalIndex }))
-            .filter(({ ch }) => {
-                if (ch.name.toLowerCase().includes(q)) return true
-                if (ch.out.toLowerCase().includes(q)) return true
-                const desc = describe(ch, services).toLowerCase()
-                if (desc.includes(q)) return true
-                return false
-            })
-    }, [spec, search, services])
 
     const isFiltering = search.trim().length > 0
 
