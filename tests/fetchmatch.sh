@@ -416,6 +416,11 @@ EOF
 res="$(run "$RAW")"
 check "always без поднятого выхода: остаётся прямой путь" "direct:$RAW" "$(cat "$T/got" 2>/dev/null)"
 check "always без выхода: маршруты не тронуты" "" "$(grep -c . "$S/ip.log" | sed 's/^0$//')"
+# Журнал на удачной загрузке не пишет «не ответил» (I-330): туннель отказал, но прямой путь
+# отдал файл, и прежняя причина отказа туннеля («напрямую не ответил…») оставалась в FETCH_NOTE —
+# update-lists и сохранение спеки печатали её предупреждением к скачанному списку.
+check "always без выхода: удачный прямой путь не жалуется на отказ" "NOTE1=" \
+      "$(echo "$res" | grep '^NOTE1=')"
 cat > "$S/status.json" <<'EOF'
 {"schema":1,"outputs":{"direct":{"kind":"direct"},"vl":{"kind":"vless","device":"vl","up":true,"mark":"0x00100000","table":300}},"channels":[]}
 EOF
