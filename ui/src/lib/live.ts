@@ -545,11 +545,16 @@ export function useLive(): Live {
         const t = setTimeout(() => {
             Promise.allSettled([rpc.steerVersions(), rpc.splify2Versions()]).then(([r, u]) => {
                 if (stop) return
-                const rel = r.status === 'fulfilled' ? r.value : null
-                const up = u.status === 'fulfilled' ? u.value : null
+                /* Отказ — не «выпусков нет». Поход на GitHub с роутера падает по таймауту и
+                 * блокировкам, и пустое значение стёрло бы с экрана то, что уже было известно:
+                 * версии до следующего удачного круга держатся прежние (I-337). */
+                const rel = r.status === 'fulfilled' ? r.value : (versionsSaved.current?.releases ?? null)
+                const up = u.status === 'fulfilled' ? u.value : (versionsSaved.current?.selfUpdate ?? null)
                 setReleases(rel)
                 setSelfUpdate(up)
-                if (rel || up) {
+                /* Сохраняется только то, что пришло: два отказа, записанные со свежим сроком,
+                 * отложили бы следующую попытку на полчаса. */
+                if ((rel || up) && (r.status === 'fulfilled' || u.status === 'fulfilled')) {
                     versionsSaved.current = { at: Date.now(), build: buildId(), releases: rel, selfUpdate: up }
                     cacheSet('versions', versionsSaved.current)
                 }

@@ -59,6 +59,25 @@ describe('круг опроса: один вызов вместо пяти', () 
         expect(engineState).not.toHaveBeenCalled()
     })
 
+    it('GitHub не ответил — запомненные версии остаются на экране (I-337)', async () => {
+        mockLive()
+        vi.spyOn(rpc, 'engine').mockResolvedValue({ present: true, vless: true } as never)
+        const saved = { latest: '1.5.7' }
+        const self = { latest: '26.9.2' }
+        // Память старше срока: круг обязан сходить за свежим — и получить отказ.
+        window.localStorage.setItem('splify2:versions', JSON.stringify({
+            at: Date.now() - 2 * 3600 * 1000, build: '', releases: saved, selfUpdate: self,
+        }))
+        const steer = vi.spyOn(rpc, 'steerVersions').mockRejectedValue(new Error('timeout'))
+        const own = vi.spyOn(rpc, 'splify2Versions').mockRejectedValue(new Error('timeout'))
+        const { result } = renderHook(() => useLive())
+        await waitFor(() => expect(steer).toHaveBeenCalled(), { timeout: 3000 })
+        await waitFor(() => expect(own).toHaveBeenCalled())
+        await new Promise((r) => setTimeout(r, 50))
+        expect(result.current.releases).toEqual(saved)
+        expect(result.current.selfUpdate).toEqual(self)
+    })
+
     it('числа из ответа доезжают до экрана целиком', async () => {
         mockLive()
         const { result } = renderHook(() => useLive())
