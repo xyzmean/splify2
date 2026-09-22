@@ -208,6 +208,19 @@ check "страна выхода из кэша уехала, а адрес из 
 check "список первого издателя назван по id" "['rkn']" "$(j 'd["lists"]["cat"]')"
 check "список второго издателя назван" "['telegram']" "$(j 'd["lists"]["itdog"]')"
 check "свои списки — только числом" "1" "$(j 'd["lists"]["custom"]')"
+# Спека, переписанная jq или любым форматировщиком: пробел после двоеточия и переносы внутри
+# массива (`"prefixes_files": [` и путь на отдельной строке с отступом). Шаблон ждал `":["`
+# вплотную и на такой спеке не находил ни одного списка — пакет говорил «списками не
+# пользуются» у того, кто ими пользуется (I-331). Формат — ровно как у `jq .`: python
+# json.dumps с indent=2 печатает так же.
+cp "$T/etc/spec.json" "$T/etc/spec.compact"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps(d, indent=2))' \
+    "$T/etc/spec.compact" > "$T/etc/spec.json"
+pkt_j="$(build)"
+jj() { printf '%s' "$pkt_j" | python3 -c "import json,sys; d=json.load(sys.stdin); print($1)" 2>/dev/null; }
+check "спека в формате jq: списки издателей найдены" "['rkn'];['telegram'];1" \
+      "$(jj 'd["lists"]["cat"]');$(jj 'd["lists"]["itdog"]');$(jj 'd["lists"]["custom"]')"
+mv "$T/etc/spec.compact" "$T/etc/spec.json"
 check "домен панели подписки — две последние метки" "example.org" "$(j 'd["subs"][0]["host"]')"
 check "и признак «меток было больше» поднят" "True" "$(j 'd["subs"][0]["deep"]')"
 check "вторая подписка тоже без логина и порта" "example.com" "$(j 'd["subs"][1]["host"]')"
