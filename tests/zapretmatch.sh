@@ -382,6 +382,54 @@ zp_sync >/dev/null 2>&1
 check "полное скачивание возвращает все семейства" "flowseal v yv dv" \
     "$(zp_families "$ZP_CATALOG" | sed 's/ $//')"
 
+# НЕДОКАЧКА ВНУТРИ СЕМЕЙСТВА (I-334). Архив Flowseal оборвался на середине: `tar -tzf` на
+# обрезанном gzip перечисляет то, что успело приехать, и выходит с ошибкой, которую конвейер
+# терял. Семейство flowseal при этом в сборке ЕСТЬ — стратегия-другая из начала архива, — и
+# сравнение по семействам пропускало каталог, где Flowseal стал беднее, как «то же самое».
+# Архив здесь: general.bat первым, потом несжимаемая прокладка, потом вторая стратегия; обрыв
+# посередине оставляет первую и теряет вторую.
+mkdir -p "$tmp/fs2/zapret-discord-youtube-main/bin"
+cp "$FIX/general.bat" "$tmp/fs2/zapret-discord-youtube-main/general.bat"
+cp "$FIX/general.bat" "$tmp/fs2/zapret-discord-youtube-main/general (ALT9).bat"
+head -c 200000 /dev/urandom > "$tmp/fs2/zapret-discord-youtube-main/pad.bin"
+( cd "$tmp/fs2" && tar -czf "$tmp/flowseal2.tgz" zapret-discord-youtube-main/general.bat \
+    zapret-discord-youtube-main/pad.bin "zapret-discord-youtube-main/general (ALT9).bat" ) || exit 2
+head -c "$(( $(wc -c < "$tmp/flowseal2.tgz") / 2 ))" "$tmp/flowseal2.tgz" > "$tmp/flowseal2.cut"
+download() {
+    case "$1" in
+        *codeload*)           cp "$tmp/flowseal2.tgz" "$2" ;;
+        *Zapret-Manager.sh)   cp "$FIX/zm-snippet.sh" "$2" ;;
+        *StrYoutube)          cp "$FIX/StrYoutube" "$2" ;;
+        *)                    return 1 ;;
+    esac
+    [ -s "$2" ]
+}
+zp_sync >/dev/null 2>&1
+check "полный архив: в каталоге обе стратегии Flowseal" "2" "$(grep -c '^#general' "$ZP_CATALOG")"
+cp "$ZP_CATALOG" "$tmp/cat.fs2"
+download() {
+    case "$1" in
+        *codeload*)           cp "$tmp/flowseal2.cut" "$2" ;;
+        *Zapret-Manager.sh)   cp "$FIX/zm-snippet.sh" "$2" ;;
+        *StrYoutube)          cp "$FIX/StrYoutube" "$2" ;;
+        *)                    return 1 ;;
+    esac
+    [ -s "$2" ]
+}
+zp_sync >/dev/null 2>&1
+check "оборванный архив Flowseal: прежний каталог цел" "1;2" \
+    "$(cmp -s "$ZP_CATALOG" "$tmp/cat.fs2" && echo 1 || echo 0);$(grep -c '^#general' "$ZP_CATALOG")"
+download() {
+    case "$1" in
+        *codeload*)           cp "$tmp/flowseal.tgz" "$2" ;;
+        *Zapret-Manager.sh)   cp "$FIX/zm-snippet.sh" "$2" ;;
+        *StrYoutube)          cp "$FIX/StrYoutube" "$2" ;;
+        *)                    return 1 ;;
+    esac
+    [ -s "$2" ]
+}
+cp "$tmp/cat.full" "$ZP_CATALOG"
+
 # Разошлась ли активная стратегия с каталогом — единственный способ ответить человеку на
 # «то, что у меня работает, ещё то же самое?».
 check "совпавшая стратегия не считается разошедшейся" "1" \
