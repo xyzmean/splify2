@@ -1934,6 +1934,20 @@ print(json.dumps({"schema":1,"outputs":{"vpn":{"name":"vpn","kind":"vless","sub_
 out="$(STEER_SUB_BODY='vless://fresh@h:443#n' rpcd sub_refresh '{"name":"main"}')"
 check "обновление по расписанию поднятый туннель перечитывает" "yes" \
       "$(grep -q 'vless_' "$T/ubus.log" && echo yes || echo no)"
+# ВЫХОД ОПОЗНАЁТСЯ ПО КЛЮЧУ, а не по полю `name` (I-328). Поле `name` внутри выхода пишет
+# только интерфейс; в контракте спеки его нет, и спека, положенная руками или пустая заготовка
+# fast.sh, его не несёт. Счёт по `name` у такой спеки не находил ни одного выхода: туннель не
+# получал сигнала перечитать узлы, а карточка говорила «локаций занято: 0».
+python3 -c 'import json,sys
+print(json.dumps({"schema":1,"outputs":{"vpn":{"kind":"vless","sub_file":sys.argv[1],"nodes":[0,1]}},"channels":[]}))' \
+    "$T/etc/sub.txt" > "$T/etc/spec.json"
+: > "$T/ubus.log"
+out="$(STEER_SUB_BODY='vless://fresher@h:443#n' rpcd sub_refresh '{"name":"main"}')"
+check "выход без поля name: туннель подписки перечитывает узлы" "1;yes" \
+      "$(printf '%s' "$out" | jget restarted);$(grep -q '"vless_vpn"' "$T/ubus.log" && echo yes || echo no)"
+check "выход без поля name: занятые локации подписки посчитаны" "1;2" \
+      "$(rpcd sub_list | python3 -c 'import json,sys
+d=next(d for d in json.load(sys.stdin)["subs"] if d["name"]=="main"); print("%s;%s" % (d["used"], d["used_nodes"]))')"
 
 # Панель молчит — отметка всё равно свежая: повторять поход каждые десять минут при мёртвой
 # панели значит стучаться к ней 144 раза в сутки вместо одного-двух.

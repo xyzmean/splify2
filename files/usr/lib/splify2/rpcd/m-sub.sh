@@ -147,9 +147,24 @@ sub_used_by() {  # PATH -> ЧИСЛО
 # Какие выходы читают этот файл узлов. Нужно затем, чтобы обновлённую подписку перечитал
 # именно тот туннель, который ею живёт, а не все подряд: сигнал '*' однажды уже убивал
 # работающий туннель при каждом сохранении.
+# Имена выходов — КЛЮЧИ объекта outputs (I-328). Прежде они брались из поля `name` внутри
+# выхода, а его пишет только интерфейс: в контракте спеки (steer/docs/contract-v1.md) такого поля
+# нет, и спека, положенная руками или заготовка SPEC_EMPTY, его не несёт — у неё не находилось
+# ни одного выхода. jsonfilter ключей не печатает, поэтому jshn, и в подсобной оболочке: звать
+# эти функции будут посреди сборки ответа через тот же jshn, и его состояние трогать нельзя.
+spec_output_names() {  # -> имена выходов по одному на строку
+    [ -s "$SPEC" ] || return 0
+    (
+        json_load "$(cat "$SPEC" 2>/dev/null)" 2>/dev/null || exit 0
+        json_select outputs 2>/dev/null || exit 0
+        json_get_keys _son_k
+        for _son in $_son_k; do printf '%s\n' "$_son"; done
+    )
+}
+
 sub_outputs_using() {  # PATH -> имена выходов по одному на строку
     [ -s "$SPEC" ] || return 0
-    for _oo in $(jsonfilter -i "$SPEC" -e '@.outputs[*].name' 2>/dev/null); do
+    for _oo in $(spec_output_names); do
         [ "$(jsonfilter -i "$SPEC" -e "@.outputs['$_oo'].sub_file" 2>/dev/null)" = "$1" ] || continue
         printf '%s\n' "$_oo"
     done
@@ -158,7 +173,7 @@ sub_outputs_using() {  # PATH -> имена выходов по одному н�
 sub_nodes_used() {  # PATH -> ЧИСЛО
     _un=0
     [ -s "$SPEC" ] || { printf '0'; return; }
-    for _uo in $(jsonfilter -i "$SPEC" -e '@.outputs[*].name' 2>/dev/null); do
+    for _uo in $(spec_output_names); do
         [ "$(jsonfilter -i "$SPEC" -e "@.outputs['$_uo'].sub_file" 2>/dev/null)" = "$1" ] || continue
         _uc="$(jsonfilter -i "$SPEC" -e "@.outputs['$_uo'].nodes[*]" 2>/dev/null | grep -c .)"
         case "${_uc:-}" in ''|*[!0-9]*) _uc=0 ;; esac
